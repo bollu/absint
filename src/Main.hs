@@ -1,5 +1,6 @@
 module Main where
 import qualified Data.Map.Strict as M
+import Data.List (intercalate)
 
 
 data Binop = Add deriving(Eq, Show)
@@ -11,15 +12,25 @@ instance Show Expr where
     show (Ebinop Add e1 e2) = "(+" ++ show e1 ++ " " ++ show e1 ++ ")"
 
 newtype Id = Id String deriving(Eq, Show)
-data Stmt = Assign Id Expr
+data Command = Assign Id Expr | Skip | If Expr Stmt Stmt | While Expr Stmt
+instance Show Command where
+  show (Assign (Id id) e) = id ++ " := " ++ show e
+  show Skip = "skip"
+  show (If cond t e) = show "if" ++ show cond ++ show t ++ show e
+
+newtype Stmt = Stmt [Command]
 instance Show Stmt where
-  show (Assign id e) = show id ++ " := " ++ show e
+  show (Stmt cs) = intercalate ";" (map show cs)
 newtype Nodeid = Nodeid Int deriving(Show)
 
 
--- map from a nodeID to the node and its list of
--- successors.
-newtype Graph = Graph (M.Map Nodeid (Stmt, [Nodeid]))
+assign :: String -> Expr -> Command
+assign id e = Assign (Id id) e
+
+program :: Stmt 
+program = Stmt $ 
+  [assign "x" (Eint 1),
+  assign "y" (Eint 2)]
 
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = print program
