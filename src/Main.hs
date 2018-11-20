@@ -2,7 +2,15 @@ module Main where
 import qualified Data.Map.Strict as M
 import Data.List (intercalate)
 
+-- A join semilattice with bottom
+class JoinSemilattice a where
+  bottom :: a
+  join :: a -> a -> a
 
+
+
+
+-- Concrete Syntax
 data Binop = Add deriving(Eq, Show)
 data Expr = Eint Int | Ebool Bool  | Ebinop Binop Expr Expr
   deriving(Eq)
@@ -22,6 +30,13 @@ newtype Stmt = Stmt [Command]
 instance Show Stmt where
   show (Stmt cs) = intercalate ";" (map show cs)
 newtype Nodeid = Nodeid Int deriving(Show)
+
+-- Abstract semantics
+-- Ix = n -> *before* the nth basic block
+newtype Ix = Ix Int deriving(Eq, Show)
+data Interval = Interval (Int, Int) | Infty | Empty
+data `
+
 
 
 assign :: String -> Expr -> Command
