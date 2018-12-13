@@ -2,6 +2,7 @@
 module Main where
 import qualified Data.Map.Strict as M
 import Data.List (intercalate)
+import Data.Foldable
 
 -- Lattice theory
 -- ==============
@@ -127,7 +128,7 @@ instance Show Binop where
   show Add = "op-+"
   show Lt = "op-<"
 
-data Expr = EInt Int | EBool Bool  | EBinop Binop Id Id | EId Id
+data Expr = EInt Int | EBool Bool  | EBinop Binop Expr Expr | EId Id
   deriving(Eq)
 instance Show Expr where
     show (EInt i) = show i
@@ -158,11 +159,17 @@ type Program = Stmt
 -- Environments of the language
 type Env = (M.Map Id Int) 
 
+envBegin :: Env
+envBegin = M.empty
+
 exprEval :: Expr -> Env -> Int
 exprEval (EInt i) _ =  i
 exprEval (EBool b) _ =  if b then 1 else 0
 exprEval (EId id) env = env M.! id
-exprEval (EBinop Add id1 id2) env = (env M.! id1) + (env M.! id2)
+exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
+  opimpl = case op of
+             Add -> (+)
+             Lt -> (\a b -> if a < b then 1 else 0)
 
 -- Semantics of a command
 commandStep :: Command -> Env -> Env
@@ -170,7 +177,10 @@ commandStep (Assign id e) env = M.insert id (exprEval e env) env
 commandStep (If cid s s') env = if (env M.! cid) == 1 
                                  then stmtStep s env 
                                  else stmtStep s' env
-commandStep (While cid s) env = if (env M.! cid == 1) then stmtStep s env else env
+commandStep w@(While cid s) env = 
+  if (env M.! cid == 1)
+ then let env' = (stmtStep s env) in commandStep w env' 
+  else env
 
 stmtStep :: Stmt -> Env -> Env
 stmtStep (Stmt cs) env = foldl (flip commandStep) env cs
@@ -178,6 +188,11 @@ stmtStep (Stmt cs) env = foldl (flip commandStep) env cs
 
 -- Concrete domain - Collecting semantics
 -- ======================================
+-- program counter, positioned *before* the ith instruction.
+data PC = PC Int deriving(Eq)
+instance Show PC where
+  show (PC pc) = "pc-" ++ show pc
+  
 
 
 -- Abstract domain 1 - concrete functions
@@ -229,6 +244,12 @@ csem = undefined
 asem :: Program -> PWAFF -> PWAFF
 asem p = alpha . csem p . gamma
 
+-- Example
+-- =======
+
+repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
+repeatTillFix f seed = let cur = f seed in
+                           if cur == seed then [seed] else seed:repeatTillFix f cur 
 
 assign :: String -> Expr -> Command
 assign id e = Assign (Id id) e
@@ -237,7 +258,18 @@ program :: Stmt
 program = Stmt $ 
   [assign "x" (EInt 1),
   assign "y" (EInt 2),
-  assign "z" (EBinop Add (Id "x") (Id "y"))]
+  assign "z" (EBinop Add (EId (Id "x")) (EId (Id "y"))),
+  assign "vlt10" (EInt 1),
+  assign "v" (EInt 0),
+  While (Id "vlt10") $ Stmt [
+  assign "vp1" (EBinop Add (EId (Id "v")) (EInt 1)),
+  assign "vlt10" (EBinop Lt (EId (Id "v")) (EInt 10)),
+  assign "v" (EId (Id "vp1"))
+  ]]
+
 
 main :: IO ()
-main = print program
+main = do 
+    print program
+    let states = repeatTillFix (stmtStep program) envBegin
+    forM_ states print
