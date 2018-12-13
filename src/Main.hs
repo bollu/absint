@@ -138,18 +138,18 @@ instance Show Expr where
     show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e1 ++ ")"
 
 
-data Command = Assign Id Expr 
+data Stmt = Assign Id Expr 
              | If Id Stmt Stmt  -- branch value id, true branch, false branch
              | While Id Stmt -- while cond stmt
+             | Seq Stmt Stmt
+             | Done
 
-instance Show Command where
+instance Show Stmt where
   show (Assign id e) = "(= " ++  show id ++ " " ++ show e ++  ")"
   show (If cond t e) = "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
   show (While cond s) = "(while " ++ show cond ++ " " ++ show s ++ ")"
-
-newtype Stmt = Stmt [Command]
-instance Show Stmt where
-  show (Stmt cs) = intercalate ";" (map show cs)
+  show (Seq s1 s2) = show s1 ++ "\n" ++ show s2
+  show Done = "done"
 
 -- A Program is a top level statement
 type Program = Stmt
@@ -172,19 +172,19 @@ exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
              Add -> (+)
              Lt -> (\a b -> if a < b then 1 else 0)
 
--- Semantics of a command
-commandStep :: Command -> Env -> Env
-commandStep (Assign id e) env = M.insert id (exprEval e env) env
-commandStep (If cid s s') env = if (env M.! cid) == 1 
+-- Semantics of a Stmt
+stmtStep :: Stmt -> Env -> Env
+stmtStep (Assign id e) env = M.insert id (exprEval e env) env
+stmtStep (If cid s s') env = if (env M.! cid) == 1 
                                  then stmtStep s env 
                                  else stmtStep s' env
-commandStep w@(While cid s) env = 
-  if (env M.! cid == 1)
- then let env' = (stmtStep s env) in commandStep w env' 
-  else env
 
-stmtStep :: Stmt -> Env -> Env
-stmtStep (Stmt cs) env = foldl (flip commandStep) env cs
+stmtStep w@(While cid s) env = 
+  if (env M.! cid == 1)
+ then let env' = (stmtStep s env) in stmtStep w env' 
+  else env
+stmtStep (Seq s1 s2) env = stmtStep s2 (stmtStep s1 env)
+stmtStep Done env= env
 
 
 -- Concrete domain - Collecting semantics
@@ -194,41 +194,49 @@ data PC = PC Int deriving(Eq, Ord)
 instance Show PC where
   show (PC pc) = "pc-" ++ show pc
 
-pcstream :: PC -> [PC]
-pcstream (PC pc) = map PC [pc+1, pc+2..]
+pcincr :: PC -> PC
+pcincr (PC i) = PC (i + 1)
+
+pcinit :: PC
+pcinit = PC 0
 
 -- a set of maps from program counters to environments
 type CollectingSem =  (S.Set (M.Map PC Env))
 
 initCollectingSem :: CollectingSem
-initCollectingSem = S.singleton $ M.fromList (zip (map PC [1..100]) (repeat envBegin))
+initCollectingSem = S.singleton $ M.fromList (zip (map PC [0..100]) (repeat envBegin))
 
--- edit the effect of a command at the given PC of all the values in the collectingSem
-commandAffectCollect :: PC -> Command -> CollectingSem -> CollectingSem
-commandAffectCollect pc command csem = 
-   S.map (\m -> M.adjust (\env -> commandStep command env) pc m) csem
-
-stmtCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
-stmtCollect pc (Stmt cmds) csem = foldl (\csem (pc, cmd) -> commandCollect pc cmd csem) csem (zip (pcstream pc) cmds)
+-- edit the effect of a Stmt at the given PC of all the values in the collectingSem
+stmtAffectCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
+stmtAffectCollect pc  s csem = 
+  S.map (\m -> M.adjust (\env -> stmtStep s env) pc m) csem
 
 -- TODO: do we nee to add `iffail` candidates?
-commandCollect :: PC -> Command -> CollectingSem -> CollectingSem
-commandCollect pc (c@(Assign id e)) csem = commandAffectCollect pc c csem
-commandCollect pc (c@(While condid s)) csem = S.union csem (commandAffectCollect pc c csem)
-commandCollect pc (c@(If cid thencmd elsecmd)) csem = then' `S.union` else' where
-  -- those collecting semantics that pass the condition
-  ifpass :: CollectingSem
-  ifpass = S.filter (\m -> let env = m M.! pc in env M.! cid == 1) csem
+stmtCollect :: PC -> Stmt -> CollectingSem -> (CollectingSem, PC)
+stmtCollect pc (c@(Assign id e)) csem = (stmtAffectCollect pc c csem, pc)
+stmtCollect pc (c@(While condid s)) csem = (S.union csem (stmtAffectCollect pc c csem), pc)
 
+-- TODO: handle if then else, PC as an integer does not work, we need to identify points in a graph ;_;
+-- stmtCollect pc (c@(If cid thencmd elsecmd)) csem = (then' `S.union` else', pc) where
+--   -- those collecting semantics that pass the condition
+--   ifpass :: CollectingSem
+--   ifpass = S.filter (\m -> let env = m M.! pc in env M.! cid == 1) csem
+-- 
+-- 
+--   iffail :: CollectingSem
+--   iffail = S.filter (\m -> let env = m M.! pc in env M.! cid == 0) csem
+-- 
+--   then' :: CollectingSem
+--   then' = stmtCollect pc thencmd ifpass
+-- 
+--   else' :: CollectingSem 
+--   else' = stmtCollect pc elsecmd iffail
+stmtCollect pc (Seq s1 s2) csem = 
+  let (csem', pc') = stmtCollect pc s1 csem in
+      stmtCollect (pcincr pc) s2 csem'
 
-  iffail :: CollectingSem
-  iffail = S.filter (\m -> let env = m M.! pc in env M.! cid == 0) csem
+stmtCollect pc Done csem = (csem, pc)
 
-  then' :: CollectingSem
-  then' = stmtCollect pc thencmd ifpass
-
-  else' :: CollectingSem 
-  else' = stmtCollect pc elsecmd iffail
 
 
 -- Abstract domain 1 - concrete functions
@@ -287,30 +295,42 @@ repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
 repeatTillFix f seed = let cur = f seed in
                            if cur == seed then [seed] else seed:repeatTillFix f cur 
 
-assign :: String -> Expr -> Command
+assign :: String -> Expr -> Stmt
 assign id e = Assign (Id id) e
 
+listStmtToStmt :: [Stmt] -> Stmt
+listStmtToStmt ss = foldr Seq Done ss
+
 program :: Stmt 
-program = Stmt $ 
-  [assign "x" (EInt 1),
+program = listStmtToStmt $ [
+  assign "x" (EInt 1),
   assign "y" (EInt 2),
   assign "z" (EBinop Add (EId (Id "x")) (EId (Id "y"))),
   assign "vlt10" (EInt 1),
   assign "v" (EInt 0),
-  While (Id "vlt10") $ Stmt [
+  While (Id "vlt10") $ listStmtToStmt [
   assign "vp1" (EBinop Add (EId (Id "v")) (EInt 1)),
   assign "vlt10" (EBinop Lt (EId (Id "v")) (EInt 10)),
   assign "v" (EId (Id "vp1"))
   ]]
 
 
+program' :: Stmt 
+program' = listStmtToStmt $ [
+  assign "x" (EInt 1)]
+
+p :: Stmt
+p = program'
+
+
 main :: IO ()
 main = do 
-    print program
-    let states = repeatTillFix (stmtStep program) envBegin
-    forM_ states print
+    print p
+    putStrLn "***program output***"
+    let outenv =  (stmtStep p) envBegin
+    print outenv
 
     putStrLn "***collecting semantics:***"
 
-    let states' = stmtCollect (PC 0) program initCollectingSem
-    forM_ states' print
+    let states' = stmtCollect (PC 0) p initCollectingSem
+    print states'
