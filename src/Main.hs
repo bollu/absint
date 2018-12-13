@@ -67,11 +67,6 @@ imply a b = (complement a) `join` b
 (===>) :: BooleanAlgebra a => a -> a -> a
 (===>) = imply
 
--- lifted integers
-data LInt = LILift Int | LIInfty | LIMinusInfty
--- interval domain
-data Interval = Interval [(LInt, LInt)]
-
 
 newtype Id = Id String deriving(Eq)
 instance Show Id where
@@ -118,9 +113,37 @@ newtype CVal = CVal (LoopTripCounts -> LiftedLattice Int)
 -- contains a constant value, and a mapping from identifiers to their
 -- respective coefficients in the affine function.
 -- terms in the affine function
-data AFNTerm = AFNConst | AFNVar Id
+data AFFTerm = AFNConst | AFNVar Id
 -- affine function maps terms to their respective coefficients.
-data AFN = AFN (AFNTerm -> LiftedLattice Int)
+data AFF = AFN (AFFTerm -> LiftedLattice Int)
+
+-- NOTE: this is *not enough*. Our abstract domain should contain *piecewise*
+-- affine functions, so that we can build up loops in stages. Our acceleration
+-- then finds an equivalent formulation of this affine function
+
+-- lifted integers
+data LInt = LILift Int | LIInfty | LIMinusInfty
+-- interval domain
+data Interval = Interval [(LInt, LInt)]
+
+data PWAFF = PWAFF
+
+-- abstracter
+alpha :: CVal -> PWAFF
+alpha = undefined
+
+-- concretizer
+gamma :: PWAFF -> CVal
+gamma = undefined
+
+-- concrete semantics
+csem :: CVal -> CVal
+csem = undefined
+
+-- abstract semantics in terms of concrete semantics
+asem :: PWAFF -> PWAFF
+asem = alpha . csem . gamma
+
 
 assign :: String -> Expr -> Command
 assign id e = Assign (Id id) e
