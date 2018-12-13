@@ -2,12 +2,58 @@ module Main where
 import qualified Data.Map.Strict as M
 import Data.List (intercalate)
 
--- A join semilattice with bottom
-class JoinSemilattice a where
+class Lattice a where
   bottom :: a
+  top :: a
   join :: a -> a -> a
+  meet :: a -> a -> a
+
+data LiftedLattice a = LL a | LLBot | LLTop
+instance Show a => Show (LiftedLattice a) where
+  show LLBot = "_|_"
+  show LLTop = "T"
+  show (LL a) = show a
+
+-- Lift any element pointwise onto a lattice
+instance Eq a => Lattice (LiftedLattice a) where
+  bottom = LLBot
+  top = LLTop
+
+  join LLBot a = a
+  join a LLBot = a
+  join LLTop _ = LLTop
+  join _ LLTop = LLTop
+  join (LL a) (LL b) = if a == b then LL a else LLTop
+
+  meet LLBot _ = LLBot
+  meet _ LLBot = LLBot
+  meet a LLTop = a
+  meet LLTop a = a
+  meet (LL a) (LL b) = if a == b then LL a else LLBot
 
 
+instance Lattice o => Lattice (i -> o) where
+  bottom = const bottom
+  top = const top
+  join f g = \i -> f i `join` g i
+  meet f g = \i -> f i `meet` g i
+
+
+class Lattice a => BooleanAlgebra a where
+  complement :: a -> a
+
+-- implication in the boolean algebra
+imply :: BooleanAlgebra a => a -> a -> a
+imply a b = (complement a) `join` b
+
+-- symbol
+(===>) :: BooleanAlgebra a => a -> a -> a
+(===>) = imply
+
+-- lifted integers
+data LInt = LILift Int | LIInfty | LIMinusInfty
+-- interval domain
+data Interval = Interval [(LInt, LInt)]
 
 
 -- Concrete Syntax
@@ -30,13 +76,6 @@ newtype Stmt = Stmt [Command]
 instance Show Stmt where
   show (Stmt cs) = intercalate ";" (map show cs)
 newtype Nodeid = Nodeid Int deriving(Show)
-
--- Abstract semantics
--- Ix = n -> *before* the nth basic block
-newtype Ix = Ix Int deriving(Eq, Show)
-data Interval = Interval (Int, Int) | Infty | Empty
-data `
-
 
 
 assign :: String -> Expr -> Command
