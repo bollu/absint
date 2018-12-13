@@ -98,12 +98,12 @@ newtype Stmt = Stmt [Command]
 instance Show Stmt where
   show (Stmt cs) = intercalate ";" (map show cs)
 
+-- A Program is a top level statement
+type Program = Stmt
+
 
 -- type representing loop trip counts
 newtype LoopTripCounts = LoopTripCounts (M.Map Id Int)
-
-
-
 
 -- concrete value is a function from loop trip conts to values
 newtype CVal = CVal (LoopTripCounts -> LiftedLattice Int)
@@ -136,13 +136,14 @@ alpha = undefined
 gamma :: PWAFF -> CVal
 gamma = undefined
 
--- concrete semantics
-csem :: CVal -> CVal
+-- concrete semantic transformer, that takes a semantics and incrementally
+-- builds up on it. The final semantics is the least fixpoint of this function.
+csem :: Program -> CVal -> CVal
 csem = undefined
 
 -- abstract semantics in terms of concrete semantics
-asem :: PWAFF -> PWAFF
-asem = alpha . csem . gamma
+asem :: Program -> PWAFF -> PWAFF
+asem p = alpha . csem p . gamma
 
 
 assign :: String -> Expr -> Command
