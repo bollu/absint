@@ -8,6 +8,23 @@ class Lattice a where
   join :: a -> a -> a
   meet :: a -> a -> a
 
+instance Lattice a => Lattice (Maybe a) where
+  bottom = Nothing
+  top = Just top
+  join Nothing a = a
+  join a Nothing = a
+  join (Just a) (Just b) = Just (join a b)
+
+  meet Nothing _ = Nothing
+  meet _ Nothing = Nothing
+  meet (Just a) (Just b) = Just (meet a b)
+
+instance (Lattice a , Lattice b) => Lattice (a, b) where
+  bottom = (bottom, bottom)
+  top = (top, top)
+  join (a, b) (a', b') = (a `join` a', b `join` b')
+  meet (a, b) (a', b') = (a `meet` a', b `meet` b')
+
 data LiftedLattice a = LL a | LLBot | LLTop
 instance Show a => Show (LiftedLattice a) where
   show LLBot = "_|_"
@@ -56,27 +73,54 @@ data LInt = LILift Int | LIInfty | LIMinusInfty
 data Interval = Interval [(LInt, LInt)]
 
 
+newtype Id = Id String deriving(Eq)
+instance Show Id where
+  show (Id s) = "id-" ++ s
+
 -- Concrete Syntax
-data Binop = Add deriving(Eq, Show)
-data Expr = Eint Int | Ebool Bool  | Ebinop Binop Expr Expr
+data Binop = Add | Lt deriving(Eq)
+instance Show Binop where
+  show Add = "op-+"
+  show Lt = "op-<"
+
+data Expr = Eint Int | Ebool Bool  | Ebinop Binop Id Id
   deriving(Eq)
 instance Show Expr where
     show (Eint i) = show i
     show (Ebool b) = show b
-    show (Ebinop Add e1 e2) = "(+" ++ show e1 ++ " " ++ show e1 ++ ")"
+    show (Ebinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e1 ++ ")"
 
-newtype Id = Id String deriving(Eq, Show)
-data Command = Assign Id Expr | Skip | If Expr Stmt Stmt | While Expr Stmt
+
+data Command = Assign Id Expr 
+             | If Id Stmt Stmt  -- branch value id, true branch, false branch
+             | Loop Id Id Id Stmt -- loop phi id, entry value id, backedge value id
+
 instance Show Command where
-  show (Assign (Id id) e) = id ++ " := " ++ show e
-  show Skip = "skip"
-  show (If cond t e) = show "if" ++ show cond ++ show t ++ show e
+  show (Assign id e) = "(= " ++  show id ++ " " ++ show e ++  ")"
+  show (If cond t e) = "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
 
 newtype Stmt = Stmt [Command]
 instance Show Stmt where
   show (Stmt cs) = intercalate ";" (map show cs)
-newtype Nodeid = Nodeid Int deriving(Show)
 
+
+-- type representing loop trip counts
+newtype LoopTripCounts = LoopTripCounts (M.Map Id Int)
+
+
+
+
+-- concrete value is a function from loop trip conts to values
+newtype CVal = CVal (LoopTripCounts -> LiftedLattice Int)
+
+-- our abstract value is an affine function of loop trip counts.
+-- type representing affine function of identifiers
+-- contains a constant value, and a mapping from identifiers to their
+-- respective coefficients in the affine function.
+-- terms in the affine function
+data AFNTerm = AFNConst | AFNVar Id
+-- affine function maps terms to their respective coefficients.
+data AFN = AFN (AFNTerm -> LiftedLattice Int)
 
 assign :: String -> Expr -> Command
 assign id e = Assign (Id id) e
@@ -84,7 +128,8 @@ assign id e = Assign (Id id) e
 program :: Stmt 
 program = Stmt $ 
   [assign "x" (Eint 1),
-  assign "y" (Eint 2)]
+  assign "y" (Eint 2),
+  assign "z" (Ebinop Add (Id "x") (Id "y"))]
 
 main :: IO ()
 main = print program
