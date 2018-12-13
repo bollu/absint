@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 module Main where
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.List (intercalate)
 import Data.Foldable
 
@@ -189,10 +190,45 @@ stmtStep (Stmt cs) env = foldl (flip commandStep) env cs
 -- Concrete domain - Collecting semantics
 -- ======================================
 -- program counter, positioned *before* the ith instruction.
-data PC = PC Int deriving(Eq)
+data PC = PC Int deriving(Eq, Ord)
 instance Show PC where
   show (PC pc) = "pc-" ++ show pc
-  
+
+pcstream :: PC -> [PC]
+pcstream (PC pc) = map PC [pc+1, pc+2..]
+
+-- a set of maps from program counters to environments
+type CollectingSem =  (S.Set (M.Map PC Env))
+
+initCollectingSem :: CollectingSem
+initCollectingSem = S.singleton $ M.fromList (zip (map PC [1..100]) (repeat envBegin))
+
+-- edit the effect of a command at the given PC of all the values in the collectingSem
+commandAffectCollect :: PC -> Command -> CollectingSem -> CollectingSem
+commandAffectCollect pc command csem = 
+   S.map (\m -> M.adjust (\env -> commandStep command env) pc m) csem
+
+stmtCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
+stmtCollect pc (Stmt cmds) csem = foldl (\csem (pc, cmd) -> commandCollect pc cmd csem) csem (zip (pcstream pc) cmds)
+
+-- TODO: do we nee to add `iffail` candidates?
+commandCollect :: PC -> Command -> CollectingSem -> CollectingSem
+commandCollect pc (c@(Assign id e)) csem = commandAffectCollect pc c csem
+commandCollect pc (c@(While condid s)) csem = S.union csem (commandAffectCollect pc c csem)
+commandCollect pc (c@(If cid thencmd elsecmd)) csem = then' `S.union` else' where
+  -- those collecting semantics that pass the condition
+  ifpass :: CollectingSem
+  ifpass = S.filter (\m -> let env = m M.! pc in env M.! cid == 1) csem
+
+
+  iffail :: CollectingSem
+  iffail = S.filter (\m -> let env = m M.! pc in env M.! cid == 0) csem
+
+  then' :: CollectingSem
+  then' = stmtCollect pc thencmd ifpass
+
+  else' :: CollectingSem 
+  else' = stmtCollect pc elsecmd iffail
 
 
 -- Abstract domain 1 - concrete functions
@@ -273,3 +309,8 @@ main = do
     print program
     let states = repeatTillFix (stmtStep program) envBegin
     forM_ states print
+
+    putStrLn "***collecting semantics:***"
+
+    let states' = stmtCollect (PC 0) program initCollectingSem
+    forM_ states' print
