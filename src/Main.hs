@@ -338,25 +338,44 @@ asem p = alpha . csem p . gamma
 -- Example
 -- =======
 
-data StmtBuilder = StmtBuilder { sbpc :: PC, stmts :: Stmt }
+data StmtBuilder = StmtBuilder { sbpc :: PC }
 
-assign :: String -> Expr -> ST.State StmtBuilder ()
+sbPCIncr :: ST.State StmtBuilder ()
+sbPCIncr = ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
+
+assign :: String -> Expr -> ST.State StmtBuilder Stmt
 assign id e =
   do
     pc <- ST.gets sbpc
-    let a = Assign pc (Id id) e
-    ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
-    ST.modify (\s -> s { stmts = Seq (stmts s) a})
-    return ()
+    let s = Assign pc (Id id) e
+    sbPCIncr
+    return s
 
-build :: ST.State StmtBuilder () -> Stmt
-build st = let begin = StmtBuilder (pcincr pcinit) (Skip (PC 0)) in 
-             stmts $ ST.execState st  begin
+
+while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
+while idcond loopbuilder = do
+  pc <- ST.gets sbpc
+  sbPCIncr
+  loop <- loopbuilder
+  let l = While pc (Id idcond) loop
+  return l
+  
+
+stmtBuild :: ST.State StmtBuilder Stmt -> Stmt
+stmtBuild st = let begin = StmtBuilder (pcincr pcinit) in 
+             ST.evalState st begin
+
+stmtSequence :: [ST.State StmtBuilder Stmt] -> ST.State StmtBuilder Stmt
+stmtSequence [x] = x
+stmtSequence (x:xs) = do
+  x' <- x
+  xs' <- stmtSequence xs
+  return $ Seq x' xs'
 
 program :: Stmt
-program = build $  do
-  assign "x" (EInt 1)
-  assign "y" (EInt 2)
+program = stmtBuild . stmtSequence $ [
+  assign "x" (EInt 1),
+  assign "y" (EInt 2)]
 
 p :: Stmt
 p = program
@@ -364,14 +383,14 @@ p = program
 
 main :: IO ()
 main = do
+    putStrLn "***program***"
     print p
+    
     putStrLn "***program output***"
     let outenv =  (stmtSingleStep p) envBegin
     print outenv
 
-    putStrLn "***collecting semantics:***"
 
+    putStrLn "***collecting semantics:***"
     let states' = stmtCollectFix (PC (-1)) p initCollectingSem
-
-    putStrLn "***collecting semantics:***"
-    forM_  (S.toList states') (print . stateShow)
+    forM_  (S.toList states') (putStr . stateShow)
