@@ -336,22 +336,22 @@ stmtSingleStepA w@(While _ cid s _) env =
 stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
 stmtSingleStepA (Skip _) env = env
 
-type State = M.Map PC AEnv
+type PC2Env = M.Map PC AEnv
 
 stateShow :: M.Map PC AEnv -> String
 stateShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
 
 -- Propogate the value of the environment at the first PC to the second PC.
 -- Needed to implicitly simulate the flow graph.
-statePropogate :: PC -> PC -> (AEnv -> AEnv) -> State -> State
+statePropogate :: PC -> PC -> (AEnv -> AEnv) -> PC2Env -> PC2Env
 statePropogate pc pc' f st = let e = st M.! pc  in
   M.insert pc' (f e) st
 
 -- a set of maps from program counters to environments
-type CollectingSem = S.Set State
+type CollectingSem = S.Set PC2Env
 
--- Initial collecting semantics, which contains one state.
--- This initial state maps every PC to the empty environment
+-- Initial collecting semantics, which contains one PC2Env.
+-- This initial PC2Env maps every PC to the empty environment
 initCollectingSem :: CollectingSem
 initCollectingSem = let st = M.fromList (zip (map PC [-1..10]) (repeat aenvbegin)) in
   S.singleton $ st
@@ -361,7 +361,7 @@ initCollectingSem = let st = M.fromList (zip (map PC [-1..10]) (repeat aenvbegin
 collectingSemPropogate :: PC -> PC -> (AEnv -> AEnv) -> CollectingSem -> CollectingSem
 collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
--- affect the statement, by borrowing the state from the given PC
+-- affect the statement, by borrowing the PC2Env from the given PC
 stmtCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
 stmtCollect pcold s@(Assign _ _ _) csem =
   (collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s)) $ csem
