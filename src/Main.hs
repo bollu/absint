@@ -367,27 +367,32 @@ stmtCollectFix pcold s@(Assign _ _ _) csem =
   collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s) csem
 
 stmtCollectFix pcold (While pc condid loop pc') csem =
-  let filteredfix :: CollectingSem -> CollectingSem
-      filteredfix csem = S.filter (\st ->  (st M.! pc) !!! condid == LL 1 ) (collectfix csem)
-  
-      -- fixpoint, run the `loop` statement from the while loop beginning
-      -- and aso gather all the backedges
-      collectfix :: CollectingSem -> CollectingSem
-      collectfix csem = stmtCollectFix pc loop csem `S.union` collect_entry csem `S.union` collect_to_back csem `S.union` collect_backedge csem
-      
-      -- preheader to entry
-      collect_entry :: CollectingSem -> CollectingSem
-      collect_entry = collectingSemPropogate pcold pc id
+  let pre_to_entry :: CollectingSem -> CollectingSem
+      pre_to_entry = collectingSemPropogate pcold pc id
+
+      -- loop execution
+      entry_to_exit :: CollectingSem -> CollectingSem
+      entry_to_exit csem = stmtCollectFix pc loop csem
 
       -- exit block to entry 
-      collect_backedge :: CollectingSem -> CollectingSem
-      collect_backedge = collectingSemPropogate pc' pc id
+      exit_to_entry :: CollectingSem -> CollectingSem
+      exit_to_entry = collectingSemPropogate pc' pc id
+
+
+      -- everything entering the entry block 
+      all_to_entry :: CollectingSem -> CollectingSem
+      all_to_entry csem = 
+        S.filter (\s -> (s M.! pc) !!! condid == LL 1)
+        ((pre_to_entry csem) `S.union` exit_to_entry csem `S.union` entry_to_exit csem `S.union` final_to_exit csem)
 
       -- final statement in while to exit block
-      collect_to_back :: CollectingSem -> CollectingSem
-      collect_to_back = collectingSemPropogate (stmtPCEnd loop) pc' id
+      final_to_exit :: CollectingSem -> CollectingSem
+      final_to_exit csem = collectingSemPropogate (stmtPCEnd loop) pc' id csem
 
-   in (fold (repeatTillFix filteredfix csem))
+      f :: CollectingSem -> CollectingSem
+      f csem = all_to_entry csem -- `S.union` final_to_exit csem
+
+   in (fold (repeatTillFix f csem))
 
 stmtCollectFix pc (Seq s1 s2) csem =
   let csem' = stmtCollectFix pc s1 csem
