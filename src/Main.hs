@@ -96,7 +96,7 @@ imply a b = (complement a) `join` b
 (===>) :: BooleanAlgebra a => a -> a -> a
 (===>) = imply
 
-data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop deriving(Eq, Ord)
+data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop deriving (Eq, Ord)
 
 -- Insert a regular value into a lattice map
 insert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
@@ -366,7 +366,10 @@ stmtCollectFix pcold s@(Assign _ _ _) csem =
   collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s) csem
 
 stmtCollectFix pcold (While pc condid loop) csem =
-  let collectfix :: CollectingSem -> CollectingSem
+  let filteredfix :: CollectingSem -> CollectingSem
+      filteredfix csem = S.filter (\st ->  (st M.! pc) !!! condid == LL 1 ) (collectfix csem)
+  
+      collectfix :: CollectingSem -> CollectingSem
       collectfix csem = stmtCollectFix pc loop csem `S.union` collect_entry csem `S.union` collect_back csem
       
       collect_entry :: CollectingSem -> CollectingSem
@@ -375,7 +378,7 @@ stmtCollectFix pcold (While pc condid loop) csem =
       collect_back :: CollectingSem -> CollectingSem
       collect_back = collectingSemPropogate (stmtPCEnd loop) pc id
 
-   in (fold (repeatTillFixDebug 20 collectfix csem))
+   in (fold (repeatTillFixDebug 20 filteredfix csem))
 
 stmtCollectFix pc (Seq s1 s2) csem =
   let csem' = stmtCollectFix pc s1 csem
