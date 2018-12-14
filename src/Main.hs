@@ -378,7 +378,7 @@ stmtCollectFix pcold (While pc condid loop) csem =
       collect_back :: CollectingSem -> CollectingSem
       collect_back = collectingSemPropogate (stmtPCEnd loop) pc id
 
-   in (fold (repeatTillFixDebug 20 filteredfix csem))
+   in (fold (repeatTillFix filteredfix csem))
 
 stmtCollectFix pc (Seq s1 s2) csem =
   let csem' = stmtCollectFix pc s1 csem
