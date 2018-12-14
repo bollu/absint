@@ -6,6 +6,7 @@ module Main where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.List (intercalate, nub)
+import Data.Semigroup
 import qualified Control.Monad.State as ST
 import Data.Foldable
 import Control.Applicative
@@ -426,7 +427,7 @@ stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
 type LoopBTC = M.Map Id Int 
 
 -- maps identifiers to functions from loop trip counts to values
-newtype Id2LoopFn = Id2LoopFn { runId2LoopFn :: Id -> LoopBTC -> (LiftedLattice Int) }
+data Id2LoopFn = Id2LoopFn { runId2LoopFn :: Id -> LoopBTC -> (LiftedLattice Int), idLimits :: M.Map Id (Interval Int) }
 
 -- A loop nest is identified by a trail of loop identifiers, from outermost
 -- to innermost
@@ -537,10 +538,12 @@ csemAtLoopValues csem pc btcs id =
 -- Abstraction function to Id2LoopFn from the collecting semantics
 alpha1 :: Program -> CollectingSem -> Id2LoopFn
 alpha1 p csem = 
-  let loops = getLoopnests p in
-    Id2LoopFn (\id btcs -> 
-      let (Just (assign, nest)) = idFindAssign id p
-       in csemAtLoopValues csem (stmtPCStart assign) btcs id)
+  let loops = getLoopnests p 
+      fn id btcs = let (Just (assign, nest)) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
+      limits :: M.Map Id (Interval Int)
+      limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
+  in Id2LoopFn fn limits
+
 
 
 gamma1 :: Id2LoopFn -> CollectingSem
@@ -563,10 +566,45 @@ data AFF = AFN (AFFTerm -> LiftedLattice Int)
 -- affine functions, so that we can build up loops in stages. Our acceleration
 -- then finds an equivalent formulation of this affine function
 
--- lifted integers
-data LInt = LILift Int | LIInfty | LIMinusInfty
+-- lifted integers for the interval domain
+data IInt = IInt Int | IInfty | IMinusInfty deriving (Eq, Show)
+instance Ord IInt where
+  IMinusInfty <= _ = True
+  IMinusInfty <= IMinusInfty = True
+  _ <= IMinusInfty = False
+
+  _ <= IInfty = True
+  IInfty <= IInfty = True
+  IInfty <= _ = False
+
+  (IInt x) <= (IInt y) = x <= y
+
 -- interval domain
-data Interval = Interval [(LInt, LInt)]
+data Interval a = Interval a a | IEmpty deriving(Eq)
+
+-- lift a value to a closed interval
+intervalClosed :: a -> Interval a
+intervalClosed a = Interval a a
+
+instance Show a => Show (Interval a) where
+  show IEmpty = "]["
+  show (Interval a b) = "[" ++ show a ++ ", " ++ show b ++ "]"
+
+-- Interval joining
+instance Ord a => Semigroup (Interval a) where
+  x <> IEmpty = x
+  IEmpty <> x = x
+  (Interval x x') <> (Interval y y') = 
+    let minlist is = foldl1 min is
+        maxlist is = foldl1 max is
+     in Interval (minlist [x, x', y, y']) (maxlist [x, x', y, y'])
+
+        
+-- Monoid instance
+instance Ord a => Monoid (Interval a) where
+  mempty = IEmpty
+  mappend = (<>)
+
 
 data PWAFF = PWAFF
 
