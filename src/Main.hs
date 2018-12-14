@@ -179,9 +179,10 @@ stmtStep (If cid s s') env = if (env M.! cid) == 1
                                  then stmtStep s env 
                                  else stmtStep s' env
 
+-- TODO: call this something else. Take only one step here so our collecting semantics actually collects
 stmtStep w@(While cid s) env = 
   if (env M.! cid == 1)
- then let env' = (stmtStep s env) in stmtStep w env' 
+ then let env' = (stmtStep s env) in env'
   else env
 stmtStep (Seq s1 s2) env = stmtStep s2 (stmtStep s1 env)
 stmtStep Done env= env
@@ -204,7 +205,7 @@ pcinit = PC 0
 type CollectingSem =  (S.Set (M.Map PC Env))
 
 initCollectingSem :: CollectingSem
-initCollectingSem = S.singleton $ M.fromList (zip (map PC [0..100]) (repeat envBegin))
+initCollectingSem = S.singleton $ M.fromList (zip (map PC [0..7]) (repeat envBegin))
 
 -- edit the effect of a Stmt at the given PC of all the values in the collectingSem
 stmtAffectCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
@@ -214,6 +215,7 @@ stmtAffectCollect pc  s csem =
 -- TODO: do we nee to add `iffail` candidates?
 stmtCollect :: PC -> Stmt -> CollectingSem -> (CollectingSem, PC)
 stmtCollect pc (c@(Assign id e)) csem = (stmtAffectCollect pc c csem, pc)
+-- TODO: this is wrong, that is, we should actually take c0 U c1 U c2 ... cn
 stmtCollect pc (c@(While condid s)) csem = (S.union csem (stmtAffectCollect pc c csem), pc)
 
 -- TODO: handle if then else, PC as an integer does not work, we need to identify points in a graph ;_;
@@ -232,8 +234,11 @@ stmtCollect pc (c@(While condid s)) csem = (S.union csem (stmtAffectCollect pc c
 --   else' :: CollectingSem 
 --   else' = stmtCollect pc elsecmd iffail
 stmtCollect pc (Seq s1 s2) csem = 
-  let (csem', pc') = stmtCollect pc s1 csem in
-      stmtCollect (pcincr pc) s2 csem'
+  let (csem', pc') = stmtCollect pc s1 csem
+      csem'' :: CollectingSem
+      csem'' = S.map (\m -> M.insert (pcincr pc') (m M.! pc') m) csem'
+   in
+      stmtCollect (pcincr pc') s2 csem''
 
 stmtCollect pc Done csem = (csem, pc)
 
@@ -320,7 +325,7 @@ program' = listStmtToStmt $ [
   assign "x" (EInt 1)]
 
 p :: Stmt
-p = program'
+p = program
 
 
 main :: IO ()
@@ -334,3 +339,6 @@ main = do
 
     let states' = stmtCollect (PC 0) p initCollectingSem
     print states'
+
+    putStrLn "***collecting semantics:***"
+    forM_  (S.toList (fst states')) (\m -> forM_ ((map (\(k, v) -> show k ++ " -> " ++ show v)) (M.toList m)) print)
