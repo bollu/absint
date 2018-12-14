@@ -213,7 +213,7 @@ pcinit = PC 0
 -- Statements of the language
 data Stmt = Assign PC Id Expr
             | If PC Id Stmt Stmt -- branch value id, true branch, false branch
-            | While PC Id Stmt  -- while cond stmt
+            | While PC Id Stmt  PC -- while cond stmt, pc of entry, pc of exit
             | Seq Stmt Stmt
             | Skip PC
 
@@ -221,7 +221,7 @@ data Stmt = Assign PC Id Expr
 stmtPCStart :: Stmt -> PC
 stmtPCStart (Assign pc _ _)  = pc
 stmtPCStart (If pc _ _ _) = pc
-stmtPCStart (While pc _ _) = pc
+stmtPCStart (While pc _ _ _) = pc
 stmtPCStart (Seq s1 _) = stmtPCStart s1
 stmtPCStart (Skip pc) = pc
 
@@ -230,14 +230,14 @@ stmtPCStart (Skip pc) = pc
 stmtPCEnd :: Stmt -> PC
 stmtPCEnd (Assign pc _ _)  = pc
 stmtPCEnd (If pc _ _ _) = pc
-stmtPCEnd (While pc _ _) = pc
+stmtPCEnd (While _ _ _ pc) = pc
 stmtPCEnd (Seq _ s2) = stmtPCEnd s2
 stmtPCEnd (Skip pc) = pc
 
 instance Show Stmt where
   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
   show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
-  show (While pc cond s) = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")"
+  show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
   show (Seq s1 s2) =  show s1 ++ "\n" ++ show s2
   show (Skip pc) = show pc ++ ":" ++ "done"
 
@@ -245,11 +245,12 @@ instance Pretty Stmt where
   pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
   pretty s@(If pc cond t e) = pretty pc <+> (parens $ pretty "if" <+> pretty cond <+> indent 1 (line <> pretty t <> line <> pretty e))
   pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
-  pretty (While pc cond s) = pretty pc <+> pretty "(while " <+> pretty cond <+> indent 1 (line <> pretty s) <> pretty ")"
-
-
-
-
+  pretty (While pc cond s pc') = 
+    pretty pc <+> 
+      (parens $ 
+        pretty "(while" <+> 
+          pretty cond <+> 
+            indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
 
 -- A Program is a top level statement
 type Program = Stmt 
@@ -285,7 +286,7 @@ stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
 stmtSingleStep (If _ cid s s') env = if (env M.! cid) == 1
                                  then stmtSingleStep s env
                                  else stmtSingleStep s' env
-stmtSingleStep w@(While _ cid s) env =
+stmtSingleStep w@(While _ cid s _) env =
   if (env M.! cid == 1)
     then stmtSingleStep s env
     else env
@@ -299,7 +300,7 @@ stmtExec (s@(Assign _ _ _)) env = stmtSingleStep s env
 stmtExec (s@(If _ _ _ _)) env = stmtSingleStep s env
 stmtExec (s@(Seq _ _)) env = stmtSingleStep s env
 stmtExec (s@(Skip _)) env = stmtSingleStep s env
-stmtExec (s@(While _ cid loop)) env = last $
+stmtExec (s@(While _ cid loop _)) env = last $
   repeatTillFix (stmtSingleStep loop) env
 
 
@@ -327,7 +328,7 @@ stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
 stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
                                  then stmtSingleStepA s env
                                  else stmtSingleStepA s' env
-stmtSingleStepA w@(While _ cid s) env =
+stmtSingleStepA w@(While _ cid s _) env =
   if (env !!! cid == LL 1)
     then stmtSingleStepA s env
     else env
@@ -352,7 +353,7 @@ type CollectingSem = S.Set State
 -- Initial collecting semantics, which contains one state.
 -- This initial state maps every PC to the empty environment
 initCollectingSem :: CollectingSem
-initCollectingSem = let st = M.fromList (zip (map PC [-1..7]) (repeat aenvbegin)) in
+initCollectingSem = let st = M.fromList (zip (map PC [-1..10]) (repeat aenvbegin)) in
   S.singleton $ st
 
 -- propogate the value of an environment at the first PC to the second
@@ -365,18 +366,26 @@ stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
 stmtCollectFix pcold s@(Assign _ _ _) csem =
   collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s) csem
 
-stmtCollectFix pcold (While pc condid loop) csem =
+stmtCollectFix pcold (While pc condid loop pc') csem =
   let filteredfix :: CollectingSem -> CollectingSem
       filteredfix csem = S.filter (\st ->  (st M.! pc) !!! condid == LL 1 ) (collectfix csem)
   
+      -- fixpoint, run the `loop` statement from the while loop beginning
+      -- and aso gather all the backedges
       collectfix :: CollectingSem -> CollectingSem
-      collectfix csem = stmtCollectFix pc loop csem `S.union` collect_entry csem `S.union` collect_back csem
+      collectfix csem = stmtCollectFix pc loop csem `S.union` collect_entry csem `S.union` collect_to_back csem `S.union` collect_backedge csem
       
+      -- preheader to entry
       collect_entry :: CollectingSem -> CollectingSem
       collect_entry = collectingSemPropogate pcold pc id
 
-      collect_back :: CollectingSem -> CollectingSem
-      collect_back = collectingSemPropogate (stmtPCEnd loop) pc id
+      -- exit block to entry 
+      collect_backedge :: CollectingSem -> CollectingSem
+      collect_backedge = collectingSemPropogate pc' pc id
+
+      -- final statement in while to exit block
+      collect_to_back :: CollectingSem -> CollectingSem
+      collect_to_back = collectingSemPropogate (stmtPCEnd loop) pc' id
 
    in (fold (repeatTillFix filteredfix csem))
 
@@ -489,7 +498,10 @@ while idcond loopbuilder = do
   pc <- ST.gets sbpc
   sbPCIncr
   loop <- loopbuilder
-  let l = While pc (Id idcond) loop
+  pc' <- ST.gets sbpc
+  sbPCIncr
+
+  let l = While pc (Id idcond) loop pc'
   return l
 
   
