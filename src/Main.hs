@@ -142,7 +142,7 @@ instance Show Id where
   show (Id s) = "id:" ++ s
 
 instance Pretty Id where
-  pretty = pretty . show
+  pretty (Id s) =  pretty s
 
 -- Concrete Syntax
 data Binop = Add | Lt deriving(Eq)
@@ -151,17 +151,23 @@ instance Show Binop where
   show Lt = "op:<"
 
 instance Pretty Binop where
-  pretty = pretty . show
+  pretty Add = pretty "+."
+  pretty Lt = pretty "<."
 
 data Expr = EInt Int | EBool Bool  | EBinop Binop Expr Expr | EId Id
   deriving(Eq)
+
 instance Show Expr where
     show (EInt i) = show i
     show (EBool b) = show b
     show (EId id) = show id
     show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e2 ++ ")"
+
 instance Pretty Expr where
-  pretty = pretty . show
+  pretty (EInt i) = pretty i
+  pretty (EBool b) = pretty b
+  pretty (EId id) = pretty id
+  pretty (EBinop op e1 e2) = parens $ pretty op <+> pretty e1 <+> pretty e2
 
 
 -- program counter, positioned *after* the ith instruction.
@@ -210,9 +216,8 @@ instance Show Stmt where
   show (Skip pc) = show pc ++ ":" ++ "done"
 
 instance Pretty Stmt where
-  pretty s@(Assign pc id e) = pretty . show $ s
-  pretty s@(If pc cond t e) = 
-    pretty pc <+> pretty "(if" <+> pretty cond <> (indent 1 (line <> pretty t <> line <> pretty e)) <> pretty ")"
+  pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
+  pretty s@(If pc cond t e) = pretty pc <+> (parens $ pretty "if" <+> pretty cond <+> indent 1 (line <> pretty t <> line <> pretty e))
   pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
   pretty (While pc cond s) = pretty pc <+> pretty "(while " <+> pretty cond <+> indent 1 (line <> pretty s) <> pretty ")"
 
