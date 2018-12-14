@@ -7,6 +7,9 @@ import Data.List (intercalate)
 import qualified Control.Monad.State as ST
 import Data.Foldable
 import Data.Void
+import Data.Text.Prettyprint.Doc
+import Data.Text.Prettyprint.Doc.Internal
+import Data.Text.Prettyprint.Doc.Util
 
 -- Lattice theory
 -- ==============
@@ -120,21 +123,35 @@ instance Ord k => Lattice (LatticeMap k v) where
 
 
 repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
-repeatTillFix f seed = let cur = f seed in
-                           if cur == seed then [seed] else seed:repeatTillFix f cur
+repeatTillFix f a =
+  let a' = f a in
+  if a == a' then [a] else a:repeatTillFix f a'
+
+
+-- repeat till fixpoint, or the max count
+repeatTillFixDebug :: Eq a => Int -> (a -> a) -> a -> [a]
+repeatTillFixDebug 0 f a = [a]
+repeatTillFixDebug n f a = 
+  let a' = f a in if a' == a then [a] else a': repeatTillFixDebug (n - 1) f a'
 
 -- Program syntax
 -- ==============
 
 newtype Id = Id String deriving(Eq, Ord)
 instance Show Id where
-  show (Id s) = "id-" ++ s
+  show (Id s) = "id:" ++ s
+
+instance Pretty Id where
+  pretty = pretty . show
 
 -- Concrete Syntax
 data Binop = Add | Lt deriving(Eq)
 instance Show Binop where
-  show Add = "op-+"
-  show Lt = "op-<"
+  show Add = "op:+"
+  show Lt = "op:<"
+
+instance Pretty Binop where
+  pretty = pretty . show
 
 data Expr = EInt Int | EBool Bool  | EBinop Binop Expr Expr | EId Id
   deriving(Eq)
@@ -142,12 +159,18 @@ instance Show Expr where
     show (EInt i) = show i
     show (EBool b) = show b
     show (EId id) = show id
-    show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e1 ++ ")"
+    show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e2 ++ ")"
+instance Pretty Expr where
+  pretty = pretty . show
+
 
 -- program counter, positioned *after* the ith instruction.
 data PC = PC Int deriving(Eq, Ord)
 instance Show PC where
-  show (PC pc) = "pc-" ++ show pc
+  show (PC pc) = "pc:" ++ show pc
+
+instance Pretty PC where
+  pretty = pretty . show
 
 pcincr :: PC -> PC
 pcincr (PC i) = PC (i + 1)
@@ -185,6 +208,14 @@ instance Show Stmt where
   show (While pc cond s) = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")"
   show (Seq s1 s2) =  show s1 ++ "\n" ++ show s2
   show (Skip pc) = show pc ++ ":" ++ "done"
+
+instance Pretty Stmt where
+  pretty s@(Assign pc id e) = pretty . show $ s
+  pretty s@(If pc cond t e) = 
+    pretty pc <+> pretty "(if" <+> pretty cond <> (indent 1 (line <> pretty t <> line <> pretty e)) <> pretty ")"
+  pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
+  pretty (While pc cond s) = pretty pc <+> pretty "(while " <+> pretty cond <+> indent 1 (line <> pretty s) <> pretty ")"
+
 
 
 
@@ -225,10 +256,11 @@ stmtSingleStep (If _ cid s s') env = if (env M.! cid) == 1
                                  else stmtSingleStep s' env
 stmtSingleStep w@(While _ cid s) env =
   if (env M.! cid == 1)
- then let env' = (stmtSingleStep s env) in env'
-  else env
+    then stmtSingleStep s env
+    else env
+       
 stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
-stmtSingleStep (Skip _) env= env
+stmtSingleStep (Skip _) env = env
 
   -- Execute the statement with respect to the semantics
 stmtExec :: Stmt -> Env -> Env
@@ -236,8 +268,8 @@ stmtExec (s@(Assign _ _ _)) env = stmtSingleStep s env
 stmtExec (s@(If _ _ _ _)) env = stmtSingleStep s env
 stmtExec (s@(Seq _ _)) env = stmtSingleStep s env
 stmtExec (s@(Skip _)) env = stmtSingleStep s env
-stmtExec (s@(While _ cid loop)) env = last $ repeatTillFix
-  (\env -> if env M.! cid == 1 then stmtSingleStep loop env else env) env
+stmtExec (s@(While _ cid loop)) env = last $
+  repeatTillFix (stmtSingleStep loop) env
 
 
 -- Concrete domain - Collecting semantics
@@ -275,9 +307,12 @@ stmtCollectFix pcold s@(Assign _ _ _) csem =
 stmtCollectFix pcold (While pc condid loop) csem =
   let collectfix :: CollectingSem -> CollectingSem
       collectfix = collectingSemPropogate pc pc (stmtSingleStep loop)
+      
       collect_in :: CollectingSem -> CollectingSem
-      collect_in = collectingSemPropogate pcold pc (stmtSingleStep loop)
-  in  collect_in csem `S.union` (fold (repeatTillFix collectfix csem))
+      collect_in = collectingSemPropogate pcold pc id
+  in  let csem' = collect_in csem in
+    -- csem' `S.union` (fold (repeatTillFix collectfix csem'))
+    csem' `S.union` (fold (repeatTillFixDebug 20 collectfix csem'))
 
 stmtCollectFix pc (Seq s1 s2) csem =
   let csem' = stmtCollectFix pc s1 csem
@@ -360,7 +395,6 @@ stmtSequence (x:xs) = do
 class ToExpr a where
   toexpr :: a -> Expr
 
-
 instance ToExpr Id where
   toexpr a = EId a
 
@@ -397,15 +431,19 @@ while idcond loopbuilder = do
 (+.) a b = EBinop Add (toexpr a) (toexpr b)
 
 
+(<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
+(<.) a b = EBinop Lt (toexpr a) (toexpr b)
+
+
 program :: Stmt
 program = stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
   assign "y" (EInt 2),
-  assign "x_lt_5" False,
+  assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
-      assign "xnext" ("x" +.  EInt 1),
-      assign "x" "xnext"]
-  ]
+      assign "x" ("x" +.  EInt 1),
+      assign "x_lt_5" ("x" <. EInt 5)
+  ]]
 
 p :: Stmt
 p = program
@@ -414,7 +452,8 @@ p = program
 main :: IO ()
 main = do
     putStrLn "***program***"
-    print p
+    putDocW 80 (pretty p)
+    putStrLn ""
     
     putStrLn "***program output***"
     let outenv =  (stmtExec p) envBegin
