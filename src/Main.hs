@@ -362,17 +362,17 @@ collectingSemPropogate :: PC -> PC -> (AEnv -> AEnv) -> CollectingSem -> Collect
 collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
 -- affect the statement, by borrowing the state from the given PC
-stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
-stmtCollectFix pcold s@(Assign _ _ _) csem =
-  collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s) csem
+stmtCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
+stmtCollect pcold s@(Assign _ _ _) csem =
+  (collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s)) $ csem
 
-stmtCollectFix pcold (While pc condid loop pc') csem =
+stmtCollect pcold (While pc condid loop pc') csem =
   let pre_to_entry :: CollectingSem -> CollectingSem
       pre_to_entry = collectingSemPropogate pcold pc id
 
       -- loop execution
       entry_to_exit :: CollectingSem -> CollectingSem
-      entry_to_exit csem = stmtCollectFix pc loop csem
+      entry_to_exit csem = stmtCollect pc loop csem
 
       -- exit block to entry 
       exit_to_entry :: CollectingSem -> CollectingSem
@@ -392,13 +392,17 @@ stmtCollectFix pcold (While pc condid loop pc') csem =
       f :: CollectingSem -> CollectingSem
       f csem = all_to_entry csem -- `S.union` final_to_exit csem
 
-   in (fold (repeatTillFix f csem))
+   in f csem -- (fold (repeatTillFix f csem))
 
-stmtCollectFix pc (Seq s1 s2) csem =
-  let csem' = stmtCollectFix pc s1 csem
+stmtCollect pc (Seq s1 s2) csem =
+  let csem' = stmtCollect pc s1 csem
       pc' = stmtPCEnd s1 in
-    stmtCollectFix pc' s2 csem'
-stmtCollectFix pc (Skip _) csem = csem
+    stmtCollect pc' s2 csem'
+stmtCollect pc (Skip _) csem = csem
+
+-- Fixpoint of stmtCollect
+stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
+stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
 
 
 
@@ -410,6 +414,14 @@ newtype LoopTripCounts = LoopTripCounts (M.Map Id Int)
 
 -- concrete value is a function from loop trip conts to values
 newtype CVal = CVal (LoopTripCounts -> LiftedLattice Int)
+
+-- Abstraction function to CVal from the collecting semantics
+alpha1 :: CollectingSem -> CVal
+alpha1 = undefined
+
+gamma1 :: CVal -> CollectingSem
+gamma1 = undefined
+
 
 -- Abstract domain 2 - presburger functions
 -- ========================================
@@ -435,21 +447,21 @@ data Interval = Interval [(LInt, LInt)]
 data PWAFF = PWAFF
 
 -- abstracter
-alpha :: CVal -> PWAFF
-alpha = undefined
+alpha2 :: CVal -> PWAFF
+alpha2 = undefined
 
 -- concretizer
-gamma :: PWAFF -> CVal
-gamma = undefined
+gamma2 :: PWAFF -> CVal
+gamma2= undefined
 
 -- concrete semantic transformer, that takes a semantics and incrementally
 -- builds up on it. The final semantics is the least fixpoint of this function.
-csem :: Program -> CVal -> CVal
-csem = undefined
+csem2 :: Program -> CVal -> CVal
+csem2 = undefined
 
 -- abstract semantics in terms of concrete semantics
-asem :: Program -> PWAFF -> PWAFF
-asem p = alpha . csem p . gamma
+asem2 :: Program -> PWAFF -> PWAFF
+asem2 p = alpha2 . csem2 p . gamma2
 
 -- Example
 -- =======
