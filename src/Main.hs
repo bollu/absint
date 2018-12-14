@@ -426,7 +426,7 @@ stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
 type LoopBTC = M.Map Id Int 
 
 -- maps identifiers to functions from loop trip counts to values
-newtype Id2LoopFn = Id2LoopFn (Id -> LoopBTC -> LiftedLattice Int)
+newtype Id2LoopFn = Id2LoopFn { runId2LoopFn :: Id -> LoopBTC -> LiftedLattice Int }
 
 -- A loop nest is identified by a trail of loop identifiers, from outermost
 -- to innermost
@@ -667,6 +667,9 @@ p = program
 
 pcsem :: CollectingSem
 pcsem = stmtCollectFix (PC (-1)) p initCollectingSem
+
+pabs1 :: Id2LoopFn
+pabs1 = alpha1 p pcsem
 
 main :: IO ()
 main = do
