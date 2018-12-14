@@ -520,12 +520,18 @@ pc2envHasLoopValues pc btcs pc2env =
 
 -- Provide the instance in the collecting sematics that has these 
 -- values of backedge taken counts at the given PC
-csemAtLoopValues :: CollectingSem -> PC -> LoopBTC -> AEnv
-csemAtLoopValues csem pc btcs = 
+csemAtLoopValues :: CollectingSem -> PC -> LoopBTC -> Id -> LiftedLattice Int
+csemAtLoopValues csem pc btcs id = 
   let 
-  candidates :: [PC2Env]
-  candidates =  S.toList $ S.filter (pc2envHasLoopValues pc btcs) csem in
-    assert (length candidates == 1) ((head candidates) M.! pc)
+  -- pick all valid pc2envs
+  candidates :: S.Set PC2Env
+  candidates =  S.filter (pc2envHasLoopValues pc btcs) csem 
+
+  -- out of these, pick anll AEnvs that work
+  vals :: S.Set (LiftedLattice Int)
+  vals = S.map (\candidate -> (candidate M.! pc) !!! id) candidates
+  in
+    assert (length vals == 1) (head . S.toList $ vals)
 
 
 -- Abstraction function to Id2LoopFn from the collecting semantics
@@ -534,8 +540,7 @@ alpha1 p csem =
   let loops = getLoopnests p in
     Id2LoopFn (\id btcs -> 
       let (Just (assign, nest)) = idFindAssign id p
-          env = csemAtLoopValues csem (stmtPCStart assign) btcs
-       in env !!! id)
+       in csemAtLoopValues csem (stmtPCStart assign) btcs id)
 
 
 gamma1 :: Id2LoopFn -> CollectingSem
