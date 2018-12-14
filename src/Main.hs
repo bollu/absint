@@ -3,7 +3,9 @@ module Main where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.List (intercalate)
+import qualified Control.Monad.State as ST
 import Data.Foldable
+import Data.Void
 
 -- Lattice theory
 -- ==============
@@ -84,7 +86,7 @@ imply a b = (complement a) `join` b
 
 data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop
 
-insert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v 
+insert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
 insert k v LMTop = LMTop
 insert k v (LM m) = LM $ M.insert k (TL v) m
 
@@ -118,7 +120,7 @@ instance Ord k => Lattice (LatticeMap k v) where
 
 repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
 repeatTillFix f seed = let cur = f seed in
-                           if cur == seed then [seed] else seed:repeatTillFix f cur 
+                           if cur == seed then [seed] else seed:repeatTillFix f cur
 
 -- Program syntax
 -- ==============
@@ -126,10 +128,6 @@ repeatTillFix f seed = let cur = f seed in
 newtype Id = Id String deriving(Eq, Ord)
 instance Show Id where
   show (Id s) = "id-" ++ s
-
--- newtype Loopid = Loopid String deriving(Eq)
--- instance Show Loopid where
---   show (Loopid s) = "loopid-" ++ s
 
 -- Concrete Syntax
 data Binop = Add | Lt deriving(Eq)
@@ -145,60 +143,7 @@ instance Show Expr where
     show (EId id) = show id
     show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e1 ++ ")"
 
-
-data Stmt = Assign Id Expr 
-             | If Id Stmt Stmt  -- branch value id, true branch, false branch
-             | While Id Stmt -- while cond stmt
-             | Seq Stmt Stmt
-             | Done
-
-instance Show Stmt where
-  show (Assign id e) = "(= " ++  show id ++ " " ++ show e ++  ")"
-  show (If cond t e) = "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
-  show (While cond s) = "(while " ++ show cond ++ " " ++ show s ++ ")"
-  show (Seq s1 s2) = show s1 ++ "\n" ++ show s2
-  show Done = "done"
-
--- A Program is a top level statement
-type Program = Stmt
-
--- Language semantics
--- ==================
-
--- Environments of the language
-type Env = (M.Map Id Int) 
-
-envBegin :: Env
-envBegin = M.empty
-
-exprEval :: Expr -> Env -> Int
-exprEval (EInt i) _ =  i
-exprEval (EBool b) _ =  if b then 1 else 0
-exprEval (EId id) env = env M.! id
-exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
-  opimpl = case op of
-             Add -> (+)
-             Lt -> (\a b -> if a < b then 1 else 0)
-
--- Semantics of a Stmt
-stmtStep :: Stmt -> Env -> Env
-stmtStep (Assign id e) env = M.insert id (exprEval e env) env
-stmtStep (If cid s s') env = if (env M.! cid) == 1 
-                                 then stmtStep s env 
-                                 else stmtStep s' env
-
--- TODO: call this something else. Take only one step here so our collecting semantics actually collects
-stmtStep w@(While cid s) env = 
-  if (env M.! cid == 1)
- then let env' = (stmtStep s env) in env'
-  else env
-stmtStep (Seq s1 s2) env = stmtStep s2 (stmtStep s1 env)
-stmtStep Done env= env
-
-
--- Concrete domain - Collecting semantics
--- ======================================
--- program counter, positioned *before* the ith instruction.
+-- program counter, positioned *after* the ith instruction.
 data PC = PC Int deriving(Eq, Ord)
 instance Show PC where
   show (PC pc) = "pc-" ++ show pc
@@ -209,50 +154,132 @@ pcincr (PC i) = PC (i + 1)
 pcinit :: PC
 pcinit = PC 0
 
+-- Statements of the language
+data Stmt = Assign PC Id Expr
+            | If PC Id Stmt Stmt -- branch value id, true branch, false branch
+            | While PC Id Stmt  -- while cond stmt
+            | Seq Stmt Stmt
+            | Done PC
+
+-- Return the PC of the first statement in the block
+stmtPCStart :: Stmt -> PC
+stmtPCStart (Assign pc _ _)  = pc
+stmtPCStart (If pc _ _ _) = pc
+stmtPCStart (While pc _ _) = pc
+stmtPCStart (Seq s1 _) = stmtPCStart s1
+stmtPCStart (Done pc) = pc
+
+
+-- Return the PC of the last statement in the block
+stmtPCEnd :: Stmt -> PC
+stmtPCEnd (Assign pc _ _)  = pc
+stmtPCEnd (If pc _ _ _) = pc
+stmtPCEnd (While pc _ _) = pc
+stmtPCEnd (Seq _ s2) = stmtPCEnd s2
+stmtPCEnd (Done pc) = pc
+
+instance Show Stmt where
+  show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
+  show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
+  show (While pc cond s) = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")"
+  show (Seq s1 s2) =  show s1 ++ "\n" ++ show s2
+  show (Done pc) = show pc ++ ":" ++ "done"
+
+
+
+
+-- A Program is a top level statement
+type Program = Stmt 
+
+
+
+
+-- Language semantics
+-- ==================
+
+-- Environments of the language
+type Env = (M.Map Id Int)
+
+-- Initial env
+envBegin :: Env
+envBegin = M.empty
+
+-- Expression evaluation
+exprEval :: Expr -> Env -> Int
+exprEval (EInt i) _ =  i
+exprEval (EBool b) _ =  if b then 1 else 0
+exprEval (EId id) env = env M.! id
+exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
+  opimpl = case op of
+             Add -> (+)
+             Lt -> (\a b -> if a < b then 1 else 0)
+
+
+-- Semantics of a Stmt, taking a single step through the execution.
+-- Fixpoint of these semantics are the actual bigstep semantics
+stmtSingleStep :: Stmt -> Env -> Env
+stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
+stmtSingleStep (If _ cid s s') env = if (env M.! cid) == 1
+                                 then stmtSingleStep s env
+                                 else stmtSingleStep s' env
+stmtSingleStep w@(While _ cid s) env =
+  if (env M.! cid == 1)
+ then let env' = (stmtSingleStep s env) in env'
+  else env
+stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
+stmtSingleStep (Done _) env= env
+
+  -- Execute the statement with respect to the semantics
+stmtExec :: Stmt -> Env -> Env
+stmtExec (s@(Assign _ _ _)) env = stmtSingleStep s env
+stmtExec (s@(If _ _ _ _)) env = stmtSingleStep s env
+stmtExec (s@(Seq _ _)) env = stmtSingleStep s env
+stmtExec (s@(Done _)) env = stmtSingleStep s env
+stmtExec (s@(While _ cid loop)) env = last $ repeatTillFix
+  (\env -> if env M.! cid == 1 then stmtSingleStep loop env else env) env
+
+
+-- Concrete domain - Collecting semantics
+-- ======================================
+type State = M.Map PC Env
+
+-- Propogate the value of the environment at the first PC to the second PC.
+-- Needed to implicitly simulate the flow graph.
+statePropogate :: PC -> PC -> (Env -> Env) -> State -> State
+statePropogate pc pc' f st = let e = st M.! pc  in
+  M.insert pc' (f e) st
+
 -- a set of maps from program counters to environments
-type CollectingSem =  (S.Set (M.Map PC Env))
+type CollectingSem =  (S.Set State)
 
+-- Initial collecting semantics, which contains one state.
+-- This initial state maps every PC to the empty environment
 initCollectingSem :: CollectingSem
-initCollectingSem = S.singleton $ M.fromList (zip (map PC [0..7]) (repeat envBegin))
+initCollectingSem = let st = M.fromList (zip (map PC [-1..7]) (repeat envBegin)) in
+  S.singleton $ st
 
--- edit the effect of a Stmt at the given PC of all the values in the collectingSem
-stmtAffectCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
-stmtAffectCollect pc  s csem = 
-  S.map (\m -> M.adjust (\env -> stmtStep s env) pc m) csem
+-- propogate the value of an environment at the first PC to the second
+-- PC across all states.
+collectingSemPropogate :: PC -> PC -> (Env -> Env) -> CollectingSem -> CollectingSem
+collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
--- TODO: do we nee to add `iffail` candidates?
-stmtCollect :: PC -> Stmt -> CollectingSem -> (CollectingSem, PC)
-stmtCollect pc (c@(Assign id e)) csem = (stmtAffectCollect pc c csem, pc)
+-- affect the statement, by borrowing the state from the given PC
+stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
+stmtCollectFix pcold s@(Assign _ _ _) csem =
+  collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStep s) csem
 
-stmtCollect pc (c@(While condid s)) csem = (fold $ repeatTillFix (stmtAffectCollect pc c) csem, pc)
--- TODO: this is wrong, that is, we should actually take c0 U c1 U c2 ... cn
--- stmtCollect pc (c@(While condid s)) csem = (S.union csem (stmtAffectCollect pc c csem), pc)
+stmtCollectFix pcold (While pc condid loop) csem =
+  let collectfix :: CollectingSem -> CollectingSem
+      collectfix = collectingSemPropogate pc pc (stmtSingleStep loop)
+      collect_in :: CollectingSem -> CollectingSem
+      collect_in = collectingSemPropogate pcold pc (stmtSingleStep loop)
+  in  collect_in csem `S.union` (fold (repeatTillFix collectfix csem))
 
-
-
--- TODO: handle if then else, PC as an integer does not work, we need to identify points in a graph ;_;
--- stmtCollect pc (c@(If cid thencmd elsecmd)) csem = (then' `S.union` else', pc) where
---   -- those collecting semantics that pass the condition
---   ifpass :: CollectingSem
---   ifpass = S.filter (\m -> let env = m M.! pc in env M.! cid == 1) csem
--- 
--- 
---   iffail :: CollectingSem
---   iffail = S.filter (\m -> let env = m M.! pc in env M.! cid == 0) csem
--- 
---   then' :: CollectingSem
---   then' = stmtCollect pc thencmd ifpass
--- 
---   else' :: CollectingSem 
---   else' = stmtCollect pc elsecmd iffail
-stmtCollect pc (Seq s1 s2) csem = 
-  let (csem', pc') = stmtCollect pc s1 csem
-      csem'' :: CollectingSem
-      csem'' = S.map (\m -> M.insert (pcincr pc') (m M.! pc') m) csem'
-   in
-      stmtCollect (pcincr pc') s2 csem''
-
-stmtCollect pc Done csem = (csem, pc)
+stmtCollectFix pc (Seq s1 s2) csem =
+  let csem' = stmtCollectFix pc s1 csem
+      pc' = stmtPCEnd s1 in
+    stmtCollectFix pc' s2 csem'
+stmtCollectFix pc (Done _) csem = csem
 
 
 
@@ -308,14 +335,17 @@ asem p = alpha . csem p . gamma
 -- Example
 -- =======
 
+data StmtBuilder = StmtBuilder { sbpc :: PC }
 
-assign :: String -> Expr -> Stmt
-assign id e = Assign (Id id) e
+assign :: String -> Expr -> ST.State StmtBuilder Stmt
+assign id e =
+  do
+    pc <- ST.gets sbpc
+    let a = Assign pc (Id id) e
+    ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
+    return a
 
-listStmtToStmt :: [Stmt] -> Stmt
-listStmtToStmt ss = foldr Seq Done ss
-
-program :: Stmt 
+program :: Stmt
 program = listStmtToStmt $ [
   assign "x" (EInt 1),
   assign "y" (EInt 2),
@@ -329,7 +359,7 @@ program = listStmtToStmt $ [
   ]]
 
 
-program' :: Stmt 
+program' :: Stmt
 program' = listStmtToStmt $ [
   assign "x" (EInt 1)]
 
@@ -338,15 +368,15 @@ p = program
 
 
 main :: IO ()
-main = do 
+main = do
     print p
     putStrLn "***program output***"
-    let outenv =  (stmtStep p) envBegin
+    let outenv =  (stmtSingleStep p) envBegin
     print outenv
 
     putStrLn "***collecting semantics:***"
 
-    let states' = stmtCollect (PC 0) p initCollectingSem
+    let states' = stmtCollectFix (PC -1) p initCollectingSem
 
     putStrLn "***collecting semantics:***"
     forM_  (S.toList (fst states')) (\m -> forM_ ((map (\(k, v) -> show k ++ " -> " ++ show v)) (M.toList m)) print)
