@@ -112,6 +112,14 @@ instance Ord k => Lattice (LatticeMap k v) where
   meet LMTop a = a
   meet _ _ = error "trying to meet two maps defined at the same point"
 
+-- Helper to repeat till fixpoint
+-- ===============================
+
+
+repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
+repeatTillFix f seed = let cur = f seed in
+                           if cur == seed then [seed] else seed:repeatTillFix f cur 
+
 -- Program syntax
 -- ==============
 
@@ -215,8 +223,12 @@ stmtAffectCollect pc  s csem =
 -- TODO: do we nee to add `iffail` candidates?
 stmtCollect :: PC -> Stmt -> CollectingSem -> (CollectingSem, PC)
 stmtCollect pc (c@(Assign id e)) csem = (stmtAffectCollect pc c csem, pc)
+
+stmtCollect pc (c@(While condid s)) csem = (fold $ repeatTillFix (stmtAffectCollect pc c) csem, pc)
 -- TODO: this is wrong, that is, we should actually take c0 U c1 U c2 ... cn
-stmtCollect pc (c@(While condid s)) csem = (S.union csem (stmtAffectCollect pc c csem), pc)
+-- stmtCollect pc (c@(While condid s)) csem = (S.union csem (stmtAffectCollect pc c csem), pc)
+
+
 
 -- TODO: handle if then else, PC as an integer does not work, we need to identify points in a graph ;_;
 -- stmtCollect pc (c@(If cid thencmd elsecmd)) csem = (then' `S.union` else', pc) where
@@ -296,9 +308,6 @@ asem p = alpha . csem p . gamma
 -- Example
 -- =======
 
-repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
-repeatTillFix f seed = let cur = f seed in
-                           if cur == seed then [seed] else seed:repeatTillFix f cur 
 
 assign :: String -> Expr -> Stmt
 assign id e = Assign (Id id) e
@@ -338,7 +347,6 @@ main = do
     putStrLn "***collecting semantics:***"
 
     let states' = stmtCollect (PC 0) p initCollectingSem
-    print states'
 
     putStrLn "***collecting semantics:***"
     forM_  (S.toList (fst states')) (\m -> forM_ ((map (\(k, v) -> show k ++ " -> " ++ show v)) (M.toList m)) print)
