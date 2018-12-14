@@ -544,7 +544,8 @@ program = stmtBuild . stmtSequence $ [
   while "x_lt_5" $ stmtSequence $ [
       assign "x" ("x" +.  EInt 1),
       assign "x_lt_5" ("x" <. EInt 5)
-  ]]
+  ],
+  assign "z" ("x" +. EInt (-5))]
 
 p :: Stmt
 p = program
