@@ -243,6 +243,9 @@ stmtExec (s@(While _ cid loop)) env = last $ repeatTillFix
 -- ======================================
 type State = M.Map PC Env
 
+stateShow :: M.Map PC Env -> String
+stateShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
+
 -- Propogate the value of the environment at the first PC to the second PC.
 -- Needed to implicitly simulate the flow graph.
 statePropogate :: PC -> PC -> (Env -> Env) -> State -> State
@@ -371,4 +374,4 @@ main = do
     let states' = stmtCollectFix (PC (-1)) p initCollectingSem
 
     putStrLn "***collecting semantics:***"
-    forM_  (S.toList (fst states')) (\m -> forM_ ((map (\(k, v) -> show k ++ " -> " ++ show v)) (M.toList m)) print)
+    forM_  (S.toList states') (print . stateShow)
