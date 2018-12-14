@@ -662,6 +662,7 @@ program = stmtBuild . stmtSequence $ [
   assign "x_lt_5_btc" (EInt (-1)),
   while "x_lt_5" $ stmtSequence $ [
       assign "x_lt_5_btc" ("x_lt_5_btc" +. (EInt 1)),
+      assign "x_in_loop" "x",
       assign "x" ("x" +.  EInt 1),
       assign "x_lt_5" ("x" <. EInt 5)
   ],
