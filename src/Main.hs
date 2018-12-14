@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Main where
@@ -36,7 +37,14 @@ instance (Lattice a , Lattice b) => Lattice (a, b) where
   join (a, b) (a', b') = (a `join` a', b `join` b')
   meet (a, b) (a', b') = (a `meet` a', b `meet` b')
 
-data LiftedLattice a = LL a | LLBot | LLTop deriving(Eq, Ord)
+data LiftedLattice a = LL a | LLBot | LLTop deriving(Eq, Ord, Functor)
+
+liftLL2 :: (a -> b -> c) -> LiftedLattice a -> LiftedLattice b -> LiftedLattice c
+liftLL2 f LLTop _ = LLTop
+liftLL2 f _ LLTop = LLTop
+liftLL2 f LLBot _ = LLBot
+liftLL2 f _ LLBot  = LLBot
+liftLL2 f (LL a) (LL b) = LL (f a b)
 
 instance Show a => Show (LiftedLattice a) where
   show LLBot = "_|_"
@@ -44,7 +52,7 @@ instance Show a => Show (LiftedLattice a) where
   show (LL a) = show a
 
 
-data ToppedLattice a = TLTop | TL a deriving (Eq, Ord)
+data ToppedLattice a = TLTop | TL a deriving (Eq, Ord, Functor)
 
 instance Show a => Show (ToppedLattice a) where
   show TLTop = "T"
@@ -88,11 +96,23 @@ imply a b = (complement a) `join` b
 (===>) :: BooleanAlgebra a => a -> a -> a
 (===>) = imply
 
-data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop
+data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop deriving(Eq, Ord)
 
+-- Insert a regular value into a lattice map
 insert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
 insert k v LMTop = LMTop
 insert k v (LM m) = LM $ M.insert k (TL v) m
+
+-- insert a lattice value into a LatticeMap
+insert' :: Ord k => k -> LiftedLattice v -> LatticeMap k v -> LatticeMap k v
+insert' _ _ LMTop = LMTop
+insert' _ LLBot m = m
+insert' k LLTop (LM m) = LM $ M.insert k TLTop m
+insert' k (LL v) (LM m) = LM $ M.insert k (TL v) m
+
+adjust :: Ord k => k -> (v -> v) -> LatticeMap k v -> LatticeMap k v
+adjust _ _ LMTop = LMTop
+adjust k f (LM m) = LM $ M.adjust (fmap f) k m
 
 (!!!) :: Ord k => LatticeMap k v -> k -> LiftedLattice v
 (!!!) (LM m) k = case m M.!? k of
@@ -100,6 +120,12 @@ insert k v (LM m) = LM $ M.insert k (TL v) m
                   Just TLTop -> LLTop
                   Nothing -> LLBot
 (!!!) LMTop k = LLTop
+
+lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
+lmfromlist kvs = LM $ M.fromList [(k, TL v) | (k, v) <- kvs]
+
+lmempty :: LatticeMap k v 
+lmempty = LM $ M.empty
 
 instance (Ord k, Show k, Show v) => Show (LatticeMap k v) where
   show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
@@ -279,35 +305,65 @@ stmtExec (s@(While _ cid loop)) env = last $
 
 -- Concrete domain - Collecting semantics
 -- ======================================
-type State = M.Map PC Env
+type AEnv = LatticeMap Id Int
 
-stateShow :: M.Map PC Env -> String
+aenvbegin :: AEnv
+aenvbegin = lmempty
+
+-- Abstract version of expression evaluation
+exprEvalA :: Expr -> AEnv -> LiftedLattice Int
+exprEvalA (EInt i) _ =  LL i
+exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
+exprEvalA (EId id) env = env !!! id
+exprEvalA (EBinop op e1 e2) env = 
+  liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
+    opimpl = case op of
+               Add -> (+)
+               Lt -> (\a b -> if a < b then 1 else 0)
+
+-- Abstract version of statement single step
+stmtSingleStepA :: Stmt -> AEnv -> AEnv
+stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
+stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
+                                 then stmtSingleStepA s env
+                                 else stmtSingleStepA s' env
+stmtSingleStepA w@(While _ cid s) env =
+  if (env !!! cid == LL 1)
+    then stmtSingleStepA s env
+    else env
+       
+stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
+stmtSingleStepA (Skip _) env = env
+
+type State = M.Map PC AEnv
+
+stateShow :: M.Map PC AEnv -> String
 stateShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
 
 -- Propogate the value of the environment at the first PC to the second PC.
 -- Needed to implicitly simulate the flow graph.
-statePropogate :: PC -> PC -> (Env -> Env) -> State -> State
+statePropogate :: PC -> PC -> (AEnv -> AEnv) -> State -> State
 statePropogate pc pc' f st = let e = st M.! pc  in
   M.insert pc' (f e) st
 
 -- a set of maps from program counters to environments
-type CollectingSem =  (S.Set State)
+type CollectingSem = S.Set State
 
 -- Initial collecting semantics, which contains one state.
 -- This initial state maps every PC to the empty environment
 initCollectingSem :: CollectingSem
-initCollectingSem = let st = M.fromList (zip (map PC [-1..7]) (repeat envBegin)) in
+initCollectingSem = let st = M.fromList (zip (map PC [-1..7]) (repeat aenvbegin)) in
   S.singleton $ st
 
 -- propogate the value of an environment at the first PC to the second
 -- PC across all states.
-collectingSemPropogate :: PC -> PC -> (Env -> Env) -> CollectingSem -> CollectingSem
+collectingSemPropogate :: PC -> PC -> (AEnv -> AEnv) -> CollectingSem -> CollectingSem
 collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
 -- affect the statement, by borrowing the state from the given PC
 stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
 stmtCollectFix pcold s@(Assign _ _ _) csem =
-  collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStep s) csem
+  collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s) csem
 
 stmtCollectFix pcold (While pc condid loop) csem =
   let collectfix :: CollectingSem -> CollectingSem
