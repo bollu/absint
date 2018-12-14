@@ -311,13 +311,15 @@ stmtCollectFix pcold s@(Assign _ _ _) csem =
 
 stmtCollectFix pcold (While pc condid loop) csem =
   let collectfix :: CollectingSem -> CollectingSem
-      collectfix = collectingSemPropogate pc pc (stmtSingleStep loop)
+      collectfix csem = stmtCollectFix pc loop csem `S.union` collect_entry csem `S.union` collect_back csem
       
-      collect_in :: CollectingSem -> CollectingSem
-      collect_in = collectingSemPropogate pcold pc id
-  in  let csem' = collect_in csem in
-    -- csem' `S.union` (fold (repeatTillFix collectfix csem'))
-    csem' `S.union` (fold (repeatTillFixDebug 20 collectfix csem'))
+      collect_entry :: CollectingSem -> CollectingSem
+      collect_entry = collectingSemPropogate pcold pc id
+
+      collect_back :: CollectingSem -> CollectingSem
+      collect_back = collectingSemPropogate (stmtPCEnd loop) pc id
+
+   in (fold (repeatTillFixDebug 20 collectfix csem))
 
 stmtCollectFix pc (Seq s1 s2) csem =
   let csem' = stmtCollectFix pc s1 csem
