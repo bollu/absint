@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Main where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -343,22 +344,6 @@ data StmtBuilder = StmtBuilder { sbpc :: PC }
 sbPCIncr :: ST.State StmtBuilder ()
 sbPCIncr = ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
 
-assign :: String -> Expr -> ST.State StmtBuilder Stmt
-assign id e =
-  do
-    pc <- ST.gets sbpc
-    let s = Assign pc (Id id) e
-    sbPCIncr
-    return s
-
-
-while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
-while idcond loopbuilder = do
-  pc <- ST.gets sbpc
-  sbPCIncr
-  loop <- loopbuilder
-  let l = While pc (Id idcond) loop
-  return l
   
 
 stmtBuild :: ST.State StmtBuilder Stmt -> Stmt
@@ -372,10 +357,55 @@ stmtSequence (x:xs) = do
   xs' <- stmtSequence xs
   return $ Seq x' xs'
 
+class ToExpr a where
+  toexpr :: a -> Expr
+
+
+instance ToExpr Id where
+  toexpr a = EId a
+
+
+instance ToExpr String where
+  toexpr a = EId (Id a)
+
+instance ToExpr Bool where
+  toexpr True = EInt 1
+  toexpr False = EInt 0
+
+instance ToExpr Expr where
+  toexpr = id
+
+assign :: ToExpr a => String -> a -> ST.State StmtBuilder Stmt
+assign id a =
+  do
+    pc <- ST.gets sbpc
+    let s = Assign pc (Id id) (toexpr a)
+    sbPCIncr
+    return s
+
+
+while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
+while idcond loopbuilder = do
+  pc <- ST.gets sbpc
+  sbPCIncr
+  loop <- loopbuilder
+  let l = While pc (Id idcond) loop
+  return l
+
+  
+(+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
+(+.) a b = EBinop Add (toexpr a) (toexpr b)
+
+
 program :: Stmt
 program = stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
-  assign "y" (EInt 2)]
+  assign "y" (EInt 2),
+  assign "x_lt_5" False,
+  while "x_lt_5" $ stmtSequence $ [
+      assign "xnext" ("x" +.  EInt 1),
+      assign "x" "xnext"]
+  ]
 
 p :: Stmt
 p = program
@@ -387,7 +417,7 @@ main = do
     print p
     
     putStrLn "***program output***"
-    let outenv =  (stmtSingleStep p) envBegin
+    let outenv =  (stmtExec p) envBegin
     print outenv
 
 
