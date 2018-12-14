@@ -338,8 +338,8 @@ stmtSingleStepA (Skip _) env = env
 
 type PC2Env = M.Map PC AEnv
 
-stateShow :: M.Map PC AEnv -> String
-stateShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
+pc2envshow :: PC2Env -> String
+pc2envshow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
 
 -- Propogate the value of the environment at the first PC to the second PC.
 -- Needed to implicitly simulate the flow graph.
@@ -366,31 +366,37 @@ stmtCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
 stmtCollect pcold s@(Assign _ _ _) csem =
   (collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s)) $ csem
 
+-- flow order:
+-- 1. pre -> entry,  backedge -> entry
+-- 3. entry ---loop-> loop final PC
+-- 4. loop final PC -> exit block
 stmtCollect pcold (While pc condid loop pc') csem =
-  let pre_to_entry :: CollectingSem -> CollectingSem
-      pre_to_entry = collectingSemPropogate pcold pc id
+  let filter_allowed_iter :: CollectingSem -> CollectingSem
+      filter_allowed_iter csem = S.filter (\s -> (s M.! pc) !!! condid == LL 1) csem
+  
+      pre_to_entry :: CollectingSem -> CollectingSem
+      pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
 
-      -- loop execution
-      entry_to_exit :: CollectingSem -> CollectingSem
-      entry_to_exit csem = stmtCollect pc loop csem
 
       -- exit block to entry 
       exit_to_entry :: CollectingSem -> CollectingSem
-      exit_to_entry = collectingSemPropogate pc' pc id
+      exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
 
 
       -- everything entering the entry block 
       all_to_entry :: CollectingSem -> CollectingSem
-      all_to_entry csem = 
-        S.filter (\s -> (s M.! pc) !!! condid == LL 1)
-        ((pre_to_entry csem) `S.union` exit_to_entry csem `S.union` entry_to_exit csem `S.union` final_to_exit csem)
+      all_to_entry csem = (pre_to_entry csem) `S.union` exit_to_entry csem 
+
+      -- loop execution
+      entry_to_exit :: CollectingSem -> CollectingSem
+      entry_to_exit csem =  stmtCollect pc loop (all_to_entry csem)
 
       -- final statement in while to exit block
       final_to_exit :: CollectingSem -> CollectingSem
-      final_to_exit csem = collectingSemPropogate (stmtPCEnd loop) pc' id csem
+      final_to_exit csem = collectingSemPropogate (stmtPCEnd loop) pc' id (entry_to_exit csem)
 
       f :: CollectingSem -> CollectingSem
-      f csem = all_to_entry csem -- `S.union` final_to_exit csem
+      f csem = final_to_exit csem
 
    in f csem -- (fold (repeatTillFix f csem))
 
@@ -557,4 +563,4 @@ main = do
 
     putStrLn "***collecting semantics:***"
     let states' = stmtCollectFix (PC (-1)) p initCollectingSem
-    forM_  (S.toList states') (putStr . stateShow)
+    forM_  (S.toList states') (\m -> (putStr . pc2envshow $ m) >> putStrLn "---")
