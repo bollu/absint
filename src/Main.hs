@@ -427,34 +427,12 @@ stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
 type LoopBTC = M.Map Id Int 
 
 -- maps identifiers to functions from loop trip counts to values
-data Id2LoopFn = Id2LoopFn { runId2LoopFn :: Id -> LoopBTC -> (LiftedLattice Int), idLimits :: M.Map Id (Interval Int) }
+data Id2LoopFn = Id2LoopFn 
+  { 
+    runId2LoopFn :: Id -> LoopBTC -> (LiftedLattice Int), 
+    runId2Limits :: M.Map Id (Interval Int) 
+  }
 
--- A loop nest is identified by a trail of loop identifiers, from outermost
--- to innermost
-newtype Loopnest = Loopnest [(Id, Stmt)] deriving(Eq, Show)
-
-loopnestEmpty :: Loopnest
-loopnestEmpty = Loopnest []
-
-loopnestAddOuterLoop :: Id -> Stmt -> Loopnest -> Loopnest
-loopnestAddOuterLoop id s (Loopnest nest) = Loopnest ((id, s):nest)
-
--- A loop nest of a single loop
-loopnestInnermost :: Id -> Stmt -> Loopnest
-loopnestInnermost id s = Loopnest [(id, s)]
-
--- collect loop nests in a statement
-getLoopnests :: Stmt -> [Loopnest]
-getLoopnests (Seq  s1 s2) = getLoopnests s1 ++ getLoopnests s2
-getLoopnests s@(While pc condid body _) = 
-  let lns = getLoopnests body
-   in if null lns
-         then [loopnestInnermost condid s]
-         else map (loopnestAddOuterLoop condid s) lns
-getLoopnests _ = []
-
-
-type ID2PC2Vals = M.Map Id (M.Map PC (S.Set Int))
 
 
 -- push a tuple into the second element
@@ -495,17 +473,15 @@ collectingSemExplode csem =
 -- Find the assignment statement that first assigns to the ID.
 -- TODO: make sure our language is SSA. For now, it returns the *first* assignment
 -- to a variable.
-idFindAssign :: Id -> Program -> Maybe (Stmt, Loopnest)
+idFindAssign :: Id -> Program -> Maybe Stmt
 idFindAssign id s@(Assign _ aid _) = 
   if id == aid 
-     then Just (s, loopnestEmpty) 
+     then Just s
      else Nothing
 
 idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
-
 idFindAssign id while@(While _ condid sinner _)  = 
-  fmap (\(s, ln) -> (s, loopnestAddOuterLoop condid while ln)) (idFindAssign id sinner)
-
+  idFindAssign id sinner
 idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
 
 -- check if the given AEnv has loop variables at these values
@@ -538,8 +514,7 @@ csemAtLoopValues csem pc btcs id =
 -- Abstraction function to Id2LoopFn from the collecting semantics
 alpha1 :: Program -> CollectingSem -> Id2LoopFn
 alpha1 p csem = 
-  let loops = getLoopnests p 
-      fn id btcs = let (Just (assign, nest)) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
+  let fn id btcs = let Just (assign) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
       limits :: M.Map Id (Interval Int)
       limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
   in Id2LoopFn fn limits
@@ -730,6 +705,3 @@ main = do
     forM_  (S.toList pcsem) (\m -> (putStr . pc2envshow $ m) >> putStrLn "---")
 
     putStrLn "***Abstract semantics 1: concrete loop functions***"
-    let loopnests = getLoopnests p
-    putStrLn "loop nests:"
-    print loopnests
