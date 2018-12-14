@@ -159,7 +159,7 @@ data Stmt = Assign PC Id Expr
             | If PC Id Stmt Stmt -- branch value id, true branch, false branch
             | While PC Id Stmt  -- while cond stmt
             | Seq Stmt Stmt
-            | Done PC
+            | Skip PC
 
 -- Return the PC of the first statement in the block
 stmtPCStart :: Stmt -> PC
@@ -167,7 +167,7 @@ stmtPCStart (Assign pc _ _)  = pc
 stmtPCStart (If pc _ _ _) = pc
 stmtPCStart (While pc _ _) = pc
 stmtPCStart (Seq s1 _) = stmtPCStart s1
-stmtPCStart (Done pc) = pc
+stmtPCStart (Skip pc) = pc
 
 
 -- Return the PC of the last statement in the block
@@ -176,14 +176,14 @@ stmtPCEnd (Assign pc _ _)  = pc
 stmtPCEnd (If pc _ _ _) = pc
 stmtPCEnd (While pc _ _) = pc
 stmtPCEnd (Seq _ s2) = stmtPCEnd s2
-stmtPCEnd (Done pc) = pc
+stmtPCEnd (Skip pc) = pc
 
 instance Show Stmt where
   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
   show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
   show (While pc cond s) = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")"
   show (Seq s1 s2) =  show s1 ++ "\n" ++ show s2
-  show (Done pc) = show pc ++ ":" ++ "done"
+  show (Skip pc) = show pc ++ ":" ++ "done"
 
 
 
@@ -227,14 +227,14 @@ stmtSingleStep w@(While _ cid s) env =
  then let env' = (stmtSingleStep s env) in env'
   else env
 stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
-stmtSingleStep (Done _) env= env
+stmtSingleStep (Skip _) env= env
 
   -- Execute the statement with respect to the semantics
 stmtExec :: Stmt -> Env -> Env
 stmtExec (s@(Assign _ _ _)) env = stmtSingleStep s env
 stmtExec (s@(If _ _ _ _)) env = stmtSingleStep s env
 stmtExec (s@(Seq _ _)) env = stmtSingleStep s env
-stmtExec (s@(Done _)) env = stmtSingleStep s env
+stmtExec (s@(Skip _)) env = stmtSingleStep s env
 stmtExec (s@(While _ cid loop)) env = last $ repeatTillFix
   (\env -> if env M.! cid == 1 then stmtSingleStep loop env else env) env
 
@@ -279,7 +279,7 @@ stmtCollectFix pc (Seq s1 s2) csem =
   let csem' = stmtCollectFix pc s1 csem
       pc' = stmtPCEnd s1 in
     stmtCollectFix pc' s2 csem'
-stmtCollectFix pc (Done _) csem = csem
+stmtCollectFix pc (Skip _) csem = csem
 
 
 
@@ -335,33 +335,25 @@ asem p = alpha . csem p . gamma
 -- Example
 -- =======
 
-data StmtBuilder = StmtBuilder { sbpc :: PC }
+data StmtBuilder = StmtBuilder { sbpc :: PC, stmts :: Stmt }
 
-assign :: String -> Expr -> ST.State StmtBuilder Stmt
+assign :: String -> Expr -> ST.State StmtBuilder ()
 assign id e =
   do
     pc <- ST.gets sbpc
     let a = Assign pc (Id id) e
     ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
-    return a
+    ST.modify (\s -> s { stmts = Seq (stmts s) a})
+    return ()
+
+build :: ST.State StmtBuilder () -> Stmt
+build st = let begin = StmtBuilder (pcincr pcinit) (Skip (PC 0)) in 
+             stmts $ ST.execState st  begin
 
 program :: Stmt
-program = listStmtToStmt $ [
-  assign "x" (EInt 1),
-  assign "y" (EInt 2),
-  assign "z" (EBinop Add (EId (Id "x")) (EId (Id "y"))),
-  assign "vlt10" (EInt 1),
-  assign "v" (EInt 0),
-  While (Id "vlt10") $ listStmtToStmt [
-  assign "vp1" (EBinop Add (EId (Id "v")) (EInt 1)),
-  assign "vlt10" (EBinop Lt (EId (Id "v")) (EInt 10)),
-  assign "v" (EId (Id "vp1"))
-  ]]
-
-
-program' :: Stmt
-program' = listStmtToStmt $ [
-  assign "x" (EInt 1)]
+program = build $  do
+  assign "x" (EInt 1)
+  assign "y" (EInt 2)
 
 p :: Stmt
 p = program
@@ -376,7 +368,7 @@ main = do
 
     putStrLn "***collecting semantics:***"
 
-    let states' = stmtCollectFix (PC -1) p initCollectingSem
+    let states' = stmtCollectFix (PC (-1)) p initCollectingSem
 
     putStrLn "***collecting semantics:***"
     forM_  (S.toList (fst states')) (\m -> forM_ ((map (\(k, v) -> show k ++ " -> " ++ show v)) (M.toList m)) print)
