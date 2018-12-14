@@ -1,16 +1,19 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Main where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.List (intercalate)
+import Data.List (intercalate, nub)
 import qualified Control.Monad.State as ST
 import Data.Foldable
+import Control.Applicative
 import Data.Void
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
+import Control.Exception (assert)
 
 -- Lattice theory
 -- ==============
@@ -127,6 +130,10 @@ lmfromlist kvs = LM $ M.fromList [(k, TL v) | (k, v) <- kvs]
 lmempty :: LatticeMap k v 
 lmempty = LM $ M.empty
 
+lmtolist :: Ord k => LatticeMap k v -> [(k, ToppedLattice v)]
+lmtolist LMTop = error "unable to convert LMTop to a list"
+lmtolist (LM m) = M.toList m
+
 instance (Ord k, Show k, Show v) => Show (LatticeMap k v) where
   show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
   show LMTop = "_ -> T"
@@ -215,7 +222,7 @@ data Stmt = Assign PC Id Expr
             | If PC Id Stmt Stmt -- branch value id, true branch, false branch
             | While PC Id Stmt  PC -- while cond stmt, pc of entry, pc of exit
             | Seq Stmt Stmt
-            | Skip PC
+            | Skip PC deriving(Eq)
 
 -- Return the PC of the first statement in the block
 stmtPCStart :: Stmt -> PC
@@ -238,7 +245,7 @@ instance Show Stmt where
   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
   show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
   show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
-  show (Seq s1 s2) =  show s1 ++ "\n" ++ show s2
+  show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
   show (Skip pc) = show pc ++ ":" ++ "done"
 
 instance Pretty Stmt where
@@ -415,17 +422,123 @@ stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
 -- Abstract domain 1 - concrete functions
 -- ======================================
 
--- type representing loop trip counts
-newtype LoopTripCounts = LoopTripCounts (M.Map Id Int)
+-- type representing loop backedge taken counts
+type LoopBTC = M.Map Id Int 
 
--- concrete value is a function from loop trip conts to values
-newtype CVal = CVal (LoopTripCounts -> LiftedLattice Int)
+-- maps identifiers to functions from loop trip counts to values
+newtype Id2LoopFn = Id2LoopFn (Id -> LoopBTC -> LiftedLattice Int)
 
--- Abstraction function to CVal from the collecting semantics
-alpha1 :: CollectingSem -> CVal
-alpha1 = undefined
+-- A loop nest is identified by a trail of loop identifiers, from outermost
+-- to innermost
+newtype Loopnest = Loopnest [(Id, Stmt)] deriving(Eq, Show)
 
-gamma1 :: CVal -> CollectingSem
+loopnestEmpty :: Loopnest
+loopnestEmpty = Loopnest []
+
+loopnestAddOuterLoop :: Id -> Stmt -> Loopnest -> Loopnest
+loopnestAddOuterLoop id s (Loopnest nest) = Loopnest ((id, s):nest)
+
+-- A loop nest of a single loop
+loopnestInnermost :: Id -> Stmt -> Loopnest
+loopnestInnermost id s = Loopnest [(id, s)]
+
+-- collect loop nests in a statement
+getLoopnests :: Stmt -> [Loopnest]
+getLoopnests (Seq  s1 s2) = getLoopnests s1 ++ getLoopnests s2
+getLoopnests s@(While pc condid body _) = 
+  let lns = getLoopnests body
+   in if null lns
+         then [loopnestInnermost condid s]
+         else map (loopnestAddOuterLoop condid s) lns
+getLoopnests _ = []
+
+
+type ID2PC2Vals = M.Map Id (M.Map PC (S.Set Int))
+
+
+-- push a tuple into the second element
+pushTupleInList :: (a, [b]) -> [(a, b)]
+pushTupleInList abs = map ((fst abs), ) (snd abs)
+
+listTuplesCollect :: (Eq a, Ord a) => [(a, b)] -> M.Map a [b]
+listTuplesCollect abs = 
+  let abs' = map (\(a, b) -> (a, [b])) abs 
+  in M.fromListWith (++) abs'
+
+
+-- Explode the collecting semantics object to a gargantuan list so we can
+-- then rearrange it
+-- Collectingsem :: S.Set (M.Map PC (M.Map Id ToppedLattice Int))
+collectingSemExplode :: CollectingSem -> [(Id, (PC, ToppedLattice Int))]
+collectingSemExplode csem = 
+  let set2list :: [PC2Env]
+      set2list = S.toList csem
+      
+      pc2aenvlist :: [[(PC, AEnv)]]
+      pc2aenvlist = map M.toList set2list
+
+      aenvlist :: [[(PC, [(Id, ToppedLattice Int)])]]
+      aenvlist = (map . map) ((\(pc, aenv) -> (pc, lmtolist aenv))) pc2aenvlist 
+
+      flatten1 :: [(PC, [(Id, ToppedLattice Int)])]
+      flatten1 = concat aenvlist
+
+      tuples :: [(PC, (Id, ToppedLattice Int))]
+      tuples = concat $ map pushTupleInList flatten1
+
+      tuples' :: [(Id, (PC, ToppedLattice Int))]
+      tuples' = map (\(pc, (id, val)) -> (id, (pc, val))) tuples
+  in tuples'
+
+
+-- Find the assignment statement that first assigns to the ID.
+-- TODO: make sure our language is SSA. For now, it returns the *first* assignment
+-- to a variable.
+idFindAssign :: Id -> Program -> Maybe (Stmt, Loopnest)
+idFindAssign id s@(Assign _ aid _) = 
+  if id == aid 
+     then Just (s, loopnestEmpty) 
+     else Nothing
+
+idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
+
+idFindAssign id while@(While _ condid sinner _)  = 
+  fmap (\(s, ln) -> (s, loopnestAddOuterLoop condid while ln)) (idFindAssign id sinner)
+
+idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
+
+-- check if the given AEnv has loop variables at these values
+aenvHasLoopValues :: LoopBTC -> AEnv -> Bool
+aenvHasLoopValues btcs aenv = 
+  all (\(id, val) -> aenv !!! id == LL val) (M.toList btcs)
+
+-- check if the given pc2env has loop variables at these values at some PC
+pc2envHasLoopValues :: PC -> LoopBTC -> PC2Env -> Bool
+pc2envHasLoopValues pc btcs pc2env = 
+  let aenv = (pc2env M.! pc) in
+      aenvHasLoopValues btcs aenv
+
+-- Provide the instance in the collecting sematics that has these 
+-- values of backedge taken counts at the given PC
+csemAtLoopValues :: CollectingSem -> PC -> LoopBTC -> AEnv
+csemAtLoopValues csem pc btcs = 
+  let 
+  candidates :: [PC2Env]
+  candidates =  S.toList $ S.filter (pc2envHasLoopValues pc btcs) csem in
+    assert (length candidates == 1) ((head candidates) M.! pc)
+
+
+-- Abstraction function to Id2LoopFn from the collecting semantics
+alpha1 :: Program -> CollectingSem -> Id2LoopFn
+alpha1 p csem = 
+  let loops = getLoopnests p in
+    Id2LoopFn (\id btcs -> 
+      let (Just (assign, nest)) = idFindAssign id p
+          env = csemAtLoopValues csem (stmtPCStart assign) btcs
+       in env !!! id)
+
+
+gamma1 :: Id2LoopFn -> CollectingSem
 gamma1 = undefined
 
 
@@ -453,16 +566,16 @@ data Interval = Interval [(LInt, LInt)]
 data PWAFF = PWAFF
 
 -- abstracter
-alpha2 :: CVal -> PWAFF
+alpha2 :: Id2LoopFn -> PWAFF
 alpha2 = undefined
 
 -- concretizer
-gamma2 :: PWAFF -> CVal
+gamma2 :: PWAFF -> Id2LoopFn
 gamma2= undefined
 
 -- concrete semantic transformer, that takes a semantics and incrementally
 -- builds up on it. The final semantics is the least fixpoint of this function.
-csem2 :: Program -> CVal -> CVal
+csem2 :: Program -> Id2LoopFn -> Id2LoopFn
 csem2 = undefined
 
 -- abstract semantics in terms of concrete semantics
@@ -541,7 +654,9 @@ program = stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
   assign "y" (EInt 2),
   assign "x_lt_5" ("x" <. EInt 5),
+  assign "x_lt_5_btc" (EInt (-1)),
   while "x_lt_5" $ stmtSequence $ [
+      assign "x_lt_5_btc" ("x_lt_5_btc" +. (EInt 1)),
       assign "x" ("x" +.  EInt 1),
       assign "x_lt_5" ("x" <. EInt 5)
   ],
@@ -550,6 +665,8 @@ program = stmtBuild . stmtSequence $ [
 p :: Stmt
 p = program
 
+pcsem :: CollectingSem
+pcsem = stmtCollectFix (PC (-1)) p initCollectingSem
 
 main :: IO ()
 main = do
@@ -563,5 +680,9 @@ main = do
 
 
     putStrLn "***collecting semantics:***"
-    let states' = stmtCollectFix (PC (-1)) p initCollectingSem
-    forM_  (S.toList states') (\m -> (putStr . pc2envshow $ m) >> putStrLn "---")
+    forM_  (S.toList pcsem) (\m -> (putStr . pc2envshow $ m) >> putStrLn "---")
+
+    putStrLn "***Abstract semantics 1: concrete loop functions***"
+    let loopnests = getLoopnests p
+    putStrLn "loop nests:"
+    print loopnests
