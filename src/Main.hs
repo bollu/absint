@@ -440,112 +440,6 @@ concreteCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
     stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
     stmtSingleStepA (Skip _) env = env
 
-{-
-type AEnv = LatticeMap Id Int
-
-aenvbegin :: AEnv
-aenvbegin = lmempty
-
--- Abstract version of expression evaluation
-exprEvalA :: Expr -> AEnv -> LiftedLattice Int
-exprEvalA (EInt i) _ =  LL i
-exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
-exprEvalA (EId id) env = env !!! id
-exprEvalA (EBinop op e1 e2) env = 
-  liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
-    opimpl = case op of
-               Add -> (+)
-               Lt -> (\a b -> if a < b then 1 else 0)
-
--- Abstract version of statement single step
-stmtSingleStepA :: Stmt -> AEnv -> AEnv
-stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
-stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
-                                 then stmtSingleStepA s env
-                                 else stmtSingleStepA s' env
-stmtSingleStepA w@(While _ cid s _) env =
-  if (env !!! cid == LL 1)
-    then stmtSingleStepA s env
-    else env
-       
-stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
-stmtSingleStepA (Skip _) env = env
-
-type PC2Env = M.Map PC AEnv
-
-pc2envshow :: PC2Env -> String
-pc2envshow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
-
--- Propogate the value of the environment at the first PC to the second PC.
--- Needed to implicitly simulate the flow graph.
-statePropogate :: PC -> PC -> (AEnv -> AEnv) -> PC2Env -> PC2Env
-statePropogate pc pc' f st = let e = st M.! pc  in
-  M.insert pc' (f e) st
-
--- a set of maps from program counters to environments
-type CollectingSem = S.Set PC2Env
-
--- Initial collecting semantics, which contains one PC2Env.
--- This initial PC2Env maps every PC to the empty environment
-initCollectingSem :: CollectingSem
-initCollectingSem = let st = M.fromList (zip (map PC [-1..10]) (repeat aenvbegin)) in
-  S.singleton $ st
-
--- propogate the value of an environment at the first PC to the second
--- PC across all states.
-collectingSemPropogate :: PC -> PC -> (AEnv -> AEnv) -> CollectingSem -> CollectingSem
-collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
-
--- affect the statement, by borrowing the PC2Env from the given PC
-stmtCollect :: PC -> Stmt -> CollectingSem -> CollectingSem
-stmtCollect pcold s@(Assign _ _ _) csem =
-  (collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s)) $ csem
-
--- flow order:
--- 1. pre -> entry,  backedge -> entry
--- 3. entry ---loop-> loop final PC
--- 4. loop final PC -> exit block
-stmtCollect pcold (While pc condid loop pc') csem =
-  let filter_allowed_iter :: CollectingSem -> CollectingSem
-      filter_allowed_iter csem = S.filter (\s -> (s M.! pc) !!! condid == LL 1) csem
-  
-      pre_to_entry :: CollectingSem -> CollectingSem
-      pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
-
-
-      -- exit block to entry 
-      exit_to_entry :: CollectingSem -> CollectingSem
-      exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
-
-
-      -- everything entering the entry block 
-      all_to_entry :: CollectingSem -> CollectingSem
-      all_to_entry csem = (pre_to_entry csem) `S.union` exit_to_entry csem 
-
-      -- loop execution
-      entry_to_exit :: CollectingSem -> CollectingSem
-      entry_to_exit csem =  stmtCollect pc loop (all_to_entry csem)
-
-      -- final statement in while to exit block
-      final_to_exit :: CollectingSem -> CollectingSem
-      final_to_exit csem = collectingSemPropogate (stmtPCEnd loop) pc' id (entry_to_exit csem)
-
-      f :: CollectingSem -> CollectingSem
-      f csem = final_to_exit csem
-
-   in f csem -- (fold (repeatTillFix f csem))
-
-stmtCollect pc (Seq s1 s2) csem =
-  let csem' = stmtCollect pc s1 csem
-      pc' = stmtPCEnd s1 in
-    stmtCollect pc' s2 csem'
-stmtCollect pc (Skip _) csem = csem
-
--- Fixpoint of stmtCollect
-stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
-stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
--}
-
 -- Concrete domain 1 - concrete collecting semantics
 -- =================================================
 
@@ -641,15 +535,15 @@ csemAtLoopValues csem pc btcs id =
 
 
 -- Abstraction function to Id2LoopFn from the collecting semantics
-alpha1 :: Ord v => Program -> CSem v -> Id2LoopFn v
-alpha1 p csem = 
+alphacsem :: Ord v => Program -> CSem v -> Id2LoopFn v
+alphacsem p csem = 
   let fn id btcs = let Just (assign) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
       -- limits :: M.Map Id (Interval v)
       -- limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
   in Id2LoopFn fn
 
-gamma1 :: Program -> Id2LoopFn v -> CSem v
-gamma1 p id2loop = undefined
+gammacsem :: Program -> Id2LoopFn v -> CSem v
+gammacsem p id2loop = undefined
 
 
 -- Abstract domain 2 - symbolic concrete functions
@@ -840,7 +734,7 @@ pcsem :: CSem Int
 pcsem = stmtCollectFix concreteCSem (PC (-1)) p initCollectingSem
 
 pabs1 :: Id2LoopFn Int
-pabs1 = alpha1 p pcsem
+pabs1 = alphacsem p pcsem
 
 main :: IO ()
 main = do
