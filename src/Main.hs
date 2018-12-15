@@ -790,13 +790,9 @@ while idcond loopbuilder = do
 program :: Stmt
 program = stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
-  assign "y" (EInt 2),
   assign "x_lt_5" ("x" <. EInt 5),
-  assign "x_lt_5_btc" (EInt (-1)),
   while "x_lt_5" $ stmtSequence $ [
       skip,
-      assign "x_lt_5_btc" ("x_lt_5_btc" +. (EInt 1)),
-      assign "x_in_loop" "x",
       assign "x" ("x" +.  EInt 1),
       assign "x_lt_5" ("x" <. EInt 5)
   ],
@@ -809,7 +805,7 @@ pcsemInt :: CSem Int
 pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p (initCollectingSem p)
 
 pToOpaqify :: OpaqueVals
-pToOpaqify = OpaqueVals (M.fromList $ [(PC 6, [Id "x"])])
+pToOpaqify = OpaqueVals (M.fromList $ [(PC 4, [Id "x"])])
 
 pcsemSym :: CSem Sym
 pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p (initCollectingSem p)
