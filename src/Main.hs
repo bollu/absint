@@ -180,7 +180,7 @@ instance Pretty Id where
   pretty (Id s) =  pretty s
 
 -- Concrete Syntax
-data Binop = Add | Lt deriving(Eq)
+data Binop = Add | Lt deriving(Eq, Ord)
 instance Show Binop where
   show Add = "op:+"
   show Lt = "op:<"
@@ -410,39 +410,6 @@ stmtCollectFix :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
 stmtCollectFix csemDefn pc s csem = fold $ repeatTillFix (stmtCollect csemDefn pc s) csem
 
 
-
-concreteCSem :: CSemDefn Int
-concreteCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
-  where
-    valTrueA :: Int
-    valTrueA = 1
-
-    exprEvalA :: Expr -> CSemEnv Int -> LiftedLattice Int
-    exprEvalA (EInt i) _ =  LL i
-    exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
-    exprEvalA (EId id) env = env !!! id
-    exprEvalA (EBinop op e1 e2) env = 
-      liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
-        opimpl = case op of
-                   Add -> (+)
-                   Lt -> (\a b -> if a < b then 1 else 0)
-    
-    stmtSingleStepA :: Stmt -> CSemEnv Int -> CSemEnv Int
-    stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
-    stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
-                                     then stmtSingleStepA s env
-                                     else stmtSingleStepA s' env
-    stmtSingleStepA w@(While _ cid s _) env =
-      if (env !!! cid == LL 1)
-        then stmtSingleStepA s env
-        else env
-       
-    stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
-    stmtSingleStepA (Skip _) env = env
-
--- Concrete domain 1 - concrete collecting semantics
--- =================================================
-
 -- Abstract domain 1 - concrete functions
 -- ======================================
 
@@ -546,7 +513,41 @@ gammacsem :: Program -> Id2LoopFn v -> CSem v
 gammacsem p id2loop = undefined
 
 
--- Abstract domain 2 - symbolic concrete functions
+
+-- Concrete domain 1 - concrete collecting semantics of Int
+-- ========================================================
+
+concreteCSem :: CSemDefn Int
+concreteCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
+    where
+      valTrueA :: Int
+      valTrueA = 1
+  
+      exprEvalA :: Expr -> CSemEnv Int -> LiftedLattice Int
+      exprEvalA (EInt i) _ =  LL i
+      exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
+      exprEvalA (EId id) env = env !!! id
+      exprEvalA (EBinop op e1 e2) env = 
+        liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
+          opimpl = case op of
+                     Add -> (+)
+                     Lt -> (\a b -> if a < b then 1 else 0)
+      
+      stmtSingleStepA :: Stmt -> CSemEnv Int -> CSemEnv Int
+      stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
+      stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
+                                       then stmtSingleStepA s env
+                                       else stmtSingleStepA s' env
+      stmtSingleStepA w@(While _ cid s _) env =
+        if (env !!! cid == LL 1)
+          then stmtSingleStepA s env
+          else env
+         
+      stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
+      stmtSingleStepA (Skip _) env = env
+  
+
+-- Concrete domain 2 - concrete collecting semantics of Symbol
 -- ================================================
 -- Note the problem with abstract domain 1: We are unable to extract out
 -- relations between variables. However, for us to perform loop acceleration,
@@ -554,7 +555,50 @@ gammacsem p id2loop = undefined
 -- variables. So, we create a symbolic domain, so that we may derive equations
 -- of the form [x = 1, x = x + 1] which we can then accelerate.
 
-data Sym = SymVal Int | SymSym Id | SymBinop Binop Sym Sym deriving(Eq)
+data Sym = SymVal Int | SymSym Id | SymBinop Binop Sym Sym deriving(Eq, Ord)
+
+-- constant folding for symbols
+symConstantFold :: Sym -> Sym
+symConstantFold (SymBinop op s1 s2) = 
+  let 
+    s1' = symConstantFold s1
+    s2' = symConstantFold s2
+    in case (s1', s2') of
+        (SymVal i1, SymVal i2) -> 
+          case op of
+            Add -> SymVal (i1 + i2)
+            Lt -> SymVal (if i1 < i2 then 1 else 0)
+        _ -> SymBinop op s1' s2'
+symConstantFold s = s
+
+
+symbolCSem :: CSemDefn Sym
+symbolCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
+  where
+    valTrueA :: Sym
+    valTrueA = SymVal 1
+
+    exprEvalA :: Expr -> CSemEnv Sym -> LiftedLattice Sym
+    exprEvalA (EInt i) _ =  LL (SymVal i)
+    exprEvalA (EBool b) _ =  if b then LL (SymVal 1) else LL (SymVal 0)
+    exprEvalA (EId id) env = env !!! id
+    exprEvalA (EBinop op e1 e2) env = 
+      liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
+        opimpl v1 v2 = symConstantFold $ SymBinop op v1 v2
+    
+    stmtSingleStepA :: Stmt -> CSemEnv Sym -> CSemEnv Sym
+    stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
+    stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL (SymVal 1)
+                                     then stmtSingleStepA s env
+                                     else stmtSingleStepA s' env
+    stmtSingleStepA w@(While _ cid s _) env =
+      if (env !!! cid == LL (SymVal 1))
+        then stmtSingleStepA s env
+        else env
+       
+    stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
+    stmtSingleStepA (Skip _) env = env
+
 
 instance Show Sym where
   show (SymVal val) = "sym-" ++ show val
@@ -566,9 +610,6 @@ instance Pretty Sym where
   pretty (SymBinop op sym sym') =
     parens $ pretty op <+> pretty sym <+> pretty sym'
   pretty sym = pretty (show sym)
-
--- maps from identifiers to symbols
-data SymEnv = LatticeMap Id Sym
 
 
 -- Abstract domain 3 - presburger functions
@@ -730,11 +771,14 @@ program = stmtBuild . stmtSequence $ [
 p :: Stmt
 p = program
 
-pcsem :: CSem Int
-pcsem = stmtCollectFix concreteCSem (PC (-1)) p initCollectingSem
+pcsemInt :: CSem Int
+pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p initCollectingSem
+
+pcsemSym :: CSem Sym
+pcsemSym = stmtCollectFix symbolCSem (PC (-1)) p initCollectingSem
 
 pabs1 :: Id2LoopFn Int
-pabs1 = alphacsem p pcsem
+pabs1 = alphacsem p pcsemInt
 
 main :: IO ()
 main = do
@@ -747,7 +791,11 @@ main = do
     print outenv
 
 
-    putStrLn "***collecting semantics:***"
-    forM_  (S.toList pcsem) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+    putStrLn "***collecting semantics (concrete):***"
+    forM_  (S.toList pcsemInt) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+
+
+    putStrLn "***collecting semantics (symbol):***"
+    forM_  (S.toList pcsemSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
 
     putStrLn "***Abstract semantics 1: concrete loop functions***"
