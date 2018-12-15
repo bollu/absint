@@ -796,7 +796,26 @@ program = stmtBuild . stmtSequence $ [
       assign "x" ("x" +.  EInt 1),
       assign "x_lt_5" ("x" <. EInt 5)
   ],
-  assign "z" ("x" +. EInt (-5))]
+  assign "beta" ("x" +. EInt (-5))]
+
+program2 :: Stmt
+program2 = stmtBuild . stmtSequence $ [
+  assign "x" (EInt 1),
+  assign "x_lt_5" ("x" <. EInt 5),
+  while "x_lt_5" $ stmtSequence $ [
+      skip,
+      assign "x" ("x" +.  EInt 1),
+      assign "x_lt_5" ("x" <. EInt 5),
+
+      assign "y" (EInt 2),
+      assign "y_lt_10" ("y" <. EInt 10),
+      while "y_lt_10" $ stmtSequence $ [
+        assign "y" ("y" +.  EInt 5),
+        assign "y_lt_10" ("y" <. EInt 10)
+    ],
+    assign "alpha" ("y" +. EInt (-12))
+  ],
+  assign "beta" ("x" +. EInt (-5))]
 
 p :: Stmt
 p = program
