@@ -224,21 +224,11 @@ pcincr (PC i) = PC (i + 1)
 pcinit :: PC
 pcinit = PC 0
 
--- loop phi, with ID of the phi node, ID of entry, ID of exit
-data LoopPhi = LoopPhi Id Id Id deriving(Eq)
-
-instance Show LoopPhi where
-  show (LoopPhi name entry back) = 
-    "(" ++ show name ++ " " ++ show entry ++ " " ++ show back ++ ")"
-
-instance Pretty LoopPhi where
-  pretty (LoopPhi name entry back) = 
-    (parens $ pretty "phi" <+> pretty name <+> pretty entry <+> pretty back)
-
 -- Statements of the language
 data Stmt = Assign PC Id Expr
             | If PC Id Stmt Stmt -- branch value id, true branch, false branch
-            | While PC Id [LoopPhi] Stmt  PC -- while cond stmt, pc of entry, pc of exit
+            | While PC Id Stmt  PC -- while cond stmt, pc of entry, pc of exit
+            | LoopPhi PC Id Id Id -- loop phi, with PC, ID of the phi node, ID of entry, ID of exit
             | Seq Stmt Stmt
             | Skip PC deriving(Eq)
 
@@ -246,36 +236,42 @@ data Stmt = Assign PC Id Expr
 stmtPCStart :: Stmt -> PC
 stmtPCStart (Assign pc _ _)  = pc
 stmtPCStart (If pc _ _ _) = pc
-stmtPCStart (While pc _ _  _ _) = pc
+stmtPCStart (While pc _  _ _) = pc
 stmtPCStart (Seq s1 _) = stmtPCStart s1
 stmtPCStart (Skip pc) = pc
+stmtPCStart (LoopPhi pc _ _ _) = pc
 
 -- Return the PC of the last statement in the block
 stmtPCEnd :: Stmt -> PC
 stmtPCEnd (Assign pc _ _)  = pc
 stmtPCEnd (If pc _ _ _) = pc
-stmtPCEnd (While _ _  _ _ pc) = pc
+stmtPCEnd (While _ _ _ pc) = pc
 stmtPCEnd (Seq _ s2) = stmtPCEnd s2
 stmtPCEnd (Skip pc) = pc
+stmtPCEnd (LoopPhi pc _ _ _) = pc
 
 instance Show Stmt where
   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
   show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
-  show (While pc cond phis s pc') = 
-    show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show phis ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
+  show (While pc cond s pc') = 
+    show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
   show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
   show (Skip pc) = show pc ++ ":" ++ "done"
+  show (LoopPhi pc name entry back) = 
+    "(phi " ++ show name ++ " " ++ show entry ++ " " ++ show back ++ ")"
 
 instance Pretty Stmt where
   pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
   pretty s@(If pc cond t e) = pretty pc <+> (parens $ pretty "if" <+> pretty cond <+> indent 1 (line <> pretty t <> line <> pretty e))
   pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
-  pretty (While pc cond phis s pc') = 
+  pretty (While pc cond s pc') = 
     pretty pc <+> 
       (parens $ 
         pretty "(while" <+>
           pretty cond <+> 
-            indent 1 (line <> pretty phis <> line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
+            indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
+  pretty (LoopPhi pc name entry back) = 
+    pretty pc <+> (parens $ pretty "phi" <+> pretty name <+> pretty entry <+> pretty back)
           
 -- A Program is a top level statement
 type Program = Stmt 
@@ -304,18 +300,6 @@ exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
              Lt -> (\a b -> if a < b then 1 else 0)
 
 
--- Semantics of a phi node. If the Phi value is not present in the
--- environment, then set it to the entry value. If it is present,
--- then set to backedge value
-loopphiStep :: LoopPhi -> Env -> Env
-loopphiStep (LoopPhi name entry back) env = 
-  case env M.!? name of
-    Just _ -> M.insert name (env M.! back) env
-    Nothing -> M.insert name (env M.! entry) env
-
--- semantics of a list of phi nodes
-loopphisStep :: [LoopPhi] -> Env -> Env
-loopphisStep phis = foldl (.) id (map loopphiStep phis)
 
 -- Semantics of a Stmt, taking a single step through the execution.
 stmtSingleStep :: Stmt -> Env -> Env
@@ -323,13 +307,20 @@ stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
 stmtSingleStep (If _ cid s s') env = if (env M.! cid) == 1
                                  then stmtSingleStep s env
                                  else stmtSingleStep s' env
-stmtSingleStep w@(While _ cid phis s _) env =
+stmtSingleStep w@(While _ cid s _) env =
   if (env M.! cid == 1)
-    then stmtSingleStep s (loopphisStep phis env)
+    then stmtSingleStep s env
     else env
        
 stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
 stmtSingleStep (Skip _) env = env
+-- Semantics of a phi node. If the Phi value is not present in the
+-- environment, then set it to the entry value. If it is present,
+-- then set to backedge value
+stmtsingleStep (LoopPhi _ name entry back) env = 
+  case env M.!? name of
+    Just _ -> M.insert name (env M.! back) env
+    Nothing -> M.insert name (env M.! entry) env
 
 -- Execute the statement with respect to the semantics
 stmtExec :: Stmt -> Env -> Env
@@ -338,12 +329,13 @@ stmtExec (If _ cid s s') env =
   if (env M.! cid) == 1
   then stmtExec s env
   else stmtExec s' env
-stmtExec w@(While _ cid phis s _) env =
+stmtExec w@(While _ cid s _) env =
   if (env M.! cid == 1)
-  then stmtExec w (stmtExec s (loopphisStep phis env))
+  then stmtExec w (stmtExec s env)
   else env
 stmtExec (Seq s1 s2) env = stmtExec s2 (stmtExec s1 env)
 stmtExec (Skip _) env = env
+stmtExec s@(LoopPhi _ _  _ _) env =  stmtSingleStep s env
 
 -- Concrete domain - Collecting semantics
 -- ======================================
@@ -363,16 +355,6 @@ exprEvalA (EBinop op e1 e2) env =
                Add -> (+)
                Lt -> (\a b -> if a < b then 1 else 0)
 
-
-loopphiStepA :: LoopPhi -> AEnv -> AEnv
-loopphiStepA (LoopPhi name entry back) env = 
-  case env !!? name of
-    Just _ -> insert' name (env !!! back) env
-    Nothing -> insert' name (env !!! entry) env
-
--- abstract loop phi step for a collection of loop phis
-loopphisStepA :: [LoopPhi] -> AEnv -> AEnv
-loopphisStepA phis = foldl (.) id (map loopphiStepA phis)   
                
 -- Abstract version of statement single step
 stmtSingleStepA :: Stmt -> AEnv -> AEnv
@@ -380,13 +362,17 @@ stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
 stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
                                  then stmtSingleStepA s env
                                  else stmtSingleStepA s' env
-stmtSingleStepA w@(While _ cid phis s _) env =
+stmtSingleStepA w@(While _ cid s _) env =
   if (env !!! cid == LL 1)
-    then stmtSingleStepA s (loopphisStepA phis env)
+    then stmtSingleStepA s env
     else env
        
 stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
 stmtSingleStepA (Skip _) env = env
+stmtSingleStepA (LoopPhi _ name entry back) env = 
+  case env !!? name of
+    Just _ -> insert' name (env !!! back) env
+    Nothing -> insert' name (env !!! entry) env
 
 type PC2Env = M.Map PC AEnv
 
@@ -419,20 +405,20 @@ stmtCollect pcold s@(Assign _ _ _) csem =
   (collectingSemPropogate pcold (stmtPCStart s) (stmtSingleStepA s)) $ csem
 
 -- flow order:
--- 1. pre -> entry,  backedge -> entry, phis
+-- 1. pre -> entry,  backedge -> entry
 -- 3. entry ---loop-> loop final PC
 -- 4. loop final PC -> exit block
-stmtCollect pcold (While pc condid phis loop pc') csem =
+stmtCollect pcold (While pc condid loop pc') csem =
   let filter_allowed_iter :: CollectingSem -> CollectingSem
       filter_allowed_iter csem = S.filter (\s -> (s M.! pc) !!! condid == LL 1) csem
   
       pre_to_entry :: CollectingSem -> CollectingSem
-      pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc (loopphisStepA phis)
+      pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
 
 
       -- exit block to entry 
       exit_to_entry :: CollectingSem -> CollectingSem
-      exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc (loopphisStepA phis)
+      exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
 
 
       -- everything entering the entry block 
@@ -524,7 +510,7 @@ idFindAssign id s@(Assign _ aid _) =
      else Nothing
 
 idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
-idFindAssign id while@(While _ condid phis sinner _)  = 
+idFindAssign id while@(While _ condid sinner _)  = 
   idFindAssign id sinner
 idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
 
@@ -708,7 +694,7 @@ while idcond loopbuilder = do
   pc' <- ST.gets sbpc
   sbPCIncr
 
-  let l = While pc (Id idcond) [] loop pc'
+  let l = While pc (Id idcond) loop pc'
   return l
 
   
