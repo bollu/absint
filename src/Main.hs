@@ -368,8 +368,6 @@ collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
 -- affect the statement, by borrowing the PC2Env from the given PC
 stmtCollect :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
-stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
-  (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
 
 -- flow order:
 -- 1. pre -> entry,  backedge -> entry
@@ -410,7 +408,13 @@ stmtCollect csemDefn pc (Seq s1 s2) csem =
       pc' = stmtPCEnd s1 in
     stmtCollect csemDefn pc' s2 csem'
 
-stmtCollect _ pc (Skip _) csem = csem
+-- TODO: merge code of Assign, Skip?
+stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
+  (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
+
+
+stmtCollect csemDefn pcold s@(Skip _) csem = 
+  (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
 
 -- Fixpoint of stmtCollect
 stmtCollectFix :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
@@ -785,12 +789,12 @@ while idcond loopbuilder = do
 
 program :: Stmt
 program = stmtBuild . stmtSequence $ [
-  skip,
   assign "x" (EInt 1),
   assign "y" (EInt 2),
   assign "x_lt_5" ("x" <. EInt 5),
   assign "x_lt_5_btc" (EInt (-1)),
   while "x_lt_5" $ stmtSequence $ [
+      skip,
       assign "x_lt_5_btc" ("x_lt_5_btc" +. (EInt 1)),
       assign "x_in_loop" "x",
       assign "x" ("x" +.  EInt 1),
@@ -805,7 +809,7 @@ pcsemInt :: CSem Int
 pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p (initCollectingSem p)
 
 pToOpaqify :: OpaqueVals
-pToOpaqify = OpaqueVals M.empty -- (M.fromList $ [(PC 6, [Id "x"])])
+pToOpaqify = OpaqueVals (M.fromList $ [(PC 6, [Id "x"])])
 
 pcsemSym :: CSem Sym
 pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p (initCollectingSem p)
