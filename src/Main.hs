@@ -519,16 +519,22 @@ alpha1 p csem =
       limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
   in Id2LoopFn fn limits
 
+gamma1 :: Program -> Id2LoopFn -> CollectingSem
+gamma1 p id2loop = undefined
 
 
-gamma1 :: Id2LoopFn -> CollectingSem
-gamma1 = undefined
+-- Abstract domain 2 - symbolic concrete functions
+-- ================================================
+-- Note the problem with abstract domain 1: We are unable to extract out
+-- relations between variables. However, for us to perform loop acceleration,
+-- what we actually care about is the ability to infer relations between
+-- variables. So, we create a symbolic domain, so that we may derive equations
+-- of the form [x = 1, x = x + 1] which we can then accelerate.
 
-
--- Abstract domain 2 - presburger functions
+-- Abstract domain 3 - presburger functions
 -- ========================================
 
--- -- our abstract value is an affine function of loop trip counts.
+-- Our abstract value is an affine function of loop trip counts.
 -- type representing affine function of identifiers
 -- contains a constant value, and a mapping from identifiers to their
 -- respective coefficients in the affine function.
