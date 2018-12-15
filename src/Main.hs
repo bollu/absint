@@ -1,4 +1,5 @@
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -317,8 +318,129 @@ stmtExec w@(While _ cid s _) env =
 stmtExec (Seq s1 s2) env = stmtExec s2 (stmtExec s1 env)
 stmtExec (Skip _) env = env
 
--- Concrete domain - Collecting semantics
--- ======================================
+--  Collecting semantics Framework
+-- ===============================
+
+type CSemEnv v = LatticeMap Id v
+
+data CSemDefn v = CSemDefn {
+  -- the value of `true` that is used for conditionals in the environment
+  csemDefnValTrue :: v,
+  csemDefnExprEval :: Expr -> CSemEnv v -> LiftedLattice v,
+  csemDefnStmtSingleStep :: Stmt -> CSemEnv v -> CSemEnv v 
+}
+
+csemenvbegin :: CSemEnv v
+csemenvbegin = lmempty
+
+
+type PC2CSemEnv v = M.Map PC (CSemEnv v)
+type CSem v = S.Set (PC2CSemEnv v)
+
+pc2csemenvShow :: Show v => PC2CSemEnv v -> String
+pc2csemenvShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
+
+
+-- Propogate the value of the environment at the first PC to the second PC.
+-- Needed to implicitly simulate the flow graph.
+statePropogate :: PC -> PC -> (CSemEnv v -> CSemEnv v) -> PC2CSemEnv v -> PC2CSemEnv v
+statePropogate pc pc' f st = let e = st M.! pc  in
+  M.insert pc' (f e) st
+
+
+-- Initial collecting semantics, which contains one PC2Env.
+-- This initial PC2Env maps every PC to the empty environment
+initCollectingSem :: CSem v
+initCollectingSem = let st = M.fromList (zip (map PC [-1..10]) (repeat csemenvbegin)) in
+  S.singleton $ st
+
+-- propogate the value of an environment at the first PC to the second
+-- PC across all states.
+collectingSemPropogate :: Ord v => PC -> PC -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
+collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
+
+-- affect the statement, by borrowing the PC2Env from the given PC
+stmtCollect :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
+stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
+  (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
+
+-- flow order:
+-- 1. pre -> entry,  backedge -> entry
+-- 3. entry ---loop-> loop final PC
+-- 4. loop final PC -> exit block
+stmtCollect csemDefn pcold (While pc condid loop pc') csem =
+  let -- filter_allowed_iter :: CSem v -> CSem v
+      filter_allowed_iter csem = S.filter (\s -> (s M.! pc) !!! condid == LL (csemDefnValTrue csemDefn)) csem
+  
+      -- pre_to_entry :: CSem v -> CSem v
+      pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
+
+
+      -- exit block to entry 
+      -- exit_to_entry :: CSem v -> CSem v
+      exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
+
+
+      -- everything entering the entry block 
+      -- all_to_entry :: CSem v -> CSem v
+      all_to_entry csem = (pre_to_entry csem) `S.union` exit_to_entry csem 
+
+      -- loop execution
+      -- entry_to_exit :: CSem v -> CSem v
+      entry_to_exit csem =  stmtCollect csemDefn pc loop (all_to_entry csem)
+
+      -- final statement in while to exit block
+      -- final_to_exit :: CSem v -> CSem v
+      final_to_exit csem = collectingSemPropogate (stmtPCEnd loop) pc' id (entry_to_exit csem)
+
+      -- f :: CSem v -> CSem v
+      f csem = final_to_exit csem
+
+   in (fold (repeatTillFix f csem))
+
+stmtCollect csemDefn pc (Seq s1 s2) csem =
+  let csem' = stmtCollect csemDefn pc s1 csem
+      pc' = stmtPCEnd s1 in
+    stmtCollect csemDefn pc' s2 csem'
+
+stmtCollect _ pc (Skip _) csem = csem
+
+-- Fixpoint of stmtCollect
+stmtCollectFix :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
+stmtCollectFix csemDefn pc s csem = fold $ repeatTillFix (stmtCollect csemDefn pc s) csem
+
+
+
+concreteCSem :: CSemDefn Int
+concreteCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
+  where
+    valTrueA :: Int
+    valTrueA = 1
+
+    exprEvalA :: Expr -> CSemEnv Int -> LiftedLattice Int
+    exprEvalA (EInt i) _ =  LL i
+    exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
+    exprEvalA (EId id) env = env !!! id
+    exprEvalA (EBinop op e1 e2) env = 
+      liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
+        opimpl = case op of
+                   Add -> (+)
+                   Lt -> (\a b -> if a < b then 1 else 0)
+    
+    stmtSingleStepA :: Stmt -> CSemEnv Int -> CSemEnv Int
+    stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
+    stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
+                                     then stmtSingleStepA s env
+                                     else stmtSingleStepA s' env
+    stmtSingleStepA w@(While _ cid s _) env =
+      if (env !!! cid == LL 1)
+        then stmtSingleStepA s env
+        else env
+       
+    stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
+    stmtSingleStepA (Skip _) env = env
+
+{-
 type AEnv = LatticeMap Id Int
 
 aenvbegin :: AEnv
@@ -422,20 +544,22 @@ stmtCollect pc (Skip _) csem = csem
 -- Fixpoint of stmtCollect
 stmtCollectFix :: PC -> Stmt -> CollectingSem -> CollectingSem
 stmtCollectFix pc s csem = fold $ repeatTillFix (stmtCollect pc s) csem
+-}
 
-
+-- Concrete domain 1 - concrete collecting semantics
+-- =================================================
 
 -- Abstract domain 1 - concrete functions
 -- ======================================
 
 -- type representing loop backedge taken counts
-type LoopBTC = M.Map Id Int 
+type LoopBTC v = M.Map Id v 
 
 -- maps identifiers to functions from loop trip counts to values
-data Id2LoopFn = Id2LoopFn 
+data Id2LoopFn v = Id2LoopFn
   { 
-    runId2LoopFn :: Id -> LoopBTC -> (LiftedLattice Int), 
-    runId2Limits :: M.Map Id (Interval Int) 
+    runId2LoopFn :: Id -> LoopBTC v -> (LiftedLattice v) 
+    -- runId2Limits :: M.Map Id (Interval v) 
   }
 
 
@@ -453,24 +577,24 @@ listTuplesCollect abs =
 -- Explode the collecting semantics object to a gargantuan list so we can
 -- then rearrange it
 -- Collectingsem :: S.Set (M.Map PC (M.Map Id ToppedLattice Int))
-collectingSemExplode :: CollectingSem -> [(Id, (PC, ToppedLattice Int))]
+collectingSemExplode :: CSem v -> [(Id, (PC, ToppedLattice v))]
 collectingSemExplode csem = 
-  let set2list :: [PC2Env]
+  let -- set2list :: [PC2CSemEnv v]
       set2list = S.toList csem
       
-      pc2aenvlist :: [[(PC, AEnv)]]
+      -- pc2aenvlist :: [[(PC, CSemEnv v)]]
       pc2aenvlist = map M.toList set2list
 
-      aenvlist :: [[(PC, [(Id, ToppedLattice Int)])]]
+      -- aenvlist :: [[(PC, [(Id, ToppedLattice v)])]]
       aenvlist = (map . map) ((\(pc, aenv) -> (pc, lmtolist aenv))) pc2aenvlist 
 
-      flatten1 :: [(PC, [(Id, ToppedLattice Int)])]
+      -- flatten1 :: [(PC, [(Id, ToppedLattice v)])]
       flatten1 = concat aenvlist
 
-      tuples :: [(PC, (Id, ToppedLattice Int))]
+      -- tuples :: [(PC, (Id, ToppedLattice v))]
       tuples = concat $ map pushTupleInList flatten1
 
-      tuples' :: [(Id, (PC, ToppedLattice Int))]
+      -- tuples' :: [(Id, (PC, ToppedLattice v))]
       tuples' = map (\(pc, (id, val)) -> (id, (pc, val))) tuples
   in tuples'
 
@@ -490,41 +614,41 @@ idFindAssign id while@(While _ condid sinner _)  =
 idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
 
 -- check if the given AEnv has loop variables at these values
-aenvHasLoopValues :: LoopBTC -> AEnv -> Bool
+aenvHasLoopValues :: Eq v => LoopBTC v -> CSemEnv v -> Bool
 aenvHasLoopValues btcs aenv = 
   all (\(id, val) -> aenv !!! id == LL val) (M.toList btcs)
 
 -- check if the given pc2env has loop variables at these values at some PC
-pc2envHasLoopValues :: PC -> LoopBTC -> PC2Env -> Bool
+pc2envHasLoopValues :: Eq v => PC -> LoopBTC v -> PC2CSemEnv v -> Bool
 pc2envHasLoopValues pc btcs pc2env = 
   let aenv = (pc2env M.! pc) in
       aenvHasLoopValues btcs aenv
 
 -- Provide the instance in the collecting sematics that has these 
 -- values of backedge taken counts at the given PC
-csemAtLoopValues :: CollectingSem -> PC -> LoopBTC -> Id -> LiftedLattice Int
+csemAtLoopValues :: (Ord v, Eq v) => CSem v -> PC -> LoopBTC v -> Id -> LiftedLattice v
 csemAtLoopValues csem pc btcs id = 
   let 
   -- pick all valid pc2envs
-  candidates :: S.Set PC2Env
+  -- candidates :: S.Set (PC2CSemEnv v)
   candidates =  S.filter (pc2envHasLoopValues pc btcs) csem 
 
   -- out of these, pick anll AEnvs that work
-  vals :: S.Set (LiftedLattice Int)
+  -- vals :: S.Set (LiftedLattice v)
   vals = S.map (\candidate -> (candidate M.! pc) !!! id) candidates
   in
     foldl join bottom vals
 
 
 -- Abstraction function to Id2LoopFn from the collecting semantics
-alpha1 :: Program -> CollectingSem -> Id2LoopFn
+alpha1 :: Ord v => Program -> CSem v -> Id2LoopFn v
 alpha1 p csem = 
   let fn id btcs = let Just (assign) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
-      limits :: M.Map Id (Interval Int)
-      limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
-  in Id2LoopFn fn limits
+      -- limits :: M.Map Id (Interval v)
+      -- limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
+  in Id2LoopFn fn
 
-gamma1 :: Program -> Id2LoopFn -> CollectingSem
+gamma1 :: Program -> Id2LoopFn v -> CSem v
 gamma1 p id2loop = undefined
 
 
@@ -535,6 +659,23 @@ gamma1 p id2loop = undefined
 -- what we actually care about is the ability to infer relations between
 -- variables. So, we create a symbolic domain, so that we may derive equations
 -- of the form [x = 1, x = x + 1] which we can then accelerate.
+
+data Sym = SymVal Int | SymSym Id | SymBinop Binop Sym Sym deriving(Eq)
+
+instance Show Sym where
+  show (SymVal val) = "sym-" ++ show val
+  show (SymSym id) = "sym-" ++ show id
+  show (SymBinop op sym sym') = 
+   "(" ++ show op ++ " " ++ show sym ++ " " ++ show sym' ++ ")"
+
+instance Pretty Sym where
+  pretty (SymBinop op sym sym') =
+    parens $ pretty op <+> pretty sym <+> pretty sym'
+  pretty sym = pretty (show sym)
+
+-- maps from identifiers to symbols
+data SymEnv = LatticeMap Id Sym
+
 
 -- Abstract domain 3 - presburger functions
 -- ========================================
@@ -595,16 +736,16 @@ instance Ord a => Monoid (Interval a) where
 data PWAFF = PWAFF
 
 -- abstracter
-alpha2 :: Id2LoopFn -> PWAFF
+alpha2 :: Id2LoopFn v -> PWAFF
 alpha2 = undefined
 
 -- concretizer
-gamma2 :: PWAFF -> Id2LoopFn
+gamma2 :: PWAFF -> Id2LoopFn v
 gamma2= undefined
 
 -- concrete semantic transformer, that takes a semantics and incrementally
 -- builds up on it. The final semantics is the least fixpoint of this function.
-csem2 :: Program -> Id2LoopFn -> Id2LoopFn
+csem2 :: Program -> Id2LoopFn v -> Id2LoopFn v
 csem2 = undefined
 
 -- abstract semantics in terms of concrete semantics
@@ -695,10 +836,10 @@ program = stmtBuild . stmtSequence $ [
 p :: Stmt
 p = program
 
-pcsem :: CollectingSem
-pcsem = stmtCollectFix (PC (-1)) p initCollectingSem
+pcsem :: CSem Int
+pcsem = stmtCollectFix concreteCSem (PC (-1)) p initCollectingSem
 
-pabs1 :: Id2LoopFn
+pabs1 :: Id2LoopFn Int
 pabs1 = alpha1 p pcsem
 
 main :: IO ()
@@ -713,6 +854,6 @@ main = do
 
 
     putStrLn "***collecting semantics:***"
-    forM_  (S.toList pcsem) (\m -> (putStr . pc2envshow $ m) >> putStrLn "---")
+    forM_  (S.toList pcsem) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
 
     putStrLn "***Abstract semantics 1: concrete loop functions***"
