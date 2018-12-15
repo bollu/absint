@@ -288,29 +288,34 @@ exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
 
 
 -- Semantics of a Stmt, taking a single step through the execution.
--- Fixpoint of these semantics are the actual bigstep semantics
 stmtSingleStep :: Stmt -> Env -> Env
 stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
-stmtSingleStep (If _ cid s s') env = if (env M.! cid) == 1
-                                 then stmtSingleStep s env
-                                 else stmtSingleStep s' env
+stmtSingleStep (If _ cid s s') env = 
+  if (env M.! cid) == 1
+  then stmtSingleStep s env
+  else stmtSingleStep s' env
 stmtSingleStep w@(While _ cid s _) env =
   if (env M.! cid == 1)
-    then stmtSingleStep s env
-    else env
+  then stmtSingleStep s env
+  else env
        
 stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
 stmtSingleStep (Skip _) env = env
 
   -- Execute the statement with respect to the semantics
 stmtExec :: Stmt -> Env -> Env
-stmtExec (s@(Assign _ _ _)) env = stmtSingleStep s env
-stmtExec (s@(If _ _ _ _)) env = stmtSingleStep s env
-stmtExec (s@(Seq _ _)) env = stmtSingleStep s env
-stmtExec (s@(Skip _)) env = stmtSingleStep s env
-stmtExec (s@(While _ cid loop _)) env = last $
-  repeatTillFix (stmtSingleStep loop) env
+stmtExec (Assign _ id e) env = M.insert id (exprEval e env) env
+stmtExec (If _ cid s s') env = 
+  if (env M.! cid) == 1
+  then stmtExec s env
+  else stmtExec s' env
+stmtExec w@(While _ cid s _) env =
+  if (env M.! cid == 1)
+  then stmtExec w (stmtExec s env)
+  else env
 
+stmtExec (Seq s1 s2) env = stmtExec s2 (stmtExec s1 env)
+stmtExec (Skip _) env = env
 
 -- Concrete domain - Collecting semantics
 -- ======================================
@@ -550,12 +555,12 @@ data AFF = AFN (AFFTerm -> LiftedLattice Int)
 -- lifted integers for the interval domain
 data IInt = IInt Int | IInfty | IMinusInfty deriving (Eq, Show)
 instance Ord IInt where
-  IMinusInfty <= _ = True
   IMinusInfty <= IMinusInfty = True
+  IMinusInfty <= _ = True
   _ <= IMinusInfty = False
 
-  _ <= IInfty = True
   IInfty <= IInfty = True
+  _ <= IInfty = True
   IInfty <= _ = False
 
   (IInt x) <= (IInt y) = x <= y
