@@ -125,6 +125,12 @@ adjust k f (LM m) = LM $ M.adjust (fmap f) k m
                   Nothing -> LLBot
 (!!!) LMTop k = LLTop
 
+-- Return Nothing in case of bottom, and the topped lattice value
+-- in case of the others
+(!!?) :: Ord k => LatticeMap k v -> k -> Maybe (ToppedLattice v)
+(!!?) LMTop k = Nothing
+(!!?) (LM m) k = m M.!? k 
+
 lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
 lmfromlist kvs = LM $ M.fromList [(k, TL v) | (k, v) <- kvs]
 
@@ -222,6 +228,7 @@ pcinit = PC 0
 data Stmt = Assign PC Id Expr
             | If PC Id Stmt Stmt -- branch value id, true branch, false branch
             | While PC Id Stmt  PC -- while cond stmt, pc of entry, pc of exit
+            | LoopPhi PC Id Id Id -- loop phi, with PC, ID of the phi node, ID of entry, ID of exit
             | Seq Stmt Stmt
             | Skip PC deriving(Eq)
 
@@ -229,10 +236,10 @@ data Stmt = Assign PC Id Expr
 stmtPCStart :: Stmt -> PC
 stmtPCStart (Assign pc _ _)  = pc
 stmtPCStart (If pc _ _ _) = pc
-stmtPCStart (While pc _ _ _) = pc
+stmtPCStart (While pc _  _ _) = pc
 stmtPCStart (Seq s1 _) = stmtPCStart s1
 stmtPCStart (Skip pc) = pc
-
+stmtPCStart (LoopPhi pc _ _ _) = pc
 
 -- Return the PC of the last statement in the block
 stmtPCEnd :: Stmt -> PC
@@ -241,13 +248,17 @@ stmtPCEnd (If pc _ _ _) = pc
 stmtPCEnd (While _ _ _ pc) = pc
 stmtPCEnd (Seq _ s2) = stmtPCEnd s2
 stmtPCEnd (Skip pc) = pc
+stmtPCEnd (LoopPhi pc _ _ _) = pc
 
 instance Show Stmt where
   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
   show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
-  show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
+  show (While pc cond s pc') = 
+    show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
   show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
   show (Skip pc) = show pc ++ ":" ++ "done"
+  show (LoopPhi pc name entry back) = 
+    "(phi " ++ show name ++ " " ++ show entry ++ " " ++ show back ++ ")"
 
 instance Pretty Stmt where
   pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
@@ -256,10 +267,12 @@ instance Pretty Stmt where
   pretty (While pc cond s pc') = 
     pretty pc <+> 
       (parens $ 
-        pretty "(while" <+> 
+        pretty "(while" <+>
           pretty cond <+> 
             indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
-
+  pretty (LoopPhi pc name entry back) = 
+    pretty pc <+> (parens $ pretty "phi" <+> pretty name <+> pretty entry <+> pretty back)
+          
 -- A Program is a top level statement
 type Program = Stmt 
 
@@ -287,24 +300,31 @@ exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
              Lt -> (\a b -> if a < b then 1 else 0)
 
 
+
 -- Semantics of a Stmt, taking a single step through the execution.
 stmtSingleStep :: Stmt -> Env -> Env
 stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
-stmtSingleStep (If _ cid s s') env = 
-  if (env M.! cid) == 1
-  then stmtSingleStep s env
-  else stmtSingleStep s' env
+stmtSingleStep (If _ cid s s') env = if (env M.! cid) == 1
+                                 then stmtSingleStep s env
+                                 else stmtSingleStep s' env
 stmtSingleStep w@(While _ cid s _) env =
   if (env M.! cid == 1)
-  then stmtSingleStep s env
-  else env
+    then stmtSingleStep s env
+    else env
        
 stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
 stmtSingleStep (Skip _) env = env
+-- Semantics of a phi node. If the Phi value is not present in the
+-- environment, then set it to the entry value. If it is present,
+-- then set to backedge value
+stmtsingleStep (LoopPhi _ name entry back) env = 
+  case env M.!? name of
+    Just _ -> M.insert name (env M.! back) env
+    Nothing -> M.insert name (env M.! entry) env
 
-  -- Execute the statement with respect to the semantics
+-- Execute the statement with respect to the semantics
 stmtExec :: Stmt -> Env -> Env
-stmtExec (Assign _ id e) env = M.insert id (exprEval e env) env
+stmtExec s@(Assign _ _ _) env = stmtSingleStep s env
 stmtExec (If _ cid s s') env = 
   if (env M.! cid) == 1
   then stmtExec s env
@@ -313,9 +333,9 @@ stmtExec w@(While _ cid s _) env =
   if (env M.! cid == 1)
   then stmtExec w (stmtExec s env)
   else env
-
 stmtExec (Seq s1 s2) env = stmtExec s2 (stmtExec s1 env)
 stmtExec (Skip _) env = env
+stmtExec s@(LoopPhi _ _  _ _) env =  stmtSingleStep s env
 
 -- Concrete domain - Collecting semantics
 -- ======================================
@@ -335,6 +355,7 @@ exprEvalA (EBinop op e1 e2) env =
                Add -> (+)
                Lt -> (\a b -> if a < b then 1 else 0)
 
+               
 -- Abstract version of statement single step
 stmtSingleStepA :: Stmt -> AEnv -> AEnv
 stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
@@ -348,6 +369,10 @@ stmtSingleStepA w@(While _ cid s _) env =
        
 stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
 stmtSingleStepA (Skip _) env = env
+stmtSingleStepA (LoopPhi _ name entry back) env = 
+  case env !!? name of
+    Just _ -> insert' name (env !!! back) env
+    Nothing -> insert' name (env !!! entry) env
 
 type PC2Env = M.Map PC AEnv
 
@@ -535,6 +560,9 @@ gamma1 p id2loop = undefined
 -- what we actually care about is the ability to infer relations between
 -- variables. So, we create a symbolic domain, so that we may derive equations
 -- of the form [x = 1, x = x + 1] which we can then accelerate.
+
+-- Abstract values, are either symbols or actual values
+data AVal = AValSym Id | AValVal Int deriving(Eq, Show)
 
 -- Abstract domain 3 - presburger functions
 -- ========================================
