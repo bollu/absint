@@ -126,6 +126,11 @@ adjust k f (LM m) = LM $ M.adjust (fmap f) k m
                   Nothing -> LLBot
 (!!!) LMTop k = LLTop
 
+-- Return Nothing on Bottom, and Just v on the ToppeLattice case
+(!!?) :: Ord k => LatticeMap k v -> k -> Maybe (ToppedLattice v)
+(!!?) LMTop k = Nothing
+(!!?) (LM m) k = m M.!? k 
+
 lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
 lmfromlist kvs = LM $ M.fromList [(k, TL v) | (k, v) <- kvs]
 
@@ -260,6 +265,7 @@ instance Pretty Stmt where
         pretty "(while" <+> 
           pretty cond <+> 
             indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
+  pretty (Skip pc) = pretty pc <+> pretty "Skip"
 
 -- A Program is a top level statement
 type Program = Stmt 
@@ -326,7 +332,6 @@ type CSemEnv v = LatticeMap Id v
 data CSemDefn v = CSemDefn {
   -- the value of `true` that is used for conditionals in the environment
   csemDefnValTrue :: v,
-  csemDefnExprEval :: Expr -> CSemEnv v -> LiftedLattice v,
   csemDefnStmtSingleStep :: Stmt -> CSemEnv v -> CSemEnv v 
 }
 
@@ -518,7 +523,7 @@ gammacsem p id2loop = undefined
 -- ========================================================
 
 concreteCSem :: CSemDefn Int
-concreteCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
+concreteCSem = CSemDefn valTrueA stmtSingleStepA
     where
       valTrueA :: Int
       valTrueA = 1
@@ -572,8 +577,21 @@ symConstantFold (SymBinop op s1 s2) =
 symConstantFold s = s
 
 
-symbolCSem :: CSemDefn Sym
-symbolCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
+-- Values to make opaque at a given PC
+data OpaqueVals = OpaqueVals (M.Map PC [Id])
+
+-- Make the environment opaque for the given values in OpaqueVals at the 
+-- current PC
+envOpaqify :: PC -> OpaqueVals -> CSemEnv Sym -> CSemEnv Sym
+envOpaqify pc (OpaqueVals ovs) env =
+  case ovs M.!? pc of
+    Just ids -> foldl (\env id -> insert id (SymSym id) env) env ids
+    Nothing -> env
+
+
+-- Collecting semantics of symbolic execution
+symbolCSem :: OpaqueVals -> CSemDefn Sym
+symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
   where
     valTrueA :: Sym
     valTrueA = SymVal 1
@@ -585,17 +603,19 @@ symbolCSem = CSemDefn valTrueA exprEvalA stmtSingleStepA
     exprEvalA (EBinop op e1 e2) env = 
       liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
         opimpl v1 v2 = symConstantFold $ SymBinop op v1 v2
-    
+
+    -- abstract semantics that respects opacity
+    stmtSingleStepOpaqify :: Stmt -> CSemEnv Sym -> CSemEnv Sym
+    stmtSingleStepOpaqify s env = 
+      stmtSingleStepA s (envOpaqify (stmtPCStart s) ovs env)
+
+    -- raw abstract semantics
     stmtSingleStepA :: Stmt -> CSemEnv Sym -> CSemEnv Sym
     stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
     stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL (SymVal 1)
                                      then stmtSingleStepA s env
                                      else stmtSingleStepA s' env
-    stmtSingleStepA w@(While _ cid s _) env =
-      if (env !!! cid == LL (SymVal 1))
-        then stmtSingleStepA s env
-        else env
-       
+    stmtSingleStepA w@(While pc cid s _) env = error "undefined, never executed"
     stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
     stmtSingleStepA (Skip _) env = env
 
@@ -733,6 +753,13 @@ assign id a =
     sbPCIncr
     return s
 
+skip :: ST.State StmtBuilder Stmt
+skip = do
+  pc <- ST.gets sbpc
+  let s = Skip pc
+  sbPCIncr
+  return s
+
 
 while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
 while idcond loopbuilder = do
@@ -761,6 +788,7 @@ program = stmtBuild . stmtSequence $ [
   assign "x_lt_5" ("x" <. EInt 5),
   assign "x_lt_5_btc" (EInt (-1)),
   while "x_lt_5" $ stmtSequence $ [
+      skip,
       assign "x_lt_5_btc" ("x_lt_5_btc" +. (EInt 1)),
       assign "x_in_loop" "x",
       assign "x" ("x" +.  EInt 1),
@@ -774,8 +802,11 @@ p = program
 pcsemInt :: CSem Int
 pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p initCollectingSem
 
+pToOpaqify :: OpaqueVals
+pToOpaqify = OpaqueVals M.empty -- (M.fromList $ [(PC 6, [Id "x"])])
+
 pcsemSym :: CSem Sym
-pcsemSym = stmtCollectFix symbolCSem (PC (-1)) p initCollectingSem
+pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p initCollectingSem
 
 pabs1 :: Id2LoopFn Int
 pabs1 = alphacsem p pcsemInt
