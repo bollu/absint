@@ -21,3 +21,4 @@ cabal.project.local~
 .HTF/
 .ghc.environment.*
 tags
+ghcid.txt
