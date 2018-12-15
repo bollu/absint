@@ -211,7 +211,7 @@ instance Pretty Expr where
 
 
 -- program counter, positioned *after* the ith instruction.
-data PC = PC Int deriving(Eq, Ord)
+data PC = PC { unPC :: Int } deriving(Eq, Ord)
 instance Show PC where
   show (PC pc) = "pc:" ++ show pc
 
@@ -355,9 +355,11 @@ statePropogate pc pc' f st = let e = st M.! pc  in
 
 -- Initial collecting semantics, which contains one PC2Env.
 -- This initial PC2Env maps every PC to the empty environment
-initCollectingSem :: CSem v
-initCollectingSem = let st = M.fromList (zip (map PC [-1..10]) (repeat csemenvbegin)) in
-  S.singleton $ st
+initCollectingSem :: Program -> CSem v
+initCollectingSem p = let 
+  finalpc = unPC (stmtPCEnd p) + 1
+  st = M.fromList (zip (map PC [-1..finalpc]) (repeat csemenvbegin)) 
+  in S.singleton $ st
 
 -- propogate the value of an environment at the first PC to the second
 -- PC across all states.
@@ -783,12 +785,12 @@ while idcond loopbuilder = do
 
 program :: Stmt
 program = stmtBuild . stmtSequence $ [
+  skip,
   assign "x" (EInt 1),
   assign "y" (EInt 2),
   assign "x_lt_5" ("x" <. EInt 5),
   assign "x_lt_5_btc" (EInt (-1)),
   while "x_lt_5" $ stmtSequence $ [
-      skip,
       assign "x_lt_5_btc" ("x_lt_5_btc" +. (EInt 1)),
       assign "x_in_loop" "x",
       assign "x" ("x" +.  EInt 1),
@@ -800,13 +802,13 @@ p :: Stmt
 p = program
 
 pcsemInt :: CSem Int
-pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p initCollectingSem
+pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p (initCollectingSem p)
 
 pToOpaqify :: OpaqueVals
 pToOpaqify = OpaqueVals M.empty -- (M.fromList $ [(PC 6, [Id "x"])])
 
 pcsemSym :: CSem Sym
-pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p initCollectingSem
+pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p (initCollectingSem p)
 
 pabs1 :: Id2LoopFn Int
 pabs1 = alphacsem p pcsemInt
