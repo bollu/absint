@@ -424,6 +424,7 @@ stmtCollect csemDefn pcold (While pc condid loop pc') csem =
       -- f :: CSem v -> CSem v
       f csem = final_to_exit csem
 
+
    in (fold (repeatTillFix f csem))
 
 stmtCollect csemDefn pc (Seq s1 s2) csem =
@@ -447,15 +448,12 @@ stmtCollectFix csemDefn pc s csem = fold $ repeatTillFix (stmtCollect csemDefn p
 -- Abstract domain 1 - concrete functions
 -- ======================================
 
--- type representing loop backedge taken counts
-type LoopBTC v = M.Map Id v 
+-- type representing filter on the environment
+type CSemEnvFilter v = CSemEnv v -> Bool
 
--- maps identifiers to functions from loop trip counts to values
-data Id2LoopFn v = Id2LoopFn
-  { 
-    runId2LoopFn :: Id -> LoopBTC v -> v
-    -- runId2Limits :: M.Map Id (Interval v) 
-  }
+-- given an identifier and the filter on the environments to union, pick the
+-- value of the identifier from its assignment.
+type Id2CollectedVal v = Id -> CSemEnvFilter v -> v
 
 
 
@@ -502,48 +500,38 @@ idFindAssign id s@(Assign _ aid _) =
   if id == aid 
      then Just s
      else Nothing
-
 idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
-idFindAssign id while@(While _ condid sinner _)  = 
-  idFindAssign id sinner
+idFindAssign id while@(While _ condid sinner _)  = idFindAssign id sinner
 idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
+idFindAssign id (Skip _) = Nothing
 
--- check if the given AEnv has loop variables at these values
-aenvHasLoopValues :: (Eq v) => LoopBTC v -> CSemEnv v -> Bool
-aenvHasLoopValues btcs aenv = 
-  all (\(id, val) -> aenv !!? id == Just val) (M.toList btcs)
-
--- check if the given pc2env has loop variables at these values at some PC
-pc2envHasLoopValues :: (Eq v) => PC -> LoopBTC v -> PC2CSemEnv v -> Bool
-pc2envHasLoopValues pc btcs pc2env = 
-  let aenv = (pc2env M.! pc) in
-      aenvHasLoopValues btcs aenv
-
--- Provide the instance in the collecting sematics that has these 
--- values of backedge taken counts at the given PC
-csemAtLoopValues :: (Lattice v, Ord v, Eq v) => CSem v -> PC -> LoopBTC v -> Id -> v
-csemAtLoopValues csem pc btcs id = 
+-- Sample the concrete semantics:
+-- * Across the set of environments
+-- * At a given program counter
+-- * For a given identifier
+-- * and union all the values
+csemSample :: (Lattice v, Ord v, Eq v) => CSem v -> PC -> CSemEnvFilter v -> Id -> v
+csemSample csem pc f id = 
   let 
-  -- pick all valid pc2envs
-  -- candidates :: S.Set (PC2CSemEnv v)
-  candidates =  S.filter (pc2envHasLoopValues pc btcs) csem 
+  -- envsatpc :: S.Set (CSemEnv v)
+  envsatpc = S.map (M.! pc) csem
+  
+  -- validenvs :: S.Set (CSemEnv v)
+  validenvs = S.filter f envsatpc
 
-  -- out of these, pick anll AEnvs that work
-  -- vals :: S.Set (LiftedLattice v)
-  vals = S.map (\candidate -> (candidate M.! pc) !!! id) candidates
+  -- vals :: S.Set v
+  vals = S.map (!!! id) validenvs
   in
     foldl join bottom vals
 
 
--- Abstraction function to Id2LoopFn from the collecting semantics
-alphacsem :: (Lattice v, Ord v) => Program -> CSem v -> Id2LoopFn v
-alphacsem p csem = 
-  let fn id btcs = let Just (assign) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
-      -- limits :: M.Map Id (Interval v)
-      -- limits = M.fromListWith (<>) (map (\(id, (pc, TL val)) -> (id, intervalClosed val)) (collectingSemExplode csem))
-  in Id2LoopFn fn
+-- Abstraction function to Id2CollectedVal from the collecting semantics
+alphacsem :: (Lattice v, Ord v) => CSem v -> Program -> Id2CollectedVal v
+alphacsem csem p id filter = 
+        let Just (assign) = idFindAssign id p in 
+            csemSample csem (stmtPCStart assign) filter id
 
-gammacsem :: Program -> Id2LoopFn v -> CSem v
+gammacsem :: Program -> Id2CollectedVal v -> CSem v
 gammacsem p id2loop = undefined
 
 
@@ -745,16 +733,16 @@ instance Ord a => Monoid (Interval a) where
 data PWAFF = PWAFF
 
 -- abstracter
-alpha2 :: Id2LoopFn v -> PWAFF
+alpha2 :: Id2CollectedVal v -> PWAFF
 alpha2 = undefined
 
 -- concretizer
-gamma2 :: PWAFF -> Id2LoopFn v
+gamma2 :: PWAFF -> Id2CollectedVal v
 gamma2= undefined
 
 -- concrete semantic transformer, that takes a semantics and incrementally
 -- builds up on it. The final semantics is the least fixpoint of this function.
-csem2 :: Program -> Id2LoopFn v -> Id2LoopFn v
+csem2 :: Program -> Id2CollectedVal v -> Id2CollectedVal v
 csem2 = undefined
 
 -- abstract semantics in terms of concrete semantics
@@ -841,8 +829,10 @@ program = (stmtBuild . stmtSequence $ [
   assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
       skip,
-      assign "x" ("x" +.  EInt 1),
-      assign "x_lt_5" ("x" <. EInt 5)
+      assign "x_next" ("x" +.  EInt 1),
+      assign "x_lt_5_next" ("x" <. EInt 5),
+      assign "x" "x_next",
+      assign "x_lt_5" "x_lt_5_next"
   ],
   assign "beta" ("x" +. EInt (-5))],
  OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
@@ -853,8 +843,10 @@ program2 = (stmtBuild . stmtSequence $ [
   assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
       skip,
-      assign "x" ("x" +.  EInt 1),
-      assign "x_lt_5" ("x" <. EInt 5),
+      assign "x_next" ("x" +.  EInt 1),
+      assign "x_lt_5_next" ("x" <. EInt 5),
+      assign "x" "x_next",
+      assign "x_lt_5" "x_lt_5_next",
 
       assign "y" (EInt 2),
       assign "y_lt_10" ("y" <. EInt 10),
@@ -886,8 +878,26 @@ curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice Sym)
 curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
 -- map identifiers to a function of loop iterations to values
-curAbs :: Id2LoopFn (LiftedLattice Int, LiftedLattice Sym)
-curAbs = alphacsem pcur curCSemIntSym
+curAbs :: Id2CollectedVal (LiftedLattice Int, LiftedLattice Sym)
+curAbs = alphacsem curCSemIntSym pcur
+
+lookupAbsAtVals :: Id  --- value to lookup
+  -> [(Id, Int)] --- value of identifiers expected at the definition of value
+  -> (LiftedLattice Int, LiftedLattice Sym) -- value of identifier discovered
+lookupAbsAtVals needle idvals = 
+  let
+  -- Extract out the concrete int value
+  extractConcrete :: Maybe (LiftedLattice Int, LiftedLattice Sym) -> Maybe Int
+  extractConcrete (Just (LL i, _)) = Just i
+  extractConcrete _ = Nothing
+
+  -- check if the pair of (Id, Int) is in env
+  envContains :: CSemEnv (LiftedLattice Int, LiftedLattice Sym) -> (Id, Int) -> Bool
+  envContains env (id, i) = extractConcrete (env !!? id) == Just i
+
+  in
+  curAbs needle (\env -> all (envContains env) idvals)
+
 
 main :: IO ()
 main = do
@@ -910,4 +920,14 @@ main = do
 
     putStrLn "***collecting semantics (concrete x symbol):***"
     forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
+
+    putStrLn "***sampling program using the abstraction:***"
+
+    putDocW 80 . pretty $ lookupAbsAtVals (Id "x_lt_5_next") []
+    putStrLn ""
+    putDocW 80 . pretty $ lookupAbsAtVals (Id "x_next") []
+    putStrLn ""
+    putDocW 80 . pretty $ lookupAbsAtVals (Id "beta") []
+    putStrLn ""
+
 
