@@ -5,6 +5,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Main where
 import qualified Data.Map.Strict as M
+import qualified Data.Map.Merge.Strict as M
 import qualified Data.Set as S
 import Data.List (intercalate, nub)
 import Data.Semigroup
@@ -57,11 +58,6 @@ instance Show a => Show (LiftedLattice a) where
   show (LL a) = show a
 
 
-data ToppedLattice a = TLTop | TL a deriving (Eq, Ord, Functor)
-
-instance Show a => Show (ToppedLattice a) where
-  show TLTop = "T"
-  show (TL a) = show a
 
 
 -- Lift any element pointwise onto a lattice
@@ -101,7 +97,22 @@ imply a b = (complement a) `join` b
 (===>) :: BooleanAlgebra a => a -> a -> a
 (===>) = imply
 
-data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop deriving (Eq, Ord)
+
+-- Adjoin a top element 
+data ToppedLattice a = TLTop | TL a deriving (Eq, Ord, Functor)
+
+instance Show a => Show (ToppedLattice a) where
+  show TLTop = "T"
+  show (TL a) = show a
+
+data BottomedLattice a = TLBot | TB a deriving(Eq, Ord, Functor)
+
+instance Show a => Show (BottomedLattice a) where
+  show TLBot = "_|_"
+  show (TB a) = show a
+
+
+data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop deriving (Eq, Ord, Functor)
 
 -- Insert a regular value into a lattice map
 insert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
@@ -114,6 +125,22 @@ insert' _ _ LMTop = LMTop
 insert' _ LLBot m = m
 insert' k LLTop (LM m) = LM $ M.insert k TLTop m
 insert' k (LL v) (LM m) = LM $ M.insert k (TL v) m
+
+-- pointwise produce of two lattice maps
+-- *NOTE: only contains a value if both the first and second map have a value
+-- for it.
+-- *TODO: this is currently borked, in that if EITHER v or w are Top, the full
+-- thing becomes top. Fix this next.
+lmproduct :: Ord k => LatticeMap k v -> LatticeMap k w -> LatticeMap k (v, w)
+lmproduct (LM m) (LM m') = 
+  let
+    missingm' = M.dropMissing
+    missingm =  M.dropMissing
+    merger = M.zipWithMatched (\k tx ty -> case (tx, ty) of
+                                                (TL x, TL y) -> TL (x, y)
+                                                _ -> TLTop)
+ in LM $ M.merge missingm' missingm merger m m'
+lmproduct _ _ = error "undefined so far"
 
 adjust :: Ord k => k -> (v -> v) -> LatticeMap k v -> LatticeMap k v
 adjust _ _ LMTop = LMTop
@@ -637,6 +664,19 @@ instance Pretty Sym where
     parens $ pretty op <+> pretty sym <+> pretty sym'
   pretty sym = pretty (show sym)
 
+
+-- Concrete Domain 3 - product domain of symbols and concrete values
+-- =================================================================
+-- We construct a product domain, so that we are able to perform loop iterations
+-- which the symbolic domain gets stuck on, while still being able to collect
+-- symbolic information, which the concrete domain cannot do.
+
+stmtSingleStepProduct :: 
+  (Stmt -> CSemEnv v -> CSemEnv v) 
+  -> (Stmt -> CSemEnv w -> CSemEnv w)
+  -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
+stmtSingleStepProduct f1 f2 s env = 
+  lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
 
 -- Abstract domain 3 - presburger functions
 -- ========================================
