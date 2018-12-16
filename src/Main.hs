@@ -599,12 +599,12 @@ instance Show SymAff where
      in (intercalate " + " $ coeffs') ++ c'
 
 -- lift an identifier to a polynomial
-symPolyId :: Id -> SymAff
-symPolyId id = SymAff (0, M.fromList [(id, 1)])
+symAffId :: Id -> SymAff
+symAffId id = SymAff (0, M.fromList [(id, 1)])
 
 -- Lift a constant to a polynomial
-symPolyConst :: Int -> SymAff
-symPolyConst c = SymAff (c, M.empty)
+symAffConst :: Int -> SymAff
+symAffConst c = SymAff (c, M.empty)
 
 -- Add two symbolic polynomials
 symPolyAdd :: SymAff -> SymAff -> SymAff
@@ -638,10 +638,10 @@ instance Pretty SymAff where
 data SymVal = SymValAff  SymAff | SymValBinop Binop SymVal SymVal deriving(Eq, Ord)
 
 symValId :: Id -> SymVal
-symValId = SymValAff . symPolyId
+symValId = SymValAff . symAffId
 
 symValConst :: Int -> SymVal
-symValConst = SymValAff . symPolyConst
+symValConst = SymValAff . symAffConst
 
 instance Show SymVal where
   show (SymValAff p) = show p
