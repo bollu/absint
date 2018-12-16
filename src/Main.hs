@@ -936,27 +936,31 @@ program2 = (stmtBuild . stmtSequence $ [
       skip,
       assign "x_next" ("x" +.  EInt 1),
       assign "x_lt_5_next" ("x" <. EInt 5),
-      assign "x" "x_next",
-      assign "x_lt_5" "x_lt_5_next",
 
       assign "y" (EInt 2),
       assign "y_lt_10" ("y" <. EInt 10),
       while "y_lt_10" $ stmtSequence $ [
-        assign "y" ("y" +.  EInt 5),
-        assign "y_lt_10" ("y" <. EInt 10)
+        skip,
+        assign "y_plus_x" ("y" +. "x"),
+        assign "y_plus_x_next" ("y" +. "x_next"),
+        assign "y_next" ("y" +.  EInt 5),
+        assign "y" "y_next",
+        assign "y_lt_10_next" ("y" <. EInt 10),
+        assign "y_lt_10" "y_lt_10_next"
     ],
+    assign "x" "x_next",
+    assign "x_lt_5" "x_lt_5_next",
     assign "alpha" ("y" +. EInt (-12))
   ],
   assign "beta" ("x" +. EInt (-5))],
- OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
+ OpaqueVals (M.fromList $ [(PC 4, [Id "x"]), (PC 12, [Id "y"])]))
 
 -- Program on which main runs
 pcur :: Stmt
-pcur = fst program
-
+pcur = fst program2
 
 curToOpaqify :: OpaqueVals
-curToOpaqify = snd program
+curToOpaqify = snd program2
 
 curCSemInt :: CSem (LiftedLattice Int)
 curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
@@ -1000,6 +1004,8 @@ main = do
     let outenv =  (stmtExec pcur) envBegin
     print outenv
 
+{-
+
 
     putStrLn "***collecting semantics (concrete):***"
     forM_  (S.toList curCSemInt) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
@@ -1007,6 +1013,7 @@ main = do
 
     putStrLn "***collecting semantics (symbol):***"
     forM_  (S.toList curCSemSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
+    -}
 
 
     putStrLn "***collecting semantics (concrete x symbol):***"
@@ -1014,11 +1021,22 @@ main = do
 
     putStrLn "***sampling program using the abstraction:***"
 
-    putDocW 80 . pretty $ lookupAbsAtVals (Id "x_lt_5_next") []
-    putStrLn ""
-    putDocW 80 . pretty $ lookupAbsAtVals (Id "x_next") []
-    putStrLn ""
-    putDocW 80 . pretty $ lookupAbsAtVals (Id "beta") []
-    putStrLn ""
+    let idsToLookup = ["x_lt_5_next", "x", "x_next", 
+                       "y", "y_next", "y_lt_10", "y_lt_10_next", "y_plus_x",
+                       "y_plus_x_next"]
+    forM_ idsToLookup 
+      (\id -> (putDocW 80 $ 
+                pretty id <+> 
+                pretty "=" <+> 
+                pretty (lookupAbsAtVals (Id id) [])) >> putStrLn "")
+    -- putStrLn ""
+    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "x") []
+    -- putStrLn ""
+    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "x_next") []
+    -- putStrLn ""
+    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "x_next") []
+    -- putStrLn ""
+    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "beta") []
+    -- putStrLn ""
 
 
