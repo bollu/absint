@@ -226,12 +226,16 @@ This allows us to talk about the things we do:
 
 ## Questions about abstract interpretation:
 - Consider the two frameworks of AI. One which specifies an `alpha` and a
-  `gamma`, and given a concrete operator `f`, defines the abstract operator `f'
-  = alpha . f . gamma`.
+  `gamma`, and given a concrete operator `f`, _constructs_ the abstract operator 
+ `f# = alpha . f . gamma`. Now, consider the second framework, which for each concrete operator `f`,
+defines an abstract operator `f#`. Given this, can we _recover_ `alpha` and `gamma`?
+If not, how are the two approaches related? **Answer:** See [Antoine Mine's thesis](https://www-apr.lip6.fr/~mine/these/these-color.pdf),
+where he defines three styles of AI:
+	- 1) `alpha, gamma` based AI.
+	- 2) defining abstract operators `f#` for every `f` with a given `gamma`.
+	- 3) `gamma`, _partial_ `alpha` based AI.
 
-Now, consider the second framework, which for each concrete operator `f`,
-defines an abstract operator `f'`. Given this, can we _recover_ `alpha` and `gamma`?
-If not, how are the two approaches related?
+This is confusing, why are they all called AI..?
 
 
 - When defining the collecting semantics, one can of course use the "standard" collecting semantics.
