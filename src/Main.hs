@@ -867,6 +867,9 @@ curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
 curCSemSym :: CSem (LiftedLattice Sym)
 curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
+curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice Sym)
+curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
+
 curAbs1 :: Id2LoopFn (LiftedLattice Int)
 curAbs1 = alphacsem pcur curCSemInt
 
@@ -888,4 +891,7 @@ main = do
     putStrLn "***collecting semantics (symbol):***"
     forM_  (S.toList curCSemSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
 
-    putStrLn "***Abstract semantics 1: concrete loop functions***"
+
+    putStrLn "***collecting semantics (concrete x symbol):***"
+    forM_  (S.toList curCSemIntSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+
