@@ -17,6 +17,7 @@ import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes)
+import ISL.Native
 -- Pretty Utils
 -- ============
 
@@ -964,10 +965,10 @@ pTwoNestedLoop = (stmtBuild . stmtSequence $ [
 -- CHOOSE YOUR PROGRAM HERE
 -- ========================
 pcur :: Stmt
-pcur = fst pIf
+pcur = fst pTwoNestedLoop
 
 curToOpaqify :: OpaqueVals
-curToOpaqify = snd pIf
+curToOpaqify = snd pTwoNestedLoop
 
 -- Derived properties of the chosen program
 -- ========================================

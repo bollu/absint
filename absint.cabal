@@ -51,13 +51,27 @@ executable absint
   main-is:             Main.hs
 
   -- Modules included in this executable, other than Main.
-  -- other-modules:
+  other-modules: 
+      -- ISL
+      ISL.Native
+    , ISL.Native.Context
+    , ISL.Native.C2Hs
+    , ISL.Native.Types
+    , ISL.Types
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:       base >=4.10 && <4.11, containers, void, mtl, prettyprinter
+  build-depends:       base >=4.10 && <4.11
+                      , containers
+                      , mtl
+                      , prettyprinter
+                      , inline-c
+                      , template-haskell
+
+
+  build-tools: c2hs >= 0.19.1
 
   -- Directories containing source files.
   hs-source-dirs:      src
