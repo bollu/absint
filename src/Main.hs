@@ -354,8 +354,8 @@ type CSemEnv v = SemiMeetMap Id v
 
 data CSemDefn v = CSemDefn {
   -- the value of `true` that is used for conditionals in the environment
-  csemDefnValIsTrue :: v -> Bool,
-  csemDefnStmtSingleStep :: Stmt -> CSemEnv v -> CSemEnv v 
+  csemDefnValIsTrue :: !(v -> Bool),
+  csemDefnStmtSingleStep :: !(Stmt -> CSemEnv v -> CSemEnv v)
 }
 
 csemenvbegin :: CSemEnv v
@@ -836,8 +836,11 @@ asem2 p = alpha2 . csem2 p . gamma2
 
 data StmtBuilder = StmtBuilder { sbpc :: PC }
 
-sbPCIncr :: ST.State StmtBuilder ()
-sbPCIncr = ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
+sbPCIncr :: ST.State StmtBuilder PC
+sbPCIncr = do
+  pc <- ST.gets sbpc
+  ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
+  return pc
 
   
 
@@ -872,29 +875,36 @@ instance ToExpr Expr where
 assign :: ToExpr a => String -> a -> ST.State StmtBuilder Stmt
 assign id a =
   do
-    pc <- ST.gets sbpc
+    pc <- sbPCIncr
     let s = Assign pc (Id id) (toexpr a)
-    sbPCIncr
     return s
+
 
 skip :: ST.State StmtBuilder Stmt
 skip = do
-  pc <- ST.gets sbpc
+  pc <- sbPCIncr
   let s = Skip pc
-  sbPCIncr
   return s
 
 
 while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
 while idcond loopbuilder = do
-  pc <- ST.gets sbpc
-  sbPCIncr
+  pc <- sbPCIncr
   loop <- loopbuilder
-  pc' <- ST.gets sbpc
-  sbPCIncr
+  pc' <- sbPCIncr
 
   let l = While pc (Id idcond) loop pc'
   return l
+
+if_ :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
+if_ idcond thenbuilder elsebuilder = do
+  pc <- ST.gets sbpc
+  sbPCIncr
+  then_ <- thenbuilder
+  else_ <- elsebuilder
+  sbPCIncr
+  return (If pc (Id idcond) then_ else_)
+
 
   
 (+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
@@ -904,9 +914,13 @@ while idcond loopbuilder = do
 (<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
 (<.) a b = EBinop Lt (toexpr a) (toexpr b)
 
+pIf :: (Stmt, OpaqueVals) 
+pIf = (stmtBuild . stmtSequence $ [
+  skip,
+  if_ "x_lt_10" skip skip], OpaqueVals mempty)
 
-program :: (Stmt, OpaqueVals)
-program = (stmtBuild . stmtSequence $ [
+pLoop :: (Stmt, OpaqueVals)
+pLoop = (stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
   assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
@@ -919,8 +933,8 @@ program = (stmtBuild . stmtSequence $ [
   assign "beta" ("x" +. EInt (-5))],
  OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
 
-program2 :: (Stmt, OpaqueVals)
-program2 = (stmtBuild . stmtSequence $ [
+pTwoNestedLoop :: (Stmt, OpaqueVals)
+pTwoNestedLoop = (stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
   assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
@@ -946,12 +960,17 @@ program2 = (stmtBuild . stmtSequence $ [
   assign "beta" ("x" +. EInt (-5))],
  OpaqueVals (M.fromList $ [(PC 4, [Id "x"]), (PC 12, [Id "y"])]))
 
--- Program on which main runs
+-- ========================
+-- CHOOSE YOUR PROGRAM HERE
+-- ========================
 pcur :: Stmt
-pcur = fst program2
+pcur = fst pIf
 
 curToOpaqify :: OpaqueVals
-curToOpaqify = snd program2
+curToOpaqify = snd pIf
+
+-- Derived properties of the chosen program
+-- ========================================
 
 curCSemInt :: CSem (LiftedLattice Int)
 curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
