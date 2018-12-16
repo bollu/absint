@@ -74,6 +74,8 @@ instance Eq a => SemiMeet (LiftedLattice a) where
   meet LLTop a = a
   meet (LL a) (LL b) = if a == b then LL a else LLBot
 
+instance Eq a => Lattice (LiftedLattice a)
+
 
 
 liftLL2 :: (a -> b -> c) -> LiftedLattice a -> LiftedLattice b -> LiftedLattice c
@@ -115,78 +117,61 @@ instance Show a => Show (BottomedLattice a) where
   show (TB a) = show a
 
 
-data LatticeMap k v = LM (M.Map k (ToppedLattice v)) | LMTop deriving (Eq, Ord, Functor)
+-- A map based representation of a function (a -> b), which on partial
+-- missing keys returns _|_
+data SemiMeetMap k v = LM (M.Map k v)  deriving (Eq, Ord, Functor)
 
 -- Insert a regular value into a lattice map
-insert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
-insert k v LMTop = LMTop
-insert k v (LM m) = LM $ M.insert k (TL v) m
-
--- insert a lattice value into a LatticeMap
-insert' :: Ord k => k -> LiftedLattice v -> LatticeMap k v -> LatticeMap k v
-insert' _ _ LMTop = LMTop
-insert' _ LLBot m = m
-insert' k LLTop (LM m) = LM $ M.insert k TLTop m
-insert' k (LL v) (LM m) = LM $ M.insert k (TL v) m
+insert :: Ord k => k -> v -> SemiMeetMap k v -> SemiMeetMap k v
+insert k v (LM m) = LM $ M.insert k v m
 
 -- pointwise produce of two lattice maps
 -- *NOTE: only contains a value if both the first and second map have a value
 -- for it.
 -- *TODO: this is currently borked, in that if EITHER v or w are Top, the full
 -- thing becomes top. Fix this next.
-lmproduct :: Ord k => LatticeMap k v -> LatticeMap k w -> LatticeMap k (v, w)
-lmproduct (LM m) (LM m') = 
-  let
-    missingm' = M.dropMissing
-    missingm =  M.dropMissing
-    merger = M.zipWithMatched (\k tx ty -> case (tx, ty) of
-                                                (TL x, TL y) -> TL (x, y)
-                                                _ -> TLTop)
- in LM $ M.merge missingm' missingm merger m m'
+lmproduct :: Ord k => SemiMeetMap k v -> SemiMeetMap k w -> SemiMeetMap k (v, w)
+lmproduct (LM m) (LM m') = undefined
+--  let
+--    missingm' = M.dropMissing
+--    missingm =  M.dropMissing
+--    merger = M.zipWithMatched (\k tx ty -> case (tx, ty) of
+--                                                (TL x, TL y) -> TL (x, y)
+--                                                _ -> TLTop)
+-- in LM $ M.merge missingm' missingm merger m m'
 lmproduct _ _ = error "undefined so far"
 
-adjust :: Ord k => k -> (v -> v) -> LatticeMap k v -> LatticeMap k v
-adjust _ _ LMTop = LMTop
-adjust k f (LM m) = LM $ M.adjust (fmap f) k m
+adjust :: Ord k => k -> (v -> v) -> SemiMeetMap k v -> SemiMeetMap k v
+adjust k f (LM m) = LM $ M.adjust f k m
 
-(!!!) :: Ord k => LatticeMap k v -> k -> LiftedLattice v
+(!!!) :: (Ord k, SemiMeet v) => SemiMeetMap k v -> k -> v
 (!!!) (LM m) k = case m M.!? k of
-                  Just (TL v) -> LL v
-                  Just TLTop -> LLTop
-                  Nothing -> LLBot
-(!!!) LMTop k = LLTop
+                   Just v -> v
+                   Nothing -> bottom
 
--- Return Nothing on Bottom, and Just v on the ToppeLattice case
-(!!?) :: Ord k => LatticeMap k v -> k -> Maybe (ToppedLattice v)
-(!!?) LMTop k = Nothing
+
+(!!?) :: Ord k => SemiMeetMap k v -> k -> Maybe v
 (!!?) (LM m) k = m M.!? k 
 
-lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
-lmfromlist kvs = LM $ M.fromList [(k, TL v) | (k, v) <- kvs]
+lmfromlist :: Ord k => [(k, v)] -> SemiMeetMap k v
+lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]
 
-lmempty :: LatticeMap k v 
+lmempty :: SemiMeetMap k v 
 lmempty = LM $ M.empty
 
-lmtolist :: Ord k => LatticeMap k v -> [(k, ToppedLattice v)]
-lmtolist LMTop = error "unable to convert LMTop to a list"
+lmtolist :: Ord k => SemiMeetMap k v -> [(k, v)]
 lmtolist (LM m) = M.toList m
 
-instance (Ord k, Show k, Show v) => Show (LatticeMap k v) where
+instance (Ord k, Show k, Show v) => Show (SemiMeetMap k v) where
   show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
-  show LMTop = "_ -> T"
 
-instance Ord k => Lattice (LatticeMap k v) where
+
+instance (Ord k, Pretty k, Pretty v) => Pretty (SemiMeetMap k v) where
+  pretty (LM m) =  vcat $ [pretty k <+> pretty "->" <+> pretty (m M.! k) | k <- M.keys m]
+
+instance SemiMeet v => SemiMeet (SemiMeetMap k v) where
   bottom = LM M.empty
-  top = LMTop
-
-  -- if they're both defined, give up
-  join _ LMTop = LMTop
-  join LMTop _ = LMTop
-  join (LM m) (LM m') = LM $ M.unionWith (\_ _ -> TLTop) m m'
-
-  meet a LMTop = a
-  meet LMTop a = a
-  meet _ _ = error "trying to meet two maps defined at the same point"
+  meet _ _ = error "TODO: define meet"
 
 -- Helper to repeat till fixpoint
 -- ===============================
@@ -357,11 +342,11 @@ stmtExec (Skip _) env = env
 --  Collecting semantics Framework
 -- ===============================
 
-type CSemEnv v = LatticeMap Id v
+type CSemEnv v = SemiMeetMap Id v
 
 data CSemDefn v = CSemDefn {
   -- the value of `true` that is used for conditionals in the environment
-  csemDefnValTrue :: v,
+  csemDefnValIsTrue :: v -> Bool,
   csemDefnStmtSingleStep :: Stmt -> CSemEnv v -> CSemEnv v 
 }
 
@@ -397,7 +382,7 @@ collectingSemPropogate :: Ord v => PC -> PC -> (CSemEnv v -> CSemEnv v) -> CSem 
 collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
 -- affect the statement, by borrowing the PC2Env from the given PC
-stmtCollect :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
+stmtCollect :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
 
 -- flow order:
 -- 1. pre -> entry,  backedge -> entry
@@ -405,7 +390,7 @@ stmtCollect :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
 -- 4. loop final PC -> exit block
 stmtCollect csemDefn pcold (While pc condid loop pc') csem =
   let -- filter_allowed_iter :: CSem v -> CSem v
-      filter_allowed_iter csem = S.filter (\s -> (s M.! pc) !!! condid == LL (csemDefnValTrue csemDefn)) csem
+      filter_allowed_iter csem = S.filter (\s -> csemDefnValIsTrue csemDefn ((s M.! pc) !!! condid)) csem
   
       -- pre_to_entry :: CSem v -> CSem v
       pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
@@ -447,7 +432,7 @@ stmtCollect csemDefn pcold s@(Skip _) csem =
   (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
 
 -- Fixpoint of stmtCollect
-stmtCollectFix :: Ord v => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
+stmtCollectFix :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
 stmtCollectFix csemDefn pc s csem = fold $ repeatTillFix (stmtCollect csemDefn pc s) csem
 
 
@@ -460,7 +445,7 @@ type LoopBTC v = M.Map Id v
 -- maps identifiers to functions from loop trip counts to values
 data Id2LoopFn v = Id2LoopFn
   { 
-    runId2LoopFn :: Id -> LoopBTC v -> (LiftedLattice v) 
+    runId2LoopFn :: Id -> LoopBTC v -> v
     -- runId2Limits :: M.Map Id (Interval v) 
   }
 
@@ -479,7 +464,7 @@ listTuplesCollect abs =
 -- Explode the collecting semantics object to a gargantuan list so we can
 -- then rearrange it
 -- Collectingsem :: S.Set (M.Map PC (M.Map Id ToppedLattice Int))
-collectingSemExplode :: CSem v -> [(Id, (PC, ToppedLattice v))]
+collectingSemExplode :: CSem v -> [(Id, (PC, v))]
 collectingSemExplode csem = 
   let -- set2list :: [PC2CSemEnv v]
       set2list = S.toList csem
@@ -516,19 +501,19 @@ idFindAssign id while@(While _ condid sinner _)  =
 idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
 
 -- check if the given AEnv has loop variables at these values
-aenvHasLoopValues :: Eq v => LoopBTC v -> CSemEnv v -> Bool
+aenvHasLoopValues :: (Eq v) => LoopBTC v -> CSemEnv v -> Bool
 aenvHasLoopValues btcs aenv = 
-  all (\(id, val) -> aenv !!! id == LL val) (M.toList btcs)
+  all (\(id, val) -> aenv !!? id == Just val) (M.toList btcs)
 
 -- check if the given pc2env has loop variables at these values at some PC
-pc2envHasLoopValues :: Eq v => PC -> LoopBTC v -> PC2CSemEnv v -> Bool
+pc2envHasLoopValues :: (Eq v) => PC -> LoopBTC v -> PC2CSemEnv v -> Bool
 pc2envHasLoopValues pc btcs pc2env = 
   let aenv = (pc2env M.! pc) in
       aenvHasLoopValues btcs aenv
 
 -- Provide the instance in the collecting sematics that has these 
 -- values of backedge taken counts at the given PC
-csemAtLoopValues :: (Ord v, Eq v) => CSem v -> PC -> LoopBTC v -> Id -> LiftedLattice v
+csemAtLoopValues :: (Lattice v, Ord v, Eq v) => CSem v -> PC -> LoopBTC v -> Id -> v
 csemAtLoopValues csem pc btcs id = 
   let 
   -- pick all valid pc2envs
@@ -543,7 +528,7 @@ csemAtLoopValues csem pc btcs id =
 
 
 -- Abstraction function to Id2LoopFn from the collecting semantics
-alphacsem :: Ord v => Program -> CSem v -> Id2LoopFn v
+alphacsem :: (Lattice v, Ord v) => Program -> CSem v -> Id2LoopFn v
 alphacsem p csem = 
   let fn id btcs = let Just (assign) = idFindAssign id p in csemAtLoopValues csem (stmtPCStart assign) btcs id
       -- limits :: M.Map Id (Interval v)
@@ -558,13 +543,14 @@ gammacsem p id2loop = undefined
 -- Concrete domain 1 - concrete collecting semantics of Int
 -- ========================================================
 
-concreteCSem :: CSemDefn Int
+concreteCSem :: CSemDefn (LiftedLattice Int)
 concreteCSem = CSemDefn valTrueA stmtSingleStepA
     where
-      valTrueA :: Int
-      valTrueA = 1
+      valTrueA :: LiftedLattice Int -> Bool
+      valTrueA (LL 1) = True
+      valTrueA _ = False
   
-      exprEvalA :: Expr -> CSemEnv Int -> LiftedLattice Int
+      exprEvalA :: Expr -> CSemEnv (LiftedLattice Int) -> LiftedLattice Int
       exprEvalA (EInt i) _ =  LL i
       exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
       exprEvalA (EId id) env = env !!! id
@@ -574,8 +560,8 @@ concreteCSem = CSemDefn valTrueA stmtSingleStepA
                      Add -> (+)
                      Lt -> (\a b -> if a < b then 1 else 0)
       
-      stmtSingleStepA :: Stmt -> CSemEnv Int -> CSemEnv Int
-      stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
+      stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice Int) -> CSemEnv (LiftedLattice Int)
+      stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
       stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
                                        then stmtSingleStepA s env
                                        else stmtSingleStepA s' env
@@ -618,21 +604,22 @@ data OpaqueVals = OpaqueVals (M.Map PC [Id])
 
 -- Make the environment opaque for the given values in OpaqueVals at the 
 -- current PC
-envOpaqify :: PC -> OpaqueVals -> CSemEnv Sym -> CSemEnv Sym
+envOpaqify :: PC -> OpaqueVals -> CSemEnv (LiftedLattice Sym) -> CSemEnv (LiftedLattice Sym)
 envOpaqify pc (OpaqueVals ovs) env =
   case ovs M.!? pc of
-    Just ids -> foldl (\env id -> insert id (SymSym id) env) env ids
+    Just ids -> foldl (\env id -> insert id (LL (SymSym id)) env) env ids
     Nothing -> env
 
 
 -- Collecting semantics of symbolic execution
-symbolCSem :: OpaqueVals -> CSemDefn Sym
+symbolCSem :: OpaqueVals -> CSemDefn (LiftedLattice Sym)
 symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
   where
-    valTrueA :: Sym
-    valTrueA = SymVal 1
+    valTrueA :: LiftedLattice Sym -> Bool
+    valTrueA (LL (SymVal 1)) = True
+    valTrueA _ = False
 
-    exprEvalA :: Expr -> CSemEnv Sym -> LiftedLattice Sym
+    exprEvalA :: Expr -> CSemEnv (LiftedLattice Sym) -> LiftedLattice Sym
     exprEvalA (EInt i) _ =  LL (SymVal i)
     exprEvalA (EBool b) _ =  if b then LL (SymVal 1) else LL (SymVal 0)
     exprEvalA (EId id) env = env !!! id
@@ -641,13 +628,13 @@ symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
         opimpl v1 v2 = symConstantFold $ SymBinop op v1 v2
 
     -- abstract semantics that respects opacity
-    stmtSingleStepOpaqify :: Stmt -> CSemEnv Sym -> CSemEnv Sym
+    stmtSingleStepOpaqify :: Stmt -> CSemEnv (LiftedLattice Sym) -> CSemEnv (LiftedLattice Sym)
     stmtSingleStepOpaqify s env = 
       stmtSingleStepA s (envOpaqify (stmtPCStart s) ovs env)
 
     -- raw abstract semantics
-    stmtSingleStepA :: Stmt -> CSemEnv Sym -> CSemEnv Sym
-    stmtSingleStepA (Assign _ id e) env = insert' id (exprEvalA e env) env
+    stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice Sym) -> CSemEnv (LiftedLattice Sym)
+    stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
     stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL (SymVal 1)
                                      then stmtSingleStepA s env
                                      else stmtSingleStepA s' env
@@ -674,12 +661,12 @@ instance Pretty Sym where
 -- which the symbolic domain gets stuck on, while still being able to collect
 -- symbolic information, which the concrete domain cannot do.
 
-stmtSingleStepProduct :: 
-  (Stmt -> CSemEnv v -> CSemEnv v) 
-  -> (Stmt -> CSemEnv w -> CSemEnv w)
-  -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
-stmtSingleStepProduct f1 f2 s env = 
-  lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
+-- stmtSingleStepProduct :: 
+--   (Stmt -> CSemEnv v -> CSemEnv v) 
+--   -> (Stmt -> CSemEnv w -> CSemEnv w)
+--   -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
+-- stmtSingleStepProduct f1 f2 s env = 
+--   lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
 
 -- Abstract domain 3 - presburger functions
 -- ========================================
@@ -870,14 +857,14 @@ pcur = fst program
 curToOpaqify :: OpaqueVals
 curToOpaqify = snd program
 
-curCSemInt :: CSem Int
+curCSemInt :: CSem (LiftedLattice Int)
 curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
 
 
-curCSemSym :: CSem Sym
+curCSemSym :: CSem (LiftedLattice Sym)
 curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
-curAbs1 :: Id2LoopFn Int
+curAbs1 :: Id2LoopFn (LiftedLattice Int)
 curAbs1 = alphacsem pcur curCSemInt
 
 main :: IO ()
