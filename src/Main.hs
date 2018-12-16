@@ -17,6 +17,14 @@ import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
+-- Pretty Utils
+-- ============
+
+instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
+  pretty m = 
+    if M.null m 
+       then pretty "{}" 
+       else (vcat $ [pretty "|" <> pretty k <+> pretty ">>" <+> indent 1 (pretty v) | (k, v) <- M.toList m]) <> line
 
 -- Lattice theory
 -- ==============
@@ -54,7 +62,14 @@ instance (SemiMeet a, SemiMeet b) => SemiMeet (a, b) where
   bottom = (bottom, bottom)
   meet (a, b) (a', b') = (a `meet` a', b `meet` b')
 
+instance (Lattice a, Lattice b) => Lattice (a, b)
+
 data LiftedLattice a = LL a | LLBot | LLTop deriving(Eq, Ord, Functor)
+
+instance Pretty a => Pretty (LiftedLattice a) where
+  pretty (LL a) = pretty a
+  pretty LLBot = pretty "_|_"
+  pretty LLTop = pretty "T"
 
 instance Eq a => SemiJoin (LiftedLattice a) where
   top = LLTop
@@ -160,7 +175,7 @@ instance (Ord k, Show k, Show v) => Show (SemiMeetMap k v) where
 
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (SemiMeetMap k v) where
-  pretty (LM m) =  vcat $ [pretty k <+> pretty "->" <+> pretty (m M.! k) | k <- M.keys m]
+  pretty (LM m) =  pretty m -- vcat $ [pretty k <+> pretty "->" <+> pretty (m M.! k) | k <- M.keys m]
 
 instance SemiMeet v => SemiMeet (SemiMeetMap k v) where
   bottom = LM M.empty
@@ -215,7 +230,7 @@ instance Pretty Expr where
   pretty (EInt i) = pretty i
   pretty (EBool b) = pretty b
   pretty (EId id) = pretty id
-  pretty (EBinop op e1 e2) = parens $ pretty op <+> pretty e1 <+> pretty e2
+  pretty (EBinop op e1 e2) = parens $  pretty e1 <+> pretty op <+> pretty e2
 
 
 -- program counter, positioned *after* the ith instruction.
@@ -644,7 +659,7 @@ instance Show Sym where
 
 instance Pretty Sym where
   pretty (SymBinop op sym sym') =
-    parens $ pretty op <+> pretty sym <+> pretty sym'
+    parens $  pretty sym <+> pretty op <+> pretty sym'
   pretty sym = pretty (show sym)
 
 
@@ -870,8 +885,9 @@ curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (PC (-1)) pcur (initCollec
 curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice Sym)
 curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
-curAbs1 :: Id2LoopFn (LiftedLattice Int)
-curAbs1 = alphacsem pcur curCSemInt
+-- map identifiers to a function of loop iterations to values
+curAbs :: Id2LoopFn (LiftedLattice Int, LiftedLattice Sym)
+curAbs = alphacsem pcur curCSemIntSym
 
 main :: IO ()
 main = do
@@ -885,13 +901,13 @@ main = do
 
 
     putStrLn "***collecting semantics (concrete):***"
-    forM_  (S.toList curCSemInt) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+    forM_  (S.toList curCSemInt) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
 
     putStrLn "***collecting semantics (symbol):***"
-    forM_  (S.toList curCSemSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+    forM_  (S.toList curCSemSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
 
     putStrLn "***collecting semantics (concrete x symbol):***"
-    forM_  (S.toList curCSemIntSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+    forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
