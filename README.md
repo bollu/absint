@@ -224,5 +224,23 @@ This allows us to talk about the things we do:
 - Actually identifying the values along the backedge the way we do
 - A collecting semantics that is of use to us
 
+## Questions about abstract interpretation:
+- Consider the two frameworks of AI. One which specifies an `alpha` and a
+  `gamma`, and given a concrete operator `f`, defines the abstract operator `f'
+  = alpha . f . gamma`.
+
+Now, consider the second framework, which for each concrete operator `f`,
+defines an abstract operator `f'`. Given this, can we _recover_ `alpha` and `gamma`?
+If not, how are the two approaches related?
+
+
+- When defining the collecting semantics, one can of course use the "standard" collecting semantics.
+However, to perform analyses such as reaching definitions, we _modify_ the collecting semantics
+with extra information [(Lecture Notes: Widening Operators and Collecting Semantics - Jonathan Aldrich)](https://www.cs.cmu.edu/~aldrich/courses/15-819O-13sp/resources/widening-collecting.pdf). What kinds of modification to the 
+collecting semantics is legal? 
+
+
+- How do we view symbolic computation as abstract interpretation?
+
 ## Links
 - [Course taught at MIT (has pretty pictures for abstraction and concretization)](http://web.mit.edu/16.399/www/#notes)
