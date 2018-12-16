@@ -12,11 +12,11 @@ import Data.Semigroup
 import qualified Control.Monad.State as ST
 import Data.Foldable
 import Control.Applicative
-import Data.Void
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
+import Data.Maybe (catMaybes)
 -- Pretty Utils
 -- ============
 
@@ -578,21 +578,93 @@ concreteCSem = CSemDefn valTrueA stmtSingleStepA
 -- variables. So, we create a symbolic domain, so that we may derive equations
 -- of the form [x = 1, x = x + 1] which we can then accelerate.
 
-data Sym = SymVal Int | SymSym Id | SymBinop Binop Sym Sym deriving(Eq, Ord)
+-- Symbolic polynomial with constant term and coefficients for the other terms
+data SymAff = SymAff (Int, M.Map Id Int) deriving (Eq, Ord)
+
+instance Show SymAff where
+  show (SymAff (c, coeffs)) = 
+    let 
+        showTerm :: Int -> Id -> Maybe String
+        showTerm 0 x = Nothing
+        showTerm 1 x = Just $ show x
+        showTerm c x = Just $ show c ++ show x
+
+        coeffs' :: [String]
+        coeffs' = catMaybes [showTerm c id | (id, c) <- M.toList coeffs]
+        
+        c' :: String
+        c' = if c == 0
+                then "" 
+                else if length coeffs' == 0 then show c else " + " ++ show c
+     in (intercalate " + " $ coeffs') ++ c'
+
+-- lift an identifier to a polynomial
+symPolyId :: Id -> SymAff
+symPolyId id = SymAff (0, M.fromList [(id, 1)])
+
+-- Lift a constant to a polynomial
+symPolyConst :: Int -> SymAff
+symPolyConst c = SymAff (c, M.empty)
+
+-- Add two symbolic polynomials
+symPolyAdd :: SymAff -> SymAff -> SymAff
+symPolyAdd (SymAff (c1, p1)) (SymAff (c2, p2)) = 
+  let pres = 
+        M.merge 
+          M.preserveMissing
+          M.preserveMissing
+          (M.zipWithMatched (\k x y -> x + y)) p1 p2 
+   in SymAff (c1 + c2, pres)
+
+
+instance Pretty SymAff where
+  pretty (SymAff (c, coeffs)) = 
+    let 
+    prettyTerm :: Int -> Id -> Maybe (Doc a)
+    prettyTerm 0 x = Nothing
+    prettyTerm 1 x = Just $ pretty x
+    prettyTerm c x = Just $ pretty c <> pretty x 
+
+    c' :: Doc a
+    c' = if c == 0 then mempty 
+         else if null coeffs then pretty c else pretty "+" <+> pretty c
+
+    coeffs' :: [Doc a]
+    coeffs' = catMaybes [prettyTerm c id | (id, c) <- M.toList coeffs]
+     in hcat (punctuate (pretty "+") coeffs') <+> c'
+
+-- Symbolic value that is either a symbolic polynomial or a binop of two such
+-- polynomials
+data SymVal = SymValAff  SymAff | SymValBinop Binop SymVal SymVal deriving(Eq, Ord)
+
+symValId :: Id -> SymVal
+symValId = SymValAff . symPolyId
+
+symValConst :: Int -> SymVal
+symValConst = SymValAff . symPolyConst
+
+instance Show SymVal where
+  show (SymValAff p) = show p
+  show (SymValBinop op sym sym') = 
+   "(" ++ show op ++ " " ++ show sym ++ " " ++ show sym' ++ ")"
+
+instance Pretty SymVal where
+  pretty (SymValAff p) = pretty p
+  pretty (SymValBinop op sym sym') =
+    parens $  pretty sym <+> pretty op <+> pretty sym'
 
 -- constant folding for symbols
-symConstantFold :: Sym -> Sym
-symConstantFold (SymBinop op s1 s2) = 
+symConstantFold :: SymVal -> SymVal
+symConstantFold (SymValBinop op s1 s2) = 
   let 
     s1' = symConstantFold s1
     s2' = symConstantFold s2
-    in case (s1', s2') of
-        (SymVal i1, SymVal i2) -> 
-          case op of
-            Add -> SymVal (i1 + i2)
-            Lt -> SymVal (if i1 < i2 then 1 else 0)
-        _ -> SymBinop op s1' s2'
-symConstantFold s = s
+ in case (op, s1', s2') of
+      (Add, SymValAff p1, SymValAff p2) -> SymValAff $ symPolyAdd p1 p2
+      _ -> SymValBinop  op s1' s2'
+      
+-- if it's a polynomial, leave it unchanged
+symConstantFold p = p
 
 
 -- Values to make opaque at a given PC
@@ -600,38 +672,39 @@ data OpaqueVals = OpaqueVals (M.Map PC [Id])
 
 -- Make the environment opaque for the given values in OpaqueVals at the 
 -- current PC
-envOpaqify :: PC -> OpaqueVals -> CSemEnv (LiftedLattice Sym) -> CSemEnv (LiftedLattice Sym)
+envOpaqify :: PC -> OpaqueVals -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
 envOpaqify pc (OpaqueVals ovs) env =
   case ovs M.!? pc of
-    Just ids -> foldl (\env id -> insert id (LL (SymSym id)) env) env ids
+    Just ids -> foldl (\env id -> insert id (LL (symValId id)) env) env ids
     Nothing -> env
 
 
+
 -- Collecting semantics of symbolic execution
-symbolCSem :: OpaqueVals -> CSemDefn (LiftedLattice Sym)
+symbolCSem :: OpaqueVals -> CSemDefn (LiftedLattice SymVal)
 symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
   where
-    valTrueA :: LiftedLattice Sym -> Bool
-    valTrueA (LL (SymVal 1)) = True
+    valTrueA :: LiftedLattice SymVal -> Bool
+    valTrueA (LL sv) = sv == symValConst 1
     valTrueA _ = False
 
-    exprEvalA :: Expr -> CSemEnv (LiftedLattice Sym) -> LiftedLattice Sym
-    exprEvalA (EInt i) _ =  LL (SymVal i)
-    exprEvalA (EBool b) _ =  if b then LL (SymVal 1) else LL (SymVal 0)
+    exprEvalA :: Expr -> CSemEnv (LiftedLattice SymVal) -> LiftedLattice SymVal
+    exprEvalA (EInt i) _ =  LL $ symValConst i
+    exprEvalA (EBool b) _ =  if b then LL (symValConst 1) else LL (symValConst 0)
     exprEvalA (EId id) env = env !!! id
     exprEvalA (EBinop op e1 e2) env = 
       liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
-        opimpl v1 v2 = symConstantFold $ SymBinop op v1 v2
+        opimpl v1 v2 = symConstantFold $ SymValBinop op v1 v2
 
     -- abstract semantics that respects opacity
-    stmtSingleStepOpaqify :: Stmt -> CSemEnv (LiftedLattice Sym) -> CSemEnv (LiftedLattice Sym)
+    stmtSingleStepOpaqify :: Stmt -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
     stmtSingleStepOpaqify s env = 
       stmtSingleStepA s (envOpaqify (stmtPCStart s) ovs env)
 
     -- raw abstract semantics
-    stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice Sym) -> CSemEnv (LiftedLattice Sym)
+    stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
     stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
-    stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL (SymVal 1)
+    stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL (symValConst 1)
                                      then stmtSingleStepA s env
                                      else stmtSingleStepA s' env
     stmtSingleStepA w@(While pc cid s _) env = error "undefined, never executed"
@@ -639,16 +712,6 @@ symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
     stmtSingleStepA (Skip _) env = env
 
 
-instance Show Sym where
-  show (SymVal val) = show val
-  show (SymSym id) = show id
-  show (SymBinop op sym sym') = 
-   "(" ++ show op ++ " " ++ show sym ++ " " ++ show sym' ++ ")"
-
-instance Pretty Sym where
-  pretty (SymBinop op sym sym') =
-    parens $  pretty sym <+> pretty op <+> pretty sym'
-  pretty sym = pretty (show sym)
 
 
 -- Concrete Domain 3 - product domain of symbols and concrete values
@@ -665,9 +728,9 @@ stmtSingleStepProduct f1 f2 s env =
   lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
 
 
-concreteSymbolicCSem :: OpaqueVals -> CSemDefn (LiftedLattice Int, LiftedLattice Sym)
+concreteSymbolicCSem :: OpaqueVals -> CSemDefn (LiftedLattice Int, LiftedLattice SymVal)
 concreteSymbolicCSem opaque = CSemDefn valueTrueA stmtSingleStepA where
-  valueTrueA :: (LiftedLattice Int, LiftedLattice Sym) -> Bool
+  valueTrueA :: (LiftedLattice Int, LiftedLattice SymVal) -> Bool
   valueTrueA (lli, _) = csemDefnValIsTrue concreteCSem lli
   stmtSingleStepA = 
     stmtSingleStepProduct 
@@ -871,28 +934,28 @@ curCSemInt :: CSem (LiftedLattice Int)
 curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
 
 
-curCSemSym :: CSem (LiftedLattice Sym)
+curCSemSym :: CSem (LiftedLattice SymVal)
 curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
-curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice Sym)
+curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice SymVal)
 curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
 -- map identifiers to a function of loop iterations to values
-curAbs :: Id2CollectedVal (LiftedLattice Int, LiftedLattice Sym)
+curAbs :: Id2CollectedVal (LiftedLattice Int, LiftedLattice SymVal)
 curAbs = alphacsem curCSemIntSym pcur
 
 lookupAbsAtVals :: Id  --- value to lookup
   -> [(Id, Int)] --- value of identifiers expected at the definition of value
-  -> (LiftedLattice Int, LiftedLattice Sym) -- value of identifier discovered
+  -> (LiftedLattice Int, LiftedLattice SymVal) -- value of identifier discovered
 lookupAbsAtVals needle idvals = 
   let
   -- Extract out the concrete int value
-  extractConcrete :: Maybe (LiftedLattice Int, LiftedLattice Sym) -> Maybe Int
+  extractConcrete :: Maybe (LiftedLattice Int, LiftedLattice SymVal) -> Maybe Int
   extractConcrete (Just (LL i, _)) = Just i
   extractConcrete _ = Nothing
 
   -- check if the pair of (Id, Int) is in env
-  envContains :: CSemEnv (LiftedLattice Int, LiftedLattice Sym) -> (Id, Int) -> Bool
+  envContains :: CSemEnv (LiftedLattice Int, LiftedLattice SymVal) -> (Id, Int) -> Bool
   envContains env (id, i) = extractConcrete (env !!? id) == Just i
 
   in
