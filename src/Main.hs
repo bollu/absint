@@ -606,15 +606,38 @@ symAffId id = SymAff (0, M.fromList [(id, 1)])
 symAffConst :: Int -> SymAff
 symAffConst c = SymAff (c, M.empty)
 
+-- remove IDs that have value 0 in the SymAff
+-- Call internally after peforming operations
+_symAffRemoveZeroIds :: SymAff -> SymAff
+_symAffRemoveZeroIds (SymAff (c, cs)) = 
+  (SymAff (c, M.filter (/= 0) cs))
+
 -- Add two symbolic polynomials
-symPolyAdd :: SymAff -> SymAff -> SymAff
-symPolyAdd (SymAff (c1, p1)) (SymAff (c2, p2)) = 
+symAffAdd :: SymAff -> SymAff -> SymAff
+symAffAdd (SymAff (c1, p1)) (SymAff (c2, p2)) = 
   let pres = 
         M.merge 
           M.preserveMissing
           M.preserveMissing
           (M.zipWithMatched (\k x y -> x + y)) p1 p2 
-   in SymAff (c1 + c2, pres)
+       in _symAffRemoveZeroIds $ SymAff (c1 + c2, pres)
+
+-- If a symAff is constant, return the constant value, otherwise
+-- return Nothing
+symAffAsConst :: SymAff -> Maybe Int
+symAffAsConst (SymAff (c, cs)) = if cs == M.empty then Just c else Nothing
+
+-- negate a Symbolic affine value
+symAffNegate :: SymAff -> SymAff
+symAffNegate (SymAff (c, cs)) = SymAff (-c, M.map (\x -> (-x)) cs)
+
+-- Check if one SymAff is defnitely less than the other
+-- Use the fact that x < y <-> x - y < 0
+symAffIsLt :: SymAff -> SymAff -> Maybe Bool
+symAffIsLt a1 a2 = 
+  let sub = symAffAdd a1 (symAffNegate a2)
+      msubc = symAffAsConst sub
+   in fmap (< 0)  msubc
 
 
 instance Pretty SymAff where
@@ -660,7 +683,12 @@ symConstantFold (SymValBinop op s1 s2) =
     s1' = symConstantFold s1
     s2' = symConstantFold s2
  in case (op, s1', s2') of
-      (Add, SymValAff p1, SymValAff p2) -> SymValAff $ symPolyAdd p1 p2
+      (Add, SymValAff p1, SymValAff p2) -> SymValAff $ symAffAdd p1 p2
+      (Lt, SymValAff p1, SymValAff p2) -> 
+        case symAffIsLt p1 p2 of
+          Just True -> symValConst 1
+          Just False -> symValConst 0
+          Nothing -> (SymValBinop op s1' s2')
       _ -> SymValBinop  op s1' s2'
       
 -- if it's a polynomial, leave it unchanged
