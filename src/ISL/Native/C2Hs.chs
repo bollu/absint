@@ -98,6 +98,11 @@ type PtrId = Ptr Id
   , id `Ptr Map'
   } -> `Ptr Map' id #}
 
+
+{#fun isl_map_to_str as mapToStr
+  { id `Ptr Map'
+  } -> `String' #}
+
 {#fun isl_set_intersect as setIntersect
   { id `Ptr Set'
   , id `Ptr Set'

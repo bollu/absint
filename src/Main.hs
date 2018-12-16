@@ -17,7 +17,9 @@ import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes)
-import ISL.Native
+import ISL.Native.C2Hs
+import ISL.Native.Types (DimType(..))
+
 -- Pretty Utils
 -- ============
 
@@ -1005,8 +1007,33 @@ lookupAbsAtVals needle idvals =
   curAbs needle (\env -> all (envContains env) idvals)
 
 
+example1 :: String
+example1 = unlines
+  [ "[n] -> { [i,j] -> [i2,j2] : i2 = i + 1 and j2 = j + 1 and "
+  , "1 <= i and i < n and 1 <= j and j < n or "
+  , "i2 = i + 1 and j2 = j - 1 and "
+  , "1 <= i and i < n and 2 <= j and j <= n }"
+  ]
+testisl :: IO ()
+testisl = do
+  ctx <- ctxAlloc
+
+
+  -- test 1
+  m <- mapReadFromStr ctx example1
+  (m, exact) <- mapPower m
+  s <- mapToStr m
+  print exact
+  print s
+  mapFree m
+
+
+
 main :: IO ()
 main = do
+    putStrLn "***ISL test***"
+    testisl
+
     putStrLn "***program***"
     putDocW 80 (pretty pcur)
     putStrLn ""
