@@ -20,30 +20,61 @@ import Control.Exception (assert)
 
 -- Lattice theory
 -- ==============
-class Lattice a where
-  bottom :: a
-  top :: a
+-- top = join of all elements
+class SemiJoin a where
   join :: a -> a -> a
-  meet :: a -> a -> a
+  top :: a
 
-instance Lattice a => Lattice (Maybe a) where
-  bottom = Nothing
+-- bottom = meet of all elements 
+class SemiMeet a where
+  meet :: a -> a -> a
+  bottom :: a
+
+class (SemiJoin a, SemiMeet a) => Lattice a
+
+instance SemiJoin a => SemiJoin (Maybe a) where
   top = Just top
+
   join Nothing a = a
   join a Nothing = a
   join (Just a) (Just b) = Just (join a b)
+
+instance SemiMeet a => SemiMeet (Maybe a) where
+  bottom = Nothing
 
   meet Nothing _ = Nothing
   meet _ Nothing = Nothing
   meet (Just a) (Just b) = Just (meet a b)
 
-instance (Lattice a , Lattice b) => Lattice (a, b) where
-  bottom = (bottom, bottom)
+instance (SemiJoin a, SemiJoin b) => SemiJoin (a, b) where
   top = (top, top)
   join (a, b) (a', b') = (a `join` a', b `join` b')
+
+instance (SemiMeet a, SemiMeet b) => SemiMeet (a, b) where
+  bottom = (bottom, bottom)
   meet (a, b) (a', b') = (a `meet` a', b `meet` b')
 
 data LiftedLattice a = LL a | LLBot | LLTop deriving(Eq, Ord, Functor)
+
+instance Eq a => SemiJoin (LiftedLattice a) where
+  top = LLTop
+
+  join LLBot a = a
+  join a LLBot = a
+  join LLTop _ = LLTop
+  join _ LLTop = LLTop
+  join (LL a) (LL b) = if a == b then LL a else LLTop
+
+instance Eq a => SemiMeet (LiftedLattice a) where
+  bottom = LLBot
+
+  meet LLBot _ = LLBot
+  meet _ LLBot = LLBot
+  meet a LLTop = a
+  meet LLTop a = a
+  meet (LL a) (LL b) = if a == b then LL a else LLBot
+
+
 
 liftLL2 :: (a -> b -> c) -> LiftedLattice a -> LiftedLattice b -> LiftedLattice c
 liftLL2 f LLTop _ = LLTop
@@ -58,36 +89,8 @@ instance Show a => Show (LiftedLattice a) where
   show (LL a) = show a
 
 
-
-
--- Lift any element pointwise onto a lattice
-instance Eq a => Lattice (LiftedLattice a) where
-  bottom = LLBot
-  top = LLTop
-
-  join LLBot a = a
-  join a LLBot = a
-  join LLTop _ = LLTop
-  join _ LLTop = LLTop
-  join (LL a) (LL b) = if a == b then LL a else LLTop
-
-  meet LLBot _ = LLBot
-  meet _ LLBot = LLBot
-  meet a LLTop = a
-  meet LLTop a = a
-  meet (LL a) (LL b) = if a == b then LL a else LLBot
-
-
-instance Lattice o => Lattice (i -> o) where
-  bottom = const bottom
-  top = const top
-  join f g = \i -> f i `join` g i
-  meet f g = \i -> f i `meet` g i
-
-
 class Lattice a => BooleanAlgebra a where
   complement :: a -> a
-
 
 -- implication in the boolean algebra
 imply :: BooleanAlgebra a => a -> a -> a
