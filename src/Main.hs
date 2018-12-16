@@ -64,7 +64,7 @@ instance (SemiMeet a, SemiMeet b) => SemiMeet (a, b) where
 
 instance (Lattice a, Lattice b) => Lattice (a, b)
 
-data LiftedLattice a = LL a | LLBot | LLTop deriving(Eq, Ord, Functor)
+data LiftedLattice a = LL !a | LLBot | LLTop deriving(Eq, Ord, Functor)
 
 instance Pretty a => Pretty (LiftedLattice a) where
   pretty (LL a) = pretty a
@@ -119,13 +119,13 @@ imply a b = (complement a) `join` b
 
 
 -- Adjoin a top element 
-data ToppedLattice a = TLTop | TL a deriving (Eq, Ord, Functor)
+data ToppedLattice a = TLTop | TL !a deriving (Eq, Ord, Functor)
 
 instance Show a => Show (ToppedLattice a) where
   show TLTop = "T"
   show (TL a) = show a
 
-data BottomedLattice a = TLBot | TB a deriving(Eq, Ord, Functor)
+data BottomedLattice a = TLBot | TB !a deriving(Eq, Ord, Functor)
 
 instance Show a => Show (BottomedLattice a) where
   show TLBot = "_|_"
@@ -134,7 +134,7 @@ instance Show a => Show (BottomedLattice a) where
 
 -- A map based representation of a function (a -> b), which on partial
 -- missing keys returns _|_
-data SemiMeetMap k v = LM (M.Map k v)  deriving (Eq, Ord, Functor)
+data SemiMeetMap k v = LM !(M.Map k v)  deriving (Eq, Ord, Functor)
 
 -- Insert a regular value into a lattice map
 insert :: Ord k => k -> v -> SemiMeetMap k v -> SemiMeetMap k v
@@ -217,7 +217,7 @@ instance Pretty Binop where
   pretty Add = pretty "+."
   pretty Lt = pretty "<."
 
-data Expr = EInt Int | EBool Bool  | EBinop Binop Expr Expr | EId Id
+data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id
   deriving(Eq)
 
 instance Show Expr where
@@ -234,7 +234,7 @@ instance Pretty Expr where
 
 
 -- program counter, positioned *after* the ith instruction.
-data PC = PC { unPC :: Int } deriving(Eq, Ord)
+data PC = PC { unPC :: !Int } deriving(Eq, Ord)
 instance Show PC where
   show (PC pc) = "pc:" ++ show pc
 
@@ -248,11 +248,11 @@ pcinit :: PC
 pcinit = PC 0
 
 -- Statements of the language
-data Stmt = Assign PC Id Expr
-            | If PC Id Stmt Stmt -- branch value id, true branch, false branch
-            | While PC Id Stmt  PC -- while cond stmt, pc of entry, pc of exit
-            | Seq Stmt Stmt
-            | Skip PC deriving(Eq)
+data Stmt = Assign !PC !Id !Expr
+            | If !PC !Id !Stmt !Stmt -- branch value id, true branch, false branch
+            | While !PC !Id !Stmt !PC -- while cond stmt, pc of entry, pc of exit
+            | Seq !Stmt !Stmt
+            | Skip !PC deriving(Eq)
 
 -- Return the PC of the first statement in the block
 stmtPCStart :: Stmt -> PC
@@ -579,7 +579,7 @@ concreteCSem = CSemDefn valTrueA stmtSingleStepA
 -- of the form [x = 1, x = x + 1] which we can then accelerate.
 
 -- Symbolic polynomial with constant term and coefficients for the other terms
-data SymAff = SymAff (Int, M.Map Id Int) deriving (Eq, Ord)
+data SymAff = SymAff !(Int, M.Map Id Int) deriving (Eq, Ord)
 
 instance Show SymAff where
   show (SymAff (c, coeffs)) = 
@@ -658,7 +658,7 @@ instance Pretty SymAff where
 
 -- Symbolic value that is either a symbolic polynomial or a binop of two such
 -- polynomials
-data SymVal = SymValAff  SymAff | SymValBinop Binop SymVal SymVal deriving(Eq, Ord)
+data SymVal = SymValAff !SymAff | SymValBinop !Binop !SymVal !SymVal deriving(Eq, Ord)
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
@@ -696,7 +696,7 @@ symConstantFold p = p
 
 
 -- Values to make opaque at a given PC
-data OpaqueVals = OpaqueVals (M.Map PC [Id])
+data OpaqueVals = OpaqueVals !(M.Map PC [Id])
 
 -- Make the environment opaque for the given values in OpaqueVals at the 
 -- current PC
@@ -767,15 +767,6 @@ concreteSymbolicCSem opaque = CSemDefn valueTrueA stmtSingleStepA where
 
 -- Abstract domain 3 - presburger functions
 -- ========================================
-
--- Our abstract value is an affine function of loop trip counts.
--- type representing affine function of identifiers
--- contains a constant value, and a mapping from identifiers to their
--- respective coefficients in the affine function.
--- terms in the affine function
-data AFFTerm = AFNConst | AFNVar Id
--- affine function maps terms to their respective coefficients.
-data AFF = AFN (AFFTerm -> LiftedLattice Int)
 
 -- NOTE: this is *not enough*. Our abstract domain should contain *piecewise*
 -- affine functions, so that we can build up loops in stages. Our acceleration
