@@ -819,39 +819,40 @@ program2 = (stmtBuild . stmtSequence $ [
   assign "beta" ("x" +. EInt (-5))],
  OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
 
-p :: Stmt
-p = fst program
+-- Program on which main runs
+pcur :: Stmt
+pcur = fst program
 
 
-pToOpaqify :: OpaqueVals
-pToOpaqify = snd program
+curToOpaqify :: OpaqueVals
+curToOpaqify = snd program
 
-pcsemInt :: CSem Int
-pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p (initCollectingSem p)
+curCSemInt :: CSem Int
+curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
 
 
-pcsemSym :: CSem Sym
-pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p (initCollectingSem p)
+curCSemSym :: CSem Sym
+curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
 
-pabs1 :: Id2LoopFn Int
-pabs1 = alphacsem p pcsemInt
+curAbs1 :: Id2LoopFn Int
+curAbs1 = alphacsem pcur curCSemInt
 
 main :: IO ()
 main = do
     putStrLn "***program***"
-    putDocW 80 (pretty p)
+    putDocW 80 (pretty pcur)
     putStrLn ""
     
     putStrLn "***program output***"
-    let outenv =  (stmtExec p) envBegin
+    let outenv =  (stmtExec pcur) envBegin
     print outenv
 
 
     putStrLn "***collecting semantics (concrete):***"
-    forM_  (S.toList pcsemInt) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+    forM_  (S.toList curCSemInt) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
 
 
     putStrLn "***collecting semantics (symbol):***"
-    forM_  (S.toList pcsemSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
+    forM_  (S.toList curCSemSym) (\m -> (putStr . pc2csemenvShow $ m) >> putStrLn "---")
 
     putStrLn "***Abstract semantics 1: concrete loop functions***"
