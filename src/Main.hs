@@ -627,8 +627,8 @@ symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
 
 
 instance Show Sym where
-  show (SymVal val) = "sym-" ++ show val
-  show (SymSym id) = "sym-" ++ show id
+  show (SymVal val) = show val
+  show (SymSym id) = show id
   show (SymBinop op sym sym') = 
    "(" ++ show op ++ " " ++ show sym ++ " " ++ show sym' ++ ")"
 
