@@ -126,20 +126,13 @@ insert :: Ord k => k -> v -> SemiMeetMap k v -> SemiMeetMap k v
 insert k v (LM m) = LM $ M.insert k v m
 
 -- pointwise produce of two lattice maps
--- *NOTE: only contains a value if both the first and second map have a value
--- for it.
--- *TODO: this is currently borked, in that if EITHER v or w are Top, the full
--- thing becomes top. Fix this next.
-lmproduct :: Ord k => SemiMeetMap k v -> SemiMeetMap k w -> SemiMeetMap k (v, w)
-lmproduct (LM m) (LM m') = undefined
---  let
---    missingm' = M.dropMissing
---    missingm =  M.dropMissing
---    merger = M.zipWithMatched (\k tx ty -> case (tx, ty) of
---                                                (TL x, TL y) -> TL (x, y)
---                                                _ -> TLTop)
--- in LM $ M.merge missingm' missingm merger m m'
-lmproduct _ _ = error "undefined so far"
+-- If a value is missing in either lattice, put a bottom in its place
+lmproduct :: (SemiMeet v, SemiMeet w, Ord k) => SemiMeetMap k v -> SemiMeetMap k w -> SemiMeetMap k (v, w)
+lmproduct (LM m) (LM m') = let
+  missingm' = M.mapMissing (\k w -> bottom)
+  missingm =  M.mapMissing (\k v -> bottom)
+  merger = M.zipWithMatched (\k tx ty -> (tx, ty))
+  in LM $ M.merge missingm' missingm merger m m'
 
 adjust :: Ord k => k -> (v -> v) -> SemiMeetMap k v -> SemiMeetMap k v
 adjust k f (LM m) = LM $ M.adjust f k m
@@ -661,12 +654,22 @@ instance Pretty Sym where
 -- which the symbolic domain gets stuck on, while still being able to collect
 -- symbolic information, which the concrete domain cannot do.
 
--- stmtSingleStepProduct :: 
---   (Stmt -> CSemEnv v -> CSemEnv v) 
---   -> (Stmt -> CSemEnv w -> CSemEnv w)
---   -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
--- stmtSingleStepProduct f1 f2 s env = 
---   lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
+stmtSingleStepProduct :: (SemiMeet v, SemiMeet w) => 
+  (Stmt -> CSemEnv v -> CSemEnv v) 
+  -> (Stmt -> CSemEnv w -> CSemEnv w)
+  -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
+stmtSingleStepProduct f1 f2 s env = 
+  lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
+
+
+concreteSymbolicCSem :: OpaqueVals -> CSemDefn (LiftedLattice Int, LiftedLattice Sym)
+concreteSymbolicCSem opaque = CSemDefn valueTrueA stmtSingleStepA where
+  valueTrueA :: (LiftedLattice Int, LiftedLattice Sym) -> Bool
+  valueTrueA (lli, _) = csemDefnValIsTrue concreteCSem lli
+  stmtSingleStepA = 
+    stmtSingleStepProduct 
+     (csemDefnStmtSingleStep concreteCSem)
+     (csemDefnStmtSingleStep (symbolCSem opaque))
 
 -- Abstract domain 3 - presburger functions
 -- ========================================
