@@ -231,9 +231,9 @@ This allows us to talk about the things we do:
 defines an abstract operator `f#`. Given this, can we _recover_ `alpha` and `gamma`?
 If not, how are the two approaches related? **Answer:** See [Antoine Mine's thesis](https://www-apr.lip6.fr/~mine/these/these-color.pdf),
 where he defines three styles of AI:
-	- 1) `alpha, gamma` based AI.
-	- 2) defining abstract operators `f#` for every `f` with a given `gamma`.
-	- 3) `gamma`, _partial_ `alpha` based AI.
+	- `alpha, gamma` based AI.
+	- defining abstract operators `f#` for every `f` with a given `gamma`.
+	- `gamma`, _partial_ `alpha` based AI.
 
 This is confusing, why are they all called AI..?
 
