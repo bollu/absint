@@ -787,8 +787,8 @@ while idcond loopbuilder = do
 (<.) a b = EBinop Lt (toexpr a) (toexpr b)
 
 
-program :: Stmt
-program = stmtBuild . stmtSequence $ [
+program :: (Stmt, OpaqueVals)
+program = (stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
   assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
@@ -796,10 +796,11 @@ program = stmtBuild . stmtSequence $ [
       assign "x" ("x" +.  EInt 1),
       assign "x_lt_5" ("x" <. EInt 5)
   ],
-  assign "beta" ("x" +. EInt (-5))]
+  assign "beta" ("x" +. EInt (-5))],
+ OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
 
-program2 :: Stmt
-program2 = stmtBuild . stmtSequence $ [
+program2 :: (Stmt, OpaqueVals)
+program2 = (stmtBuild . stmtSequence $ [
   assign "x" (EInt 1),
   assign "x_lt_5" ("x" <. EInt 5),
   while "x_lt_5" $ stmtSequence $ [
@@ -815,16 +816,19 @@ program2 = stmtBuild . stmtSequence $ [
     ],
     assign "alpha" ("y" +. EInt (-12))
   ],
-  assign "beta" ("x" +. EInt (-5))]
+  assign "beta" ("x" +. EInt (-5))],
+ OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
 
 p :: Stmt
-p = program
+p = fst program
+
+
+pToOpaqify :: OpaqueVals
+pToOpaqify = snd program
 
 pcsemInt :: CSem Int
 pcsemInt = stmtCollectFix concreteCSem (PC (-1)) p (initCollectingSem p)
 
-pToOpaqify :: OpaqueVals
-pToOpaqify = OpaqueVals (M.fromList $ [(PC 4, [Id "x"])])
 
 pcsemSym :: CSem Sym
 pcsemSym = stmtCollectFix (symbolCSem pToOpaqify) (PC (-1)) p (initCollectingSem p)
