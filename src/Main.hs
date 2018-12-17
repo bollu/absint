@@ -392,8 +392,16 @@ initCollectingSem p = let
 collectingSemPropogate :: Ord v => PC -> PC -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
 collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
 
+-- filter the collecting semantics at a given PC with a predicate over the 
+-- environment at that PC
+collectingSemFilter :: Ord v => PC -> (CSemEnv v -> Bool) -> CSem v -> CSem v
+collectingSemFilter pc f csem = 
+  S.filter (\s -> f ((s M.! pc))) csem
+
+
 -- affect the statement, by borrowing the PC2Env from the given PC
 stmtCollect :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
+
 
 -- flow order:
 -- 1. pre -> entry,  backedge -> entry
@@ -401,7 +409,8 @@ stmtCollect :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem
 -- 4. loop final PC -> exit block
 stmtCollect csemDefn pcold (While pc condid loop pc') csem =
   let -- filter_allowed_iter :: CSem v -> CSem v
-      filter_allowed_iter csem = S.filter (\s -> csemDefnValIsTrue csemDefn ((s M.! pc) !!! condid)) csem
+      filter_allowed_iter csem = 
+        collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) csem
   
       -- pre_to_entry :: CSem v -> CSem v
       pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
@@ -430,6 +439,22 @@ stmtCollect csemDefn pcold (While pc condid loop pc') csem =
 
    in (fold (repeatTillFix f csem))
 
+-- Do we need to do something special for if?
+stmtCollect csemDefn pcold (If pc condid s s') csem = 
+  let
+    filter_then csem = 
+      collectingSemFilter pcold (csemDefnValIsTrue csemDefn . (!!! condid)) csem
+    
+    filter_else csem = 
+      collectingSemFilter pcold (not . csemDefnValIsTrue csemDefn . (!!! condid)) csem
+
+    then_to_exit csem = stmtCollect csemDefn pcold s (filter_then csem)
+
+    else_to_exit csem = stmtCollect csemDefn pcold s' (filter_else csem)
+
+  in 
+    then_to_exit csem `S.union` else_to_exit csem
+
 stmtCollect csemDefn pc (Seq s1 s2) csem =
   let csem' = stmtCollect csemDefn pc s1 csem
       pc' = stmtPCEnd s1 in
@@ -437,11 +462,13 @@ stmtCollect csemDefn pc (Seq s1 s2) csem =
 
 -- TODO: merge code of Assign, Skip?
 stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
-  (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
+  (collectingSemPropogate pcold (stmtPCEnd s) (csemDefnStmtSingleStep csemDefn s)) $ csem
 
 
 stmtCollect csemDefn pcold s@(Skip _) csem = 
-  (collectingSemPropogate pcold (stmtPCStart s) (csemDefnStmtSingleStep csemDefn s)) $ csem
+  (collectingSemPropogate pcold (stmtPCEnd s) (csemDefnStmtSingleStep csemDefn s)) $ csem
+
+
 
 -- Fixpoint of stmtCollect
 stmtCollectFix :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
@@ -918,9 +945,19 @@ if_ idcond thenbuilder elsebuilder = do
 (<.) a b = EBinop Lt (toexpr a) (toexpr b)
 
 pIf :: (Stmt, OpaqueVals) 
-pIf = (stmtBuild . stmtSequence $ [
+pIf =
+  let if1_then = stmtSequence $ [
+        assign "y" (EInt 1)]
+
+      if1_else =  stmtSequence $ [
+        assign "y" (EInt 3) ]
+  
+  in (stmtBuild . stmtSequence $ [
   skip,
-  if_ "x_lt_10" skip skip], OpaqueVals mempty)
+  assign "x" (EInt 5),
+  assign "x_lt_10" ("x" <. EInt 10),
+  if_ "x_lt_10" if1_then if1_else,
+  assign "z" ("y" +. EInt 1 )], OpaqueVals mempty)
 
 pLoop :: (Stmt, OpaqueVals)
 pLoop = (stmtBuild . stmtSequence $ [
@@ -967,10 +1004,10 @@ pTwoNestedLoop = (stmtBuild . stmtSequence $ [
 -- CHOOSE YOUR PROGRAM HERE
 -- ========================
 pcur :: Stmt
-pcur = fst pTwoNestedLoop
+pcur = fst pIf
 
 curToOpaqify :: OpaqueVals
-curToOpaqify = snd pTwoNestedLoop
+curToOpaqify = snd pIf
 
 -- Derived properties of the chosen program
 -- ========================================
@@ -1059,22 +1096,13 @@ main = do
 
     putStrLn "***sampling program using the abstraction:***"
 
-    let idsToLookup = ["x_lt_5_next", "x", "x_next", 
-                       "y", "y_next", "y_lt_10", "y_lt_10_next", "y_plus_x",
-                       "y_plus_x_next"]
+    let idsToLookup = ["x", "x_lt_5", "y", "z"]
+    -- let idsToLookup = ["x_lt_5_next", "x", "x_next", 
+    --                    "y", "y_next", "y_lt_10", "y_lt_10_next", "y_plus_x",
+    --                    "y_plus_x_next"]
     forM_ idsToLookup 
       (\id -> (putDocW 80 $ 
                 pretty id <+> 
                 pretty "=" <+> 
                 pretty (lookupAbsAtVals (Id id) [])) >> putStrLn "")
-    -- putStrLn ""
-    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "x") []
-    -- putStrLn ""
-    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "x_next") []
-    -- putStrLn ""
-    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "x_next") []
-    -- putStrLn ""
-    -- putDocW 80 . pretty $ lookupAbsAtVals (Id "beta") []
-    -- putStrLn ""
-
 
