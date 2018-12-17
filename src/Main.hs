@@ -252,7 +252,7 @@ pcinit = PC 0
 
 -- Statements of the language
 data Stmt = Assign !PC !Id !Expr
-            | If !PC !Id !Stmt !Stmt -- branch value id, true branch, false branch
+            | If !PC !Id !Stmt !Stmt !PC -- branch value id, true branch, false branch
             | While !PC !Id !Stmt !PC -- while cond stmt, pc of entry, pc of exit
             | Seq !Stmt !Stmt
             | Skip !PC deriving(Eq)
@@ -260,7 +260,7 @@ data Stmt = Assign !PC !Id !Expr
 -- Return the PC of the first statement in the block
 stmtPCStart :: Stmt -> PC
 stmtPCStart (Assign pc _ _)  = pc
-stmtPCStart (If pc _ _ _) = pc
+stmtPCStart (If pc _ _ _ _) = pc
 stmtPCStart (While pc _ _ _) = pc
 stmtPCStart (Seq s1 _) = stmtPCStart s1
 stmtPCStart (Skip pc) = pc
@@ -269,21 +269,27 @@ stmtPCStart (Skip pc) = pc
 -- Return the PC of the last statement in the block
 stmtPCEnd :: Stmt -> PC
 stmtPCEnd (Assign pc _ _)  = pc
-stmtPCEnd (If pc _ _ _) = pc
-stmtPCEnd (While _ _ _ pc) = pc
+stmtPCEnd (If _ _ _ _ pc') = pc'
+stmtPCEnd (While _ _ _ pc') = pc'
 stmtPCEnd (Seq _ s2) = stmtPCEnd s2
 stmtPCEnd (Skip pc) = pc
 
 instance Show Stmt where
   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
-  show (If pc cond t e) = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")"
+  show (If pc cond t e pc') = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")" ++ show pc' ++ ":END IF"
   show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
   show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
   show (Skip pc) = show pc ++ ":" ++ "done"
 
 instance Pretty Stmt where
   pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
-  pretty s@(If pc cond t e) = pretty pc <+> (parens $ pretty "if" <+> pretty cond <+> indent 1 (line <> pretty t <> line <> pretty e))
+  pretty s@(If pc cond t e pc') = 
+    pretty pc <+> 
+      (parens $ pretty "if" <+> 
+                pretty cond <+> 
+                indent 1 (line <> pretty t <> 
+                          line <> pretty e <>
+                          line <> pretty pc' <+> pretty "ENDIF"))
   pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
   pretty (While pc cond s pc') = 
     pretty pc <+> 
@@ -323,7 +329,7 @@ exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
 -- Semantics of a Stmt, taking a single step through the execution.
 stmtSingleStep :: Stmt -> Env -> Env
 stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
-stmtSingleStep (If _ cid s s') env = 
+stmtSingleStep (If _ cid s s' _) env = 
   if (env M.! cid) == 1
   then stmtSingleStep s env
   else stmtSingleStep s' env
@@ -338,7 +344,7 @@ stmtSingleStep (Skip _) env = env
   -- Execute the statement with respect to the semantics
 stmtExec :: Stmt -> Env -> Env
 stmtExec (Assign _ id e) env = M.insert id (exprEval e env) env
-stmtExec (If _ cid s s') env = 
+stmtExec (If _ cid s s' _) env = 
   if (env M.! cid) == 1
   then stmtExec s env
   else stmtExec s' env
@@ -440,17 +446,28 @@ stmtCollect csemDefn pcold (While pc condid loop pc') csem =
    in (fold (repeatTillFix f csem))
 
 -- Do we need to do something special for if?
-stmtCollect csemDefn pcold (If pc condid s s') csem = 
+-- Order: pre -> entry
+-- entry -> then, else
+-- then, else -> exit
+stmtCollect csemDefn pcold (If pc condid s s' pc') csem = 
   let
+    pre_to_entry csem = collectingSemPropogate pcold pc id csem
+
     filter_then csem = 
-      collectingSemFilter pcold (csemDefnValIsTrue csemDefn . (!!! condid)) csem
+      collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
     
     filter_else csem = 
-      collectingSemFilter pcold (not . csemDefnValIsTrue csemDefn . (!!! condid)) csem
+      collectingSemFilter pc (not . csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
 
-    then_to_exit csem = stmtCollect csemDefn pcold s (filter_then csem)
+    entry_to_then csem = stmtCollect csemDefn pc s (filter_then csem)
 
-    else_to_exit csem = stmtCollect csemDefn pcold s' (filter_else csem)
+    entry_to_else csem = stmtCollect csemDefn pc s' (filter_else csem)
+
+    then_to_exit csem = 
+      collectingSemPropogate (stmtPCEnd s) pc' id  (entry_to_then csem)
+
+    else_to_exit csem = 
+      collectingSemPropogate (stmtPCEnd s') pc' id (entry_to_else csem)
 
   in 
     then_to_exit csem `S.union` else_to_exit csem
@@ -532,7 +549,7 @@ idFindAssign id s@(Assign _ aid _) =
      else Nothing
 idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
 idFindAssign id while@(While _ condid sinner _)  = idFindAssign id sinner
-idFindAssign id (If _ _ s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
+idFindAssign id (If _ _ s1 s2 _) = idFindAssign id s1 <|> idFindAssign id s2
 idFindAssign id (Skip _) = Nothing
 
 -- Sample the concrete semantics:
@@ -588,7 +605,7 @@ concreteCSem = CSemDefn valTrueA stmtSingleStepA
       
       stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice Int) -> CSemEnv (LiftedLattice Int)
       stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
-      stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL 1
+      stmtSingleStepA (If _ cid s s' _) env = if (env !!! cid) == LL 1
                                        then stmtSingleStepA s env
                                        else stmtSingleStepA s' env
       stmtSingleStepA w@(While _ cid s _) env =
@@ -762,7 +779,7 @@ symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
     -- raw abstract semantics
     stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
     stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
-    stmtSingleStepA (If _ cid s s') env = if (env !!! cid) == LL (symValConst 1)
+    stmtSingleStepA (If _ cid s s' _) env = if (env !!! cid) == LL (symValConst 1)
                                      then stmtSingleStepA s env
                                      else stmtSingleStepA s' env
     stmtSingleStepA w@(While pc cid s _) env = error "undefined, never executed"
@@ -932,8 +949,8 @@ if_ idcond thenbuilder elsebuilder = do
   sbPCIncr
   then_ <- thenbuilder
   else_ <- elsebuilder
-  sbPCIncr
-  return (If pc (Id idcond) then_ else_)
+  pc' <- sbPCIncr
+  return (If pc (Id idcond) then_ else_ pc')
 
 
   
