@@ -987,7 +987,7 @@ pLoop = (stmtBuild . stmtSequence $ [
       assign "x" "x_next",
       assign "x_lt_5" "x_lt_5_next"
   ],
-  assign "beta" ("x" +. EInt (-5))],
+  assign "z" ("x" +. EInt (-5))],
  OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
 
 pTwoNestedLoop :: (Stmt, OpaqueVals)
@@ -1021,10 +1021,10 @@ pTwoNestedLoop = (stmtBuild . stmtSequence $ [
 -- CHOOSE YOUR PROGRAM HERE
 -- ========================
 pcur :: Stmt
-pcur = fst pIf
+pcur = fst pLoop
 
 curToOpaqify :: OpaqueVals
-curToOpaqify = snd pIf
+curToOpaqify = snd pLoop
 
 -- Derived properties of the chosen program
 -- ========================================
@@ -1085,8 +1085,8 @@ testisl = do
 
 main :: IO ()
 main = do
-    putStrLn "***ISL test***"
-    testisl
+  -- putStrLn "***ISL test***"
+  --   testisl
 
     putStrLn "***program***"
     putDocW 80 (pretty pcur)
@@ -1096,27 +1096,14 @@ main = do
     let outenv =  (stmtExec pcur) envBegin
     print outenv
 
-{-
-
-
-    putStrLn "***collecting semantics (concrete):***"
-    forM_  (S.toList curCSemInt) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
-
-
-    putStrLn "***collecting semantics (symbol):***"
-    forM_  (S.toList curCSemSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
-    -}
-
 
     putStrLn "***collecting semantics (concrete x symbol):***"
     forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
     putStrLn "***sampling program using the abstraction:***"
 
-    let idsToLookup = ["x", "x_lt_5", "y", "z"]
-    -- let idsToLookup = ["x_lt_5_next", "x", "x_next", 
-    --                    "y", "y_next", "y_lt_10", "y_lt_10_next", "y_plus_x",
-    --                    "y_plus_x_next"]
+    -- let idsToLookup = ["x", "x_lt_5", "y", "z"]
+    let idsToLookup = ["x_lt_5", "x_lt_5_next", "x", "x_next", "z"]
     forM_ idsToLookup 
       (\id -> (putDocW 80 $ 
                 pretty id <+> 

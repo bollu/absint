@@ -121,79 +121,311 @@ of a potentially infinite program.
 However, this forms a useful stepping stone for semantics that is actually useful to us.
 
 ### Symbolic collecting semantics
-We now define a family of collecting semantics, that is parametrized by an _opaque list_.
-These collecting semantics evaluate concretely, except when they are told to switch to
-symbolic variants of variables, at which point we perform symbolic execution.
-
-For example, the same program as shown above parametrized by
-
-```hs
--- From PC 4, treat the variable "x" as a symbol
--- We choose `PC 4` since that is where the loop starts
-pToOpaqify :: OpaqueVals                                                                                                                              
-pToOpaqify = OpaqueVals (M.fromList $ [(PC 4, [Id "x"])])                                                                                             
-```
-
-provides the collecting semantics:
+We augment the collecting semantics with a symbolic collecting semantics.
+In the sample evaluation, we can see both the concrete value, as well as the
+symbolic value. Note that these are collecting semantics, so we see the
+collection of all possible environments.
 
 ```
-pc:-1 -> []
-pc:0 -> []
-pc:1 -> []
-pc:2 -> []
-pc:3 -> []
-pc:4 -> []
-pc:5 -> []
-pc:6 -> []
-pc:7 -> []
-pc:8 -> []
-pc:9 -> []
+***program***
+pc:1 (= x 1)
+pc:2 (= x_lt_5 (x <. 5))
+pc:3 ((while x_lt_5  
+                     pc:4 Skip
+                     pc:5 (= x_next (x +. 1))
+                     pc:6 (= x_lt_5_next (x <. 5))
+                     pc:7 (= x x_next)
+                     pc:8 (= x_lt_5 x_lt_5_next)
+                     pc:9 ENDWHILE)
+pc:10 (= z (x +. -5))
+***program output***
+fromList [(id:x,6),(id:x_lt_5,0),(id:x_lt_5_next,0),(id:x_next,6),(id:z,1)]
+***collecting semantics (concrete x symbol):***
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  {}
+|pc:2 >>  {}
+|pc:3 >>  {}
+|pc:4 >>  {}
+|pc:5 >>  {}
+|pc:6 >>  {}
+|pc:7 >>  {}
+|pc:8 >>  {}
+|pc:9 >>  {}
+|pc:10 >>  {}
+|pc:11 >>  {}
 ---
-pc:-1 -> []
-pc:0 -> []
-pc:1 -> [(id:x,sym-1)]
-pc:2 -> [(id:x,sym-1),(id:x_lt_5,sym-1)]
-pc:3 -> []
-pc:4 -> []
-pc:5 -> []
-pc:6 -> []
-pc:7 -> []
-pc:8 -> []
-pc:9 -> []
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  |x >>  (1,  1)
+          
+|pc:2 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:3 >>  {}
+|pc:4 >>  {}
+|pc:5 >>  {}
+|pc:6 >>  {}
+|pc:7 >>  {}
+|pc:8 >>  {}
+|pc:9 >>  {}
+|pc:10 >>  |z >>  (_|_, _|_)
+           
+|pc:11 >>  {}
 ---
-pc:-1 -> []
-pc:0 -> []
-pc:1 -> [(id:x,sym-1)]
-pc:2 -> [(id:x,sym-1),(id:x_lt_5,sym-1)]
-pc:3 -> [(id:x,sym-1),(id:x_lt_5,sym-1)]
-pc:4 -> [(id:x,sym-id:x),(id:x_lt_5,sym-1)]
-pc:5 -> [(id:x,(op:+ sym-id:x sym-1)),(id:x_lt_5,sym-1)]
-pc:6 -> [(id:x,(op:+ sym-id:x sym-1)),(id:x_lt_5,(op:< (op:+ sym-id:x sym-1) sym-5))]
-pc:7 -> [(id:x,(op:+ sym-id:x sym-1)),(id:x_lt_5,(op:< (op:+ sym-id:x sym-1) sym-5))]
-pc:8 -> [(id:x,(op:+ sym-id:x sym-1)),(id:x_lt_5,(op:< (op:+ sym-id:x sym-1) sym-5)),
-          (id:z,(op:+ (op:+ sym-id:x sym-1) sym--5))]
-pc:9 -> []
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  |x >>  (1,  1)
+          
+|pc:2 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:3 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:4 >>  |x >>  (1, x )
+          |x_lt_5 >>  (1,  1)
+          
+|pc:5 >>  |x >>  (1, x )
+          |x_lt_5 >>  (1,  1)
+          |x_next >>  (2, x + 1)
+          
+|pc:6 >>  |x >>  (1, x )
+          |x_lt_5 >>  (1,  1)
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (2, x + 1)
+          
+|pc:7 >>  |x >>  (2, x + 1)
+          |x_lt_5 >>  (1,  1)
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (2, x + 1)
+          
+|pc:8 >>  |x >>  (2, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (2, x + 1)
+          
+|pc:9 >>  |x >>  (2, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (2, x + 1)
+          
+|pc:10 >>  |x >>  (2, x + 1)
+           |x_lt_5 >>  (1, (x  <.  5))
+           |x_lt_5_next >>  (1, (x  <.  5))
+           |x_next >>  (2, x + 1)
+           |z >>  (-3, x + -4)
+           
+|pc:11 >>  {}
 ---
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  |x >>  (1,  1)
+          
+|pc:2 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:3 >>  |x >>  (2, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (2, x + 1)
+          
+|pc:4 >>  |x >>  (2, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (2, x + 1)
+          
+|pc:5 >>  |x >>  (2, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:6 >>  |x >>  (2, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:7 >>  |x >>  (3, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:8 >>  |x >>  (3, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:9 >>  |x >>  (3, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:10 >>  |x >>  (3, x + 1)
+           |x_lt_5 >>  (1, (x  <.  5))
+           |x_lt_5_next >>  (1, (x  <.  5))
+           |x_next >>  (3, x + 1)
+           |z >>  (-2, x + -4)
+           
+|pc:11 >>  {}
+---
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  |x >>  (1,  1)
+          
+|pc:2 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:3 >>  |x >>  (3, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:4 >>  |x >>  (3, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (3, x + 1)
+          
+|pc:5 >>  |x >>  (3, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:6 >>  |x >>  (3, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:7 >>  |x >>  (4, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:8 >>  |x >>  (4, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:9 >>  |x >>  (4, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:10 >>  |x >>  (4, x + 1)
+           |x_lt_5 >>  (1, (x  <.  5))
+           |x_lt_5_next >>  (1, (x  <.  5))
+           |x_next >>  (4, x + 1)
+           |z >>  (-1, x + -4)
+           
+|pc:11 >>  {}
+---
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  |x >>  (1,  1)
+          
+|pc:2 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:3 >>  |x >>  (4, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:4 >>  |x >>  (4, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (4, x + 1)
+          
+|pc:5 >>  |x >>  (4, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:6 >>  |x >>  (4, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:7 >>  |x >>  (5, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:8 >>  |x >>  (5, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:9 >>  |x >>  (5, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:10 >>  |x >>  (5, x + 1)
+           |x_lt_5 >>  (1, (x  <.  5))
+           |x_lt_5_next >>  (1, (x  <.  5))
+           |x_next >>  (5, x + 1)
+           |z >>  (0, x + -4)
+           
+|pc:11 >>  {}
+---
+|pc:-1 >>  {}
+|pc:0 >>  {}
+|pc:1 >>  |x >>  (1,  1)
+          
+|pc:2 >>  |x >>  (1,  1)
+          |x_lt_5 >>  (1,  1)
+          
+|pc:3 >>  |x >>  (5, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:4 >>  |x >>  (5, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (5, x + 1)
+          
+|pc:5 >>  |x >>  (5, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (1, (x  <.  5))
+          |x_next >>  (6, x + 1)
+          
+|pc:6 >>  |x >>  (5, x )
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (0, (x  <.  5))
+          |x_next >>  (6, x + 1)
+          
+|pc:7 >>  |x >>  (6, x + 1)
+          |x_lt_5 >>  (1, (x  <.  5))
+          |x_lt_5_next >>  (0, (x  <.  5))
+          |x_next >>  (6, x + 1)
+          
+|pc:8 >>  |x >>  (6, x + 1)
+          |x_lt_5 >>  (0, (x  <.  5))
+          |x_lt_5_next >>  (0, (x  <.  5))
+          |x_next >>  (6, x + 1)
+          
+|pc:9 >>  |x >>  (6, x + 1)
+          |x_lt_5 >>  (0, (x  <.  5))
+          |x_lt_5_next >>  (0, (x  <.  5))
+          |x_next >>  (6, x + 1)
+          
+|pc:10 >>  |x >>  (6, x + 1)
+           |x_lt_5 >>  (0, (x  <.  5))
+           |x_lt_5_next >>  (0, (x  <.  5))
+           |x_next >>  (6, x + 1)
+           |z >>  (1, x + -4)
+           
+|pc:11 >>  {}
+---
+***sampling program using the abstraction:***
+x_lt_5 = (1,  1)
+x_lt_5_next = (T, (x  <.  5))
+x = (1,  1)
+x_next = (T, x + 1)
+z = (T, x + -4)
 ```
 
-We reach fixpoint quickly. In particular, we are only able to execute one iteration of the loop,
-since we are unable to evaluate the condition `x_lt_5`, which is now _symbolic_:
-```
-pc:8 -> [..., (id:x_lt_5,(op:< (op:+ sym-id:x sym-1) sym-5)), ...]
-that is,
-x_lt_5 = x + 1 < 5
-```
-
-However, the upshot is that we now have a _symbolic_ representation of the value of `x` along the backedge:
-
-```
-pc:8 -> [(id:x,(op:+ sym-id:x sym-1)), ...]
-that is,
-x = x + 1
-```
-
-From this symbolic representation, we can _now perform abstract interpretation_ to keep the piecewise affine
-values.
 
 ### Open questions
 - Is this _sane_? While it is possibly "mathematically correct", 
