@@ -5,6 +5,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Main where
 import qualified Data.Map.Strict as M
+import qualified OrderedMap as OM
 import qualified Data.Map.Merge.Strict as M
 import qualified Data.Set as S
 import Data.List (intercalate, nub)
@@ -203,6 +204,7 @@ repeatTillFixDebug n f a =
 -- Program syntax
 -- ==============
 
+-- Identifiers
 newtype Id = Id String deriving(Eq, Ord)
 instance Show Id where
   show (Id s) = "id:" ++ s
@@ -221,7 +223,7 @@ instance Pretty Binop where
   pretty Lt = pretty "<."
 
 data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id
-  deriving(Eq)
+  deriving(Eq, Ord)
 
 instance Show Expr where
     show (EInt i) = show i
@@ -236,71 +238,144 @@ instance Pretty Expr where
   pretty (EBinop op e1 e2) = parens $  pretty e1 <+> pretty op <+> pretty e2
 
 
--- program counter, positioned *after* the ith instruction.
-data PC = PC { unPC :: !Int } deriving(Eq, Ord)
-instance Show PC where
-  show (PC pc) = "pc:" ++ show pc
+-- Program counter
+data Loc = Loc { unLoc :: !Int } deriving(Eq, Ord)
 
-instance Pretty PC where
+instance Show Loc where
+  show (Loc pc) = "loc:" ++ show pc
+
+instance Pretty Loc where
   pretty = pretty . show
 
-pcincr :: PC -> PC
-pcincr (PC i) = PC (i + 1)
+locincr :: Loc -> Loc
+locincr (Loc i) = Loc (i + 1)
 
-pcinit :: PC
-pcinit = PC 0
+pcinit :: Loc
+pcinit = Loc 0
+
+
+data BBId = BBId String deriving(Eq, Ord, Show)
+instance Pretty BBId where
+  pretty (BBId id) = pretty id
+
+-- Instructions
+data Inst = Assign !Loc !Id !Expr  deriving(Eq, Ord, Show)
+instance Pretty Inst where
+  pretty (Assign pc id expr) =
+    pretty pc <+> pretty id <+> equals <+> pretty expr
+
+data Phity = PhityLoop | PhityCond deriving(Eq, Ord, Show)
+
+instance Pretty Phity where
+  pretty PhityLoop = pretty "philoop"
+  pretty PhityCond = pretty "phicond"
+
+-- Phi nodes
+data Phi = Phi !Loc Phity Id (BBId, Id) (BBId, Id) deriving(Eq, Ord, Show)
+
+instance Pretty Phi where
+  pretty (Phi pc ty id l r) =
+    pretty pc <+> pretty "phi" <+> pretty ty <+> 
+      pretty id <+> equals <+> pretty l <+> pretty r
+
+-- Terminator instruction
+data Term = Br !Loc BBId 
+          | BrCond !Loc Id BBId BBId 
+          | Ret !Loc Id 
+          | Unreachable !Loc deriving(Eq, Ord)
+
+instance Pretty Term where
+  pretty (Br pc bbid) = pretty pc <+> pretty "br" <+> pretty bbid
+  pretty (BrCond pc cid bbidl bbidr) = 
+    pretty pc <+> pretty "brcond" <+> 
+      pretty cid <+> pretty bbidl <+> pretty bbidr
+  pretty (Ret loc e) = pretty loc <+> pretty "ret" <+> pretty e
+  pretty (Unreachable loc) = pretty loc <+> pretty "unreachable"
+
+data BB = BB BBId Loc [Phi] [Inst] Term deriving(Eq, Ord)
+
+-- Get the ID of the basic block
+bbGetId :: BB -> BBId
+bbGetId (BB id _ _ _ _ ) = id
+
+bbModifyInsts :: ([Inst] -> [Inst]) -> BB -> BB
+bbModifyInsts f (BB id loc phis insts term) = 
+  BB id loc phis (f insts) term 
+
+bbModifyPhis :: ([Phi] -> [Phi]) -> BB -> BB
+bbModifyPhis f (BB id loc phis insts term) = 
+  BB id loc (f phis) insts term
+
+bbModifyTerm :: (Term -> Term) -> BB -> BB
+bbModifyTerm f (BB id loc phis insts term) = 
+  BB id loc phis insts (f term)
+
+instance Pretty BB where
+  pretty (BB bbid bbpc phis is term) = 
+    pretty bbpc <+> pretty bbid <+>  indent 1 
+      (line <> vcat (map pretty phis) <>
+      line <> vcat (map pretty is) <>
+      line <> pretty term)
+
+
+-- Program is a collection of basic blocks. First basic block is the
+-- entry block (block that gets executed on startup
+newtype Program = Program [BB] deriving(Eq)
+
+instance Pretty Program where
+  pretty (Program bbs) = vcat $ map pretty bbs
 
 -- Statements of the language
-data Stmt = Assign !PC !Id !Expr
-            | If !PC !Id !Stmt !Stmt !PC -- branch value id, true branch, false branch
-            | While !PC !Id !Stmt !PC -- while cond stmt, pc of entry, pc of exit
-            | Seq !Stmt !Stmt
-            | Skip !PC deriving(Eq)
-
--- Return the PC of the first statement in the block
-stmtPCStart :: Stmt -> PC
-stmtPCStart (Assign pc _ _)  = pc
-stmtPCStart (If pc _ _ _ _) = pc
-stmtPCStart (While pc _ _ _) = pc
-stmtPCStart (Seq s1 _) = stmtPCStart s1
-stmtPCStart (Skip pc) = pc
-
-
--- Return the PC of the last statement in the block
-stmtPCEnd :: Stmt -> PC
-stmtPCEnd (Assign pc _ _)  = pc
-stmtPCEnd (If _ _ _ _ pc') = pc'
-stmtPCEnd (While _ _ _ pc') = pc'
-stmtPCEnd (Seq _ s2) = stmtPCEnd s2
-stmtPCEnd (Skip pc) = pc
-
-instance Show Stmt where
-  show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
-  show (If pc cond t e pc') = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")" ++ show pc' ++ ":END IF"
-  show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
-  show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
-  show (Skip pc) = show pc ++ ":" ++ "done"
-
-instance Pretty Stmt where
-  pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
-  pretty s@(If pc cond t e pc') = 
-    pretty pc <+> 
-      (parens $ pretty "if" <+> 
-                pretty cond <+> 
-                indent 1 (line <> pretty t <> 
-                          line <> pretty e <>
-                          line <> pretty pc' <+> pretty "ENDIF"))
-  pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
-  pretty (While pc cond s pc') = 
-    pretty pc <+> 
-      (parens $ 
-        pretty "(while" <+> 
-          pretty cond <+> 
-            indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
-  pretty (Skip pc) = pretty pc <+> pretty "Skip"
+-- data Stmt = Assign !Loc !Id !Expr
+--             | If !Loc !Id !Stmt !Stmt !Loc -- branch value id, true branch, false branch
+--             | While !Loc !Id !Stmt !Loc -- while cond stmt, pc of entry, pc of exit
+--             | Seq !Stmt !Stmt
+--             | Skip !Loc deriving(Eq)
+-- 
+-- -- Return the Loc of the first statement in the block
+-- stmtLocStart :: Stmt -> Loc
+-- stmtLocStart (Assign pc _ _)  = pc
+-- stmtLocStart (If pc _ _ _ _) = pc
+-- stmtLocStart (While pc _ _ _) = pc
+-- stmtLocStart (Seq s1 _) = stmtLocStart s1
+-- stmtLocStart (Skip pc) = pc
+-- 
+-- 
+-- -- Return the Loc of the last statement in the block
+-- stmtLocEnd :: Stmt -> Loc
+-- stmtLocEnd (Assign pc _ _)  = pc
+-- stmtLocEnd (If _ _ _ _ pc') = pc'
+-- stmtLocEnd (While _ _ _ pc') = pc'
+-- stmtLocEnd (Seq _ s2) = stmtLocEnd s2
+-- stmtLocEnd (Skip pc) = pc
+-- 
+-- instance Show Stmt where
+--   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
+--   show (If pc cond t e pc') = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")" ++ show pc' ++ ":END IF"
+--   show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
+--   show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
+--   show (Skip pc) = show pc ++ ":" ++ "done"
+-- 
+-- instance Pretty Stmt where
+--   pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
+--   pretty s@(If pc cond t e pc') = 
+--     pretty pc <+> 
+--       (parens $ pretty "if" <+> 
+--                 pretty cond <+> 
+--                 indent 1 (line <> pretty t <> 
+--                           line <> pretty e <>
+--                           line <> pretty pc' <+> pretty "ENDIF"))
+--   pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
+--   pretty (While pc cond s pc') = 
+--     pretty pc <+> 
+--       (parens $ 
+--         pretty "(while" <+> 
+--           pretty cond <+> 
+--             indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
+--   pretty (Skip pc) = pretty pc <+> pretty "Skip"
 
 -- A Program is a top level statement
-type Program = Stmt 
+-- type Program = Stmt 
 
 
 
@@ -308,8 +383,15 @@ type Program = Stmt
 -- Language semantics
 -- ==================
 
+
+type BBId2Loc = M.Map BBId Loc
+
+-- current basic block and location within the basic block being executed
+data PC = PCEntry | PCNext BBId BBId | PCRet Int deriving(Eq, Ord)
+
 -- Environments of the language
 type Env = (M.Map Id Int)
+
 
 -- Initial env
 envBegin :: Env
@@ -325,36 +407,100 @@ exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
              Add -> (+)
              Lt -> (\a b -> if a < b then 1 else 0)
 
+-- Execute a phi node
+phiExec ::  BBId -- previous BB ID
+        -> Phi  -- Phi node to execute
+        -> Env -> Env
+phiExec prevbbid p@(Phi _ _ id (bbidl, idl) (bbidr, idr)) env = 
+  if prevbbid == bbidl 
+     then M.insert id (env M.! idl) env
+     else if prevbbid == bbidr 
+     then M.insert id (env M.! idr) env
+     else error $ "incorrect phi: " ++ show p
+
+
+
+-- Execute an instruction
+instExec :: Inst -> Env -> Env
+instExec (Assign _ id e) env = M.insert id (exprEval e env) env
+
+-- Execute a terminator instruction
+termExec :: Term 
+         -> BBId  -- ID of the current basic block
+         -> Env  -- environment 
+         -> PC
+termExec (Br _ bbid') bbid env = PCNext bbid bbid'
+
+termExec (BrCond _ condid bbidl bbidr) bbid env = 
+  let bbid' =  (if env M.! condid == 1 then  bbidl else bbidr)
+   in PCNext bbid bbid'
+
+termExec (Ret _ retid) _ env = PCRet (env M.! retid)
+
+
+-- Execute a basic block
+bbExec :: BB  -- current basic block
+       -> Maybe BBId  -- BB id of previous basic block
+       -> Env -> (Env, PC)
+bbExec (BB bbid _ phis insts term) Nothing env = 
+  let env' = foldl (flip instExec) env insts
+      pc' = termExec term bbid env'
+   in (env', pc')
+
+bbExec (BB bbid _ phis insts term) (Just prevbbid) env = 
+  do
+    let env' = foldl (flip (phiExec prevbbid)) env phis
+    let env'' = foldl (flip instExec) env' insts
+        pc' = termExec term bbid env'' 
+     in (env'', pc')
+
+-- Create a map, mapping basic block IDs to basic blocks
+-- for the given program
+programBBId2BB :: Program -> M.Map BBId BB
+programBBId2BB (Program bbs) = 
+  foldl (\m bb -> M.insert (bbGetId bb) bb m) M.empty bbs
+
+programExec :: Program -> Env -> (Env, Int)
+programExec p@(Program bbs) env = 
+  let bbid2bb :: M.Map BBId BB
+      bbid2bb = programBBId2BB p
+
+      go :: (Env, PC) -> (Env, Int)
+      go (env, PCEntry) = go $ bbExec (head bbs) Nothing env 
+      go (env, (PCNext prevbbid curbbid)) = 
+        go $ bbExec (bbid2bb M.! curbbid) (Just prevbbid) env
+      go (env, PCRet ret) = (env, ret)
+  in go (env, PCEntry)
 
 -- Semantics of a Stmt, taking a single step through the execution.
-stmtSingleStep :: Stmt -> Env -> Env
-stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
-stmtSingleStep (If _ cid s s' _) env = 
-  if (env M.! cid) == 1
-  then stmtSingleStep s env
-  else stmtSingleStep s' env
-stmtSingleStep w@(While _ cid s _) env =
-  if (env M.! cid == 1)
-  then stmtSingleStep s env
-  else env
-       
-stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
-stmtSingleStep (Skip _) env = env
-
-  -- Execute the statement with respect to the semantics
-stmtExec :: Stmt -> Env -> Env
-stmtExec (Assign _ id e) env = M.insert id (exprEval e env) env
-stmtExec (If _ cid s s' _) env = 
-  if (env M.! cid) == 1
-  then stmtExec s env
-  else stmtExec s' env
-stmtExec w@(While _ cid s _) env =
-  if (env M.! cid == 1)
-  then stmtExec w (stmtExec s env)
-  else env
-
-stmtExec (Seq s1 s2) env = stmtExec s2 (stmtExec s1 env)
-stmtExec (Skip _) env = env
+-- stmtSingleStep :: Stmt -> Env -> Env
+-- stmtSingleStep (Assign _ id e) env = M.insert id (exprEval e env) env
+-- stmtSingleStep (If _ cid s s' _) env = 
+--   if (env M.! cid) == 1
+--   then stmtSingleStep s env
+--   else stmtSingleStep s' env
+-- stmtSingleStep w@(While _ cid s _) env =
+--   if (env M.! cid == 1)
+--   then stmtSingleStep s env
+--   else env
+--        
+-- stmtSingleStep (Seq s1 s2) env = stmtSingleStep s2 (stmtSingleStep s1 env)
+-- stmtSingleStep (Skip _) env = env
+-- 
+--   -- Execute the statement with respect to the semantics
+-- stmtExec :: Stmt -> Env -> Env
+-- stmtExec (Assign _ id e) env = M.insert id (exprEval e env) env
+-- stmtExec (If _ cid s s' _) env = 
+--   if (env M.! cid) == 1
+--   then stmtExec s env
+--   else stmtExec s' env
+-- stmtExec w@(While _ cid s _) env =
+--   if (env M.! cid == 1)
+--   then stmtExec w (stmtExec s env)
+--   else env
+-- 
+-- stmtExec (Seq s1 s2) env = stmtExec s2 (stmtExec s1 env)
+-- stmtExec (Skip _) env = env
 
 --  Collecting semantics Framework
 -- ===============================
@@ -364,132 +510,132 @@ type CSemEnv v = SemiMeetMap Id v
 data CSemDefn v = CSemDefn {
   -- the value of `true` that is used for conditionals in the environment
   csemDefnValIsTrue :: !(v -> Bool),
-  csemDefnStmtSingleStep :: !(Stmt -> CSemEnv v -> CSemEnv v)
+  csemDefnInstSingleStep :: !(Inst -> CSemEnv v -> CSemEnv v)
 }
 
 csemenvbegin :: CSemEnv v
 csemenvbegin = lmempty
 
 
-type PC2CSemEnv v = M.Map PC (CSemEnv v)
-type CSem v = S.Set (PC2CSemEnv v)
+type Loc2CSemEnv v = M.Map Loc (CSemEnv v)
+type CSem v = S.Set (Loc2CSemEnv v)
 
-pc2csemenvShow :: Show v => PC2CSemEnv v -> String
+pc2csemenvShow :: Show v => Loc2CSemEnv v -> String
 pc2csemenvShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
 
 
--- Propogate the value of the environment at the first PC to the second PC.
+-- Propogate the value of the environment at the first Loc to the second Loc.
 -- Needed to implicitly simulate the flow graph.
-statePropogate :: PC -> PC -> (CSemEnv v -> CSemEnv v) -> PC2CSemEnv v -> PC2CSemEnv v
+statePropogate :: Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> Loc2CSemEnv v -> Loc2CSemEnv v
 statePropogate pc pc' f st = let e = st M.! pc  in
   M.insert pc' (f e) st
 
 
--- Initial collecting semantics, which contains one PC2Env.
--- This initial PC2Env maps every PC to the empty environment
-initCollectingSem :: Program -> CSem v
-initCollectingSem p = let 
-  finalpc = unPC (stmtPCEnd p) + 1
-  st = M.fromList (zip (map PC [-1..finalpc]) (repeat csemenvbegin)) 
-  in S.singleton $ st
-
--- propogate the value of an environment at the first PC to the second
--- PC across all states.
-collectingSemPropogate :: Ord v => PC -> PC -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
-collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
-
--- filter the collecting semantics at a given PC with a predicate over the 
--- environment at that PC
-collectingSemFilter :: Ord v => PC -> (CSemEnv v -> Bool) -> CSem v -> CSem v
-collectingSemFilter pc f csem = 
-  S.filter (\s -> f ((s M.! pc))) csem
-
-
--- affect the statement, by borrowing the PC2Env from the given PC
-stmtCollect :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
-
-
--- flow order:
--- 1. pre -> entry,  backedge -> entry
--- 3. entry ---loop-> loop final PC
--- 4. loop final PC -> exit block
-stmtCollect csemDefn pcold (While pc condid loop pc') csem =
-  let -- filter_allowed_iter :: CSem v -> CSem v
-      filter_allowed_iter csem = 
-        collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) csem
-  
-      -- pre_to_entry :: CSem v -> CSem v
-      pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
-
-
-      -- exit block to entry 
-      -- exit_to_entry :: CSem v -> CSem v
-      exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
-
-
-      -- everything entering the entry block 
-      -- all_to_entry :: CSem v -> CSem v
-      all_to_entry csem = (pre_to_entry csem) `S.union` exit_to_entry csem 
-
-      -- loop execution
-      -- entry_to_exit :: CSem v -> CSem v
-      entry_to_exit csem =  stmtCollect csemDefn pc loop (all_to_entry csem)
-
-      -- final statement in while to exit block
-      -- final_to_exit :: CSem v -> CSem v
-      final_to_exit csem = collectingSemPropogate (stmtPCEnd loop) pc' id (entry_to_exit csem)
-
-      -- f :: CSem v -> CSem v
-      f csem = final_to_exit csem
-
-
-   in (fold (repeatTillFix f csem))
-
--- Do we need to do something special for if?
--- Order: pre -> entry
--- entry -> then, else
--- then, else -> exit
-stmtCollect csemDefn pcold (If pc condid s s' pc') csem = 
-  let
-    pre_to_entry csem = collectingSemPropogate pcold pc id csem
-
-    filter_then csem = 
-      collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
-    
-    filter_else csem = 
-      collectingSemFilter pc (not . csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
-
-    entry_to_then csem = stmtCollect csemDefn pc s (filter_then csem)
-
-    entry_to_else csem = stmtCollect csemDefn pc s' (filter_else csem)
-
-    then_to_exit csem = 
-      collectingSemPropogate (stmtPCEnd s) pc' id  (entry_to_then csem)
-
-    else_to_exit csem = 
-      collectingSemPropogate (stmtPCEnd s') pc' id (entry_to_else csem)
-
-  in 
-    then_to_exit csem `S.union` else_to_exit csem
-
-stmtCollect csemDefn pc (Seq s1 s2) csem =
-  let csem' = stmtCollect csemDefn pc s1 csem
-      pc' = stmtPCEnd s1 in
-    stmtCollect csemDefn pc' s2 csem'
-
--- TODO: merge code of Assign, Skip?
-stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
-  (collectingSemPropogate pcold (stmtPCEnd s) (csemDefnStmtSingleStep csemDefn s)) $ csem
-
-
-stmtCollect csemDefn pcold s@(Skip _) csem = 
-  (collectingSemPropogate pcold (stmtPCEnd s) (csemDefnStmtSingleStep csemDefn s)) $ csem
-
-
-
--- Fixpoint of stmtCollect
-stmtCollectFix :: (SemiMeet v, Ord v) => CSemDefn v -> PC -> Stmt -> CSem v -> CSem v
-stmtCollectFix csemDefn pc s csem = fold $ repeatTillFix (stmtCollect csemDefn pc s) csem
+-- Initial collecting semantics, which contains one Loc2Env.
+-- This initial Loc2Env maps every Loc to the empty environment
+-- initCollectingSem :: Program -> CSem v
+-- initCollectingSem p = let 
+--   finalpc = unLoc (stmtLocEnd p) + 1
+--   st = M.fromList (zip (map Loc [-1..finalpc]) (repeat csemenvbegin)) 
+--   in S.singleton $ st
+-- 
+-- -- propogate the value of an environment at the first Loc to the second
+-- -- Loc across all states.
+-- collectingSemPropogate :: Ord v => Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
+-- collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
+-- 
+-- -- filter the collecting semantics at a given Loc with a predicate over the 
+-- -- environment at that Loc
+-- collectingSemFilter :: Ord v => Loc -> (CSemEnv v -> Bool) -> CSem v -> CSem v
+-- collectingSemFilter pc f csem = 
+--   S.filter (\s -> f ((s M.! pc))) csem
+-- 
+-- 
+-- -- affect the statement, by borrowing the Loc2Env from the given Loc
+-- stmtCollect :: (SemiMeet v, Ord v) => CSemDefn v -> Loc -> Stmt -> CSem v -> CSem v
+-- 
+-- 
+-- -- flow order:
+-- -- 1. pre -> entry,  backedge -> entry
+-- -- 3. entry ---loop-> loop final Loc
+-- -- 4. loop final Loc -> exit block
+-- stmtCollect csemDefn pcold (While pc condid loop pc') csem =
+--   let -- filter_allowed_iter :: CSem v -> CSem v
+--       filter_allowed_iter csem = 
+--         collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) csem
+--   
+--       -- pre_to_entry :: CSem v -> CSem v
+--       pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
+-- 
+-- 
+--       -- exit block to entry 
+--       -- exit_to_entry :: CSem v -> CSem v
+--       exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
+-- 
+-- 
+--       -- everything entering the entry block 
+--       -- all_to_entry :: CSem v -> CSem v
+--       all_to_entry csem = (pre_to_entry csem) `S.union` exit_to_entry csem 
+-- 
+--       -- loop execution
+--       -- entry_to_exit :: CSem v -> CSem v
+--       entry_to_exit csem =  stmtCollect csemDefn pc loop (all_to_entry csem)
+-- 
+--       -- final statement in while to exit block
+--       -- final_to_exit :: CSem v -> CSem v
+--       final_to_exit csem = collectingSemPropogate (stmtLocEnd loop) pc' id (entry_to_exit csem)
+-- 
+--       -- f :: CSem v -> CSem v
+--       f csem = final_to_exit csem
+-- 
+-- 
+--    in (fold (repeatTillFix f csem))
+-- 
+-- -- Do we need to do something special for if?
+-- -- Order: pre -> entry
+-- -- entry -> then, else
+-- -- then, else -> exit
+-- stmtCollect csemDefn pcold (If pc condid s s' pc') csem = 
+--   let
+--     pre_to_entry csem = collectingSemPropogate pcold pc id csem
+-- 
+--     filter_then csem = 
+--       collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
+--     
+--     filter_else csem = 
+--       collectingSemFilter pc (not . csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
+-- 
+--     entry_to_then csem = stmtCollect csemDefn pc s (filter_then csem)
+-- 
+--     entry_to_else csem = stmtCollect csemDefn pc s' (filter_else csem)
+-- 
+--     then_to_exit csem = 
+--       collectingSemPropogate (stmtLocEnd s) pc' id  (entry_to_then csem)
+-- 
+--     else_to_exit csem = 
+--       collectingSemPropogate (stmtLocEnd s') pc' id (entry_to_else csem)
+-- 
+--   in 
+--     then_to_exit csem `S.union` else_to_exit csem
+-- 
+-- stmtCollect csemDefn pc (Seq s1 s2) csem =
+--   let csem' = stmtCollect csemDefn pc s1 csem
+--       pc' = stmtLocEnd s1 in
+--     stmtCollect csemDefn pc' s2 csem'
+-- 
+-- -- TODO: merge code of Assign, Skip?
+-- stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
+--   (collectingSemPropogate pcold (stmtLocEnd s) (csemDefnInstSingleStep csemDefn s)) $ csem
+-- 
+-- 
+-- stmtCollect csemDefn pcold s@(Skip _) csem = 
+--   (collectingSemPropogate pcold (stmtLocEnd s) (csemDefnInstSingleStep csemDefn s)) $ csem
+-- 
+-- 
+-- 
+-- -- Fixpoint of stmtCollect
+-- stmtCollectFix :: (SemiMeet v, Ord v) => CSemDefn v -> Loc -> Stmt -> CSem v -> CSem v
+-- stmtCollectFix csemDefn pc s csem = fold $ repeatTillFix (stmtCollect csemDefn pc s) csem
 
 
 -- Abstract domain 1 - concrete functions
@@ -516,25 +662,25 @@ listTuplesCollect abs =
 
 -- Explode the collecting semantics object to a gargantuan list so we can
 -- then rearrange it
--- Collectingsem :: S.Set (M.Map PC (M.Map Id ToppedLattice Int))
-collectingSemExplode :: CSem v -> [(Id, (PC, v))]
+-- Collectingsem :: S.Set (M.Map Loc (M.Map Id ToppedLattice Int))
+collectingSemExplode :: CSem v -> [(Id, (Loc, v))]
 collectingSemExplode csem = 
-  let -- set2list :: [PC2CSemEnv v]
+  let -- set2list :: [Loc2CSemEnv v]
       set2list = S.toList csem
       
-      -- pc2aenvlist :: [[(PC, CSemEnv v)]]
+      -- pc2aenvlist :: [[(Loc, CSemEnv v)]]
       pc2aenvlist = map M.toList set2list
 
-      -- aenvlist :: [[(PC, [(Id, ToppedLattice v)])]]
+      -- aenvlist :: [[(Loc, [(Id, ToppedLattice v)])]]
       aenvlist = (map . map) ((\(pc, aenv) -> (pc, lmtolist aenv))) pc2aenvlist 
 
-      -- flatten1 :: [(PC, [(Id, ToppedLattice v)])]
+      -- flatten1 :: [(Loc, [(Id, ToppedLattice v)])]
       flatten1 = concat aenvlist
 
-      -- tuples :: [(PC, (Id, ToppedLattice v))]
+      -- tuples :: [(Loc, (Id, ToppedLattice v))]
       tuples = concat $ map pushTupleInList flatten1
 
-      -- tuples' :: [(Id, (PC, ToppedLattice v))]
+      -- tuples' :: [(Id, (Loc, ToppedLattice v))]
       tuples' = map (\(pc, (id, val)) -> (id, (pc, val))) tuples
   in tuples'
 
@@ -542,79 +688,69 @@ collectingSemExplode csem =
 -- Find the assignment statement that first assigns to the ID.
 -- TODO: make sure our language is SSA. For now, it returns the *first* assignment
 -- to a variable.
-idFindAssign :: Id -> Program -> Maybe Stmt
-idFindAssign id s@(Assign _ aid _) = 
-  if id == aid 
-     then Just s
-     else Nothing
-idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
-idFindAssign id while@(While _ condid sinner _)  = idFindAssign id sinner
-idFindAssign id (If _ _ s1 s2 _) = idFindAssign id s1 <|> idFindAssign id s2
-idFindAssign id (Skip _) = Nothing
+-- idFindAssign :: Id -> Program -> Maybe Stmt
+-- idFindAssign id s@(Assign _ aid _) = 
+--   if id == aid 
+--      then Just s
+--      else Nothing
+-- idFindAssign id (Seq s1 s2) = idFindAssign id s1 <|> idFindAssign id s2
+-- idFindAssign id while@(While _ condid sinner _)  = idFindAssign id sinner
+-- idFindAssign id (If _ _ s1 s2 _) = idFindAssign id s1 <|> idFindAssign id s2
+-- idFindAssign id (Skip _) = Nothing
 
 -- Sample the concrete semantics:
 -- * Across the set of environments
 -- * At a given program counter
 -- * For a given identifier
 -- * and union all the values
-csemSample :: (Lattice v, Ord v, Eq v) => CSem v -> PC -> CSemEnvFilter v -> Id -> v
-csemSample csem pc f id = 
-  let 
-  -- envsatpc :: S.Set (CSemEnv v)
-  envsatpc = S.map (M.! pc) csem
-  
-  -- validenvs :: S.Set (CSemEnv v)
-  validenvs = S.filter f envsatpc
-
-  -- vals :: S.Set v
-  vals = S.map (!!! id) validenvs
-  in
-    foldl join bottom vals
-
-
--- Abstraction function to Id2CollectedVal from the collecting semantics
-alphacsem :: (Lattice v, Ord v) => CSem v -> Program -> Id2CollectedVal v
-alphacsem csem p id filter = 
-        let Just (assign) = idFindAssign id p in 
-            csemSample csem (stmtPCStart assign) filter id
-
-gammacsem :: Program -> Id2CollectedVal v -> CSem v
-gammacsem p id2loop = undefined
-
-
+-- csemSample :: (Lattice v, Ord v, Eq v) => CSem v -> Loc -> CSemEnvFilter v -> Id -> v
+-- csemSample csem pc f id = 
+--   let 
+--   -- envsatpc :: S.Set (CSemEnv v)
+--   envsatpc = S.map (M.! pc) csem
+--   
+--   -- validenvs :: S.Set (CSemEnv v)
+--   validenvs = S.filter f envsatpc
+-- 
+--   -- vals :: S.Set v
+--   vals = S.map (!!! id) validenvs
+--   in
+--     foldl join bottom vals
+-- 
+-- 
+-- -- Abstraction function to Id2CollectedVal from the collecting semantics
+-- alphacsem :: (Lattice v, Ord v) => CSem v -> Program -> Id2CollectedVal v
+-- alphacsem csem p id filter = 
+--         let Just (assign) = idFindAssign id p in 
+--             csemSample csem (stmtLocStart assign) filter id
+-- 
+-- gammacsem :: Program -> Id2CollectedVal v -> CSem v
+-- gammacsem p id2loop = undefined
+-- 
+-- 
 
 -- Concrete domain 1 - concrete collecting semantics of Int
 -- ========================================================
 
-concreteCSem :: CSemDefn (LiftedLattice Int)
-concreteCSem = CSemDefn valTrueA stmtSingleStepA
-    where
-      valTrueA :: LiftedLattice Int -> Bool
-      valTrueA (LL 1) = True
-      valTrueA _ = False
-  
-      exprEvalA :: Expr -> CSemEnv (LiftedLattice Int) -> LiftedLattice Int
-      exprEvalA (EInt i) _ =  LL i
-      exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
-      exprEvalA (EId id) env = env !!! id
-      exprEvalA (EBinop op e1 e2) env = 
-        liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
-          opimpl = case op of
-                     Add -> (+)
-                     Lt -> (\a b -> if a < b then 1 else 0)
-      
-      stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice Int) -> CSemEnv (LiftedLattice Int)
-      stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
-      stmtSingleStepA (If _ cid s s' _) env = if (env !!! cid) == LL 1
-                                       then stmtSingleStepA s env
-                                       else stmtSingleStepA s' env
-      stmtSingleStepA w@(While _ cid s _) env =
-        if (env !!! cid == LL 1)
-          then stmtSingleStepA s env
-          else env
-         
-      stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
-      stmtSingleStepA (Skip _) env = env
+-- concreteCSem :: CSemDefn (LiftedLattice Int)
+-- concreteCSem = CSemDefn valTrueA stmtSingleStepA
+--     where
+--       valTrueA :: LiftedLattice Int -> Bool
+--       valTrueA (LL 1) = True
+--       valTrueA _ = False
+--   
+--       exprEvalA :: Expr -> CSemEnv (LiftedLattice Int) -> LiftedLattice Int
+--       exprEvalA (EInt i) _ =  LL i
+--       exprEvalA (EBool b) _ =  if b then LL 1 else LL 0
+--       exprEvalA (EId id) env = env !!! id
+--       exprEvalA (EBinop op e1 e2) env = 
+--         liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
+--           opimpl = case op of
+--                      Add -> (+)
+--                      Lt -> (\a b -> if a < b then 1 else 0)
+--       
+--       stmtSingleStepA :: Inst -> CSemEnv (LiftedLattice Int) -> CSemEnv (LiftedLattice Int)
+--       stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
   
 
 -- Concrete domain 2 - concrete collecting semantics of Symbol
@@ -742,12 +878,12 @@ symConstantFold (SymValBinop op s1 s2) =
 symConstantFold p = p
 
 
--- Values to make opaque at a given PC
-data OpaqueVals = OpaqueVals !(M.Map PC [Id])
+-- Values to make opaque at a given Loc
+data OpaqueVals = OpaqueVals !(M.Map Loc [Id])
 
 -- Make the environment opaque for the given values in OpaqueVals at the 
--- current PC
-envOpaqify :: PC -> OpaqueVals -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
+-- current Loc
+envOpaqify :: Loc -> OpaqueVals -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
 envOpaqify pc (OpaqueVals ovs) env =
   case ovs M.!? pc of
     Just ids -> foldl (\env id -> insert id (LL (symValId id)) env) env ids
@@ -756,36 +892,36 @@ envOpaqify pc (OpaqueVals ovs) env =
 
 
 -- Collecting semantics of symbolic execution
-symbolCSem :: OpaqueVals -> CSemDefn (LiftedLattice SymVal)
-symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
-  where
-    valTrueA :: LiftedLattice SymVal -> Bool
-    valTrueA (LL sv) = sv == symValConst 1
-    valTrueA _ = False
-
-    exprEvalA :: Expr -> CSemEnv (LiftedLattice SymVal) -> LiftedLattice SymVal
-    exprEvalA (EInt i) _ =  LL $ symValConst i
-    exprEvalA (EBool b) _ =  if b then LL (symValConst 1) else LL (symValConst 0)
-    exprEvalA (EId id) env = env !!! id
-    exprEvalA (EBinop op e1 e2) env = 
-      liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
-        opimpl v1 v2 = symConstantFold $ SymValBinop op v1 v2
-
-    -- abstract semantics that respects opacity
-    stmtSingleStepOpaqify :: Stmt -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
-    stmtSingleStepOpaqify s env = 
-      stmtSingleStepA s (envOpaqify (stmtPCStart s) ovs env)
-
-    -- raw abstract semantics
-    stmtSingleStepA :: Stmt -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
-    stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
-    stmtSingleStepA (If _ cid s s' _) env = if (env !!! cid) == LL (symValConst 1)
-                                     then stmtSingleStepA s env
-                                     else stmtSingleStepA s' env
-    stmtSingleStepA w@(While pc cid s _) env = error "undefined, never executed"
-    stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
-    stmtSingleStepA (Skip _) env = env
-
+-- symbolCSem :: OpaqueVals -> CSemDefn (LiftedLattice SymVal)
+-- symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
+--   where
+--     valTrueA :: LiftedLattice SymVal -> Bool
+--     valTrueA (LL sv) = sv == symValConst 1
+--     valTrueA _ = False
+-- 
+--     exprEvalA :: Expr -> CSemEnv (LiftedLattice SymVal) -> LiftedLattice SymVal
+--     exprEvalA (EInt i) _ =  LL $ symValConst i
+--     exprEvalA (EBool b) _ =  if b then LL (symValConst 1) else LL (symValConst 0)
+--     exprEvalA (EId id) env = env !!! id
+--     exprEvalA (EBinop op e1 e2) env = 
+--       liftLL2 opimpl (exprEvalA e1 env) (exprEvalA e2 env) where
+--         opimpl v1 v2 = symConstantFold $ SymValBinop op v1 v2
+-- 
+--     -- abstract semantics that respects opacity
+--     stmtSingleStepOpaqify :: Inst -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
+--     stmtSingleStepOpaqify s env = 
+--       stmtSingleStepA s (envOpaqify (stmtLocStart s) ovs env)
+-- 
+--     -- raw abstract semantics
+--     stmtSingleStepA :: Inst -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
+--     stmtSingleStepA (Assign _ id e) env = insert id (exprEvalA e env) env
+--     stmtSingleStepA (If _ cid s s' _) env = if (env !!! cid) == LL (symValConst 1)
+--                                      then stmtSingleStepA s env
+--                                      else stmtSingleStepA s' env
+--     stmtSingleStepA w@(While pc cid s _) env = error "undefined, never executed"
+--     stmtSingleStepA (Seq s1 s2) env = stmtSingleStepA s2 (stmtSingleStepA s1 env)
+--     stmtSingleStepA (Skip _) env = env
+-- 
 
 
 
@@ -795,23 +931,23 @@ symbolCSem ovs = CSemDefn valTrueA stmtSingleStepOpaqify
 -- which the symbolic domain gets stuck on, while still being able to collect
 -- symbolic information, which the concrete domain cannot do.
 
-stmtSingleStepProduct :: (SemiMeet v, SemiMeet w) => 
-  (Stmt -> CSemEnv v -> CSemEnv v) 
-  -> (Stmt -> CSemEnv w -> CSemEnv w)
-  -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
-stmtSingleStepProduct f1 f2 s env = 
-  lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
-
-
-concreteSymbolicCSem :: OpaqueVals -> CSemDefn (LiftedLattice Int, LiftedLattice SymVal)
-concreteSymbolicCSem opaque = CSemDefn valueTrueA stmtSingleStepA where
-  valueTrueA :: (LiftedLattice Int, LiftedLattice SymVal) -> Bool
-  valueTrueA (lli, _) = csemDefnValIsTrue concreteCSem lli
-  stmtSingleStepA = 
-    stmtSingleStepProduct 
-     (csemDefnStmtSingleStep concreteCSem)
-     (csemDefnStmtSingleStep (symbolCSem opaque))
-
+-- stmtSingleStepProduct :: (SemiMeet v, SemiMeet w) => 
+--   (Stmt -> CSemEnv v -> CSemEnv v) 
+--   -> (Stmt -> CSemEnv w -> CSemEnv w)
+--   -> Stmt -> CSemEnv (v, w) -> CSemEnv (v, w)
+-- stmtSingleStepProduct f1 f2 s env = 
+--   lmproduct (f1 s (fmap fst env)) (f2 s (fmap snd env))
+-- 
+-- 
+-- concreteSymbolicCSem :: OpaqueVals -> CSemDefn (LiftedLattice Int, LiftedLattice SymVal)
+-- concreteSymbolicCSem opaque = CSemDefn valueTrueA stmtSingleStepA where
+--   valueTrueA :: (LiftedLattice Int, LiftedLattice SymVal) -> Bool
+--   valueTrueA (lli, _) = csemDefnValIsTrue concreteCSem lli
+--   stmtSingleStepA = 
+--     stmtSingleStepProduct 
+--      (csemDefnInstSingleStep concreteCSem)
+--      (csemDefnInstSingleStep (symbolCSem opaque))
+-- 
 -- Abstract domain 3 - presburger functions
 -- ========================================
 
@@ -881,26 +1017,6 @@ asem2 p = alpha2 . csem2 p . gamma2
 -- Example
 -- =======
 
-data StmtBuilder = StmtBuilder { sbpc :: PC }
-
-sbPCIncr :: ST.State StmtBuilder PC
-sbPCIncr = do
-  pc <- ST.gets sbpc
-  ST.modify  (\s -> s { sbpc = (pcincr (sbpc s)) })
-  return pc
-
-  
-
-stmtBuild :: ST.State StmtBuilder Stmt -> Stmt
-stmtBuild st = let begin = StmtBuilder (pcincr pcinit) in 
-             ST.evalState st begin
-
-stmtSequence :: [ST.State StmtBuilder Stmt] -> ST.State StmtBuilder Stmt
-stmtSequence [x] = x
-stmtSequence (x:xs) = do
-  x' <- x
-  xs' <- stmtSequence xs
-  return $ Seq x' xs'
 
 class ToExpr a where
   toexpr :: a -> Expr
@@ -919,147 +1035,224 @@ instance ToExpr Bool where
 instance ToExpr Expr where
   toexpr = id
 
-assign :: ToExpr a => String -> a -> ST.State StmtBuilder Stmt
-assign id a =
-  do
-    pc <- sbPCIncr
-    let s = Assign pc (Id id) (toexpr a)
-    return s
+data ProgramBuilder = ProgramBuilder { 
+  builderpc :: Loc, 
+  curbbid :: Maybe BBId,
+  bbid2bb :: OM.OrderedMap BBId BB
+}
 
 
-skip :: ST.State StmtBuilder Stmt
-skip = do
-  pc <- sbPCIncr
-  let s = Skip pc
-  return s
+runProgramBuilder :: ST.State ProgramBuilder () -> Program
+runProgramBuilder pbst = 
+  let pbinit :: ProgramBuilder
+      pbinit = ProgramBuilder (Loc (-1)) Nothing OM.empty
+
+      pbout :: ProgramBuilder
+      pbout = ST.execState pbst pbinit
+   in Program $ map snd (OM.toList (bbid2bb pbout))
 
 
-while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
-while idcond loopbuilder = do
-  pc <- sbPCIncr
-  loop <- loopbuilder
-  pc' <- sbPCIncr
+builderLocIncr :: ST.State ProgramBuilder Loc
+builderLocIncr = do
+  loc <- ST.gets builderpc
+  ST.modify (\s -> s { builderpc = locincr (builderpc s) })
+  return loc
 
-  let l = While pc (Id idcond) loop pc'
-  return l
+-- builds a new basic block, but *does not focus on it*
+buildNewBB :: String -> ST.State ProgramBuilder BBId 
+buildNewBB name = do
+  loc <- builderLocIncr
+  locret <- builderLocIncr
+  let bbid = BBId name
+  let bb = BB bbid loc [] [] (Unreachable locret)
+  ST.modify (\s -> s { bbid2bb = OM.insert bbid bb (bbid2bb s) } )
 
-if_ :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
-if_ idcond thenbuilder elsebuilder = do
-  pc <- ST.gets sbpc
-  sbPCIncr
-  then_ <- thenbuilder
-  else_ <- elsebuilder
-  pc' <- sbPCIncr
-  return (If pc (Id idcond) then_ else_ pc')
+  return bbid
 
+focusBB :: BBId -> ST.State ProgramBuilder ()
+focusBB bbid = ST.modify (\s -> s { curbbid = Just bbid })
 
-  
-(+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
-(+.) a b = EBinop Add (toexpr a) (toexpr b)
-
-
-(<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
-(<.) a b = EBinop Lt (toexpr a) (toexpr b)
-
-pIf :: (Stmt, OpaqueVals) 
-pIf =
-  let if1_then = stmtSequence $ [
-        assign "y" (EInt 1)]
-
-      if1_else =  stmtSequence $ [
-        assign "y" (EInt 3) ]
-  
-  in (stmtBuild . stmtSequence $ [
-  skip,
-  assign "x" (EInt 5),
-  assign "x_lt_10" ("x" <. EInt 10),
-  if_ "x_lt_10" if1_then if1_else,
-  assign "z" ("y" +. EInt 1 )], OpaqueVals mempty)
-
-pLoop :: (Stmt, OpaqueVals)
-pLoop = (stmtBuild . stmtSequence $ [
-  assign "x" (EInt 1),
-  assign "x_lt_5" ("x" <. EInt 5),
-  while "x_lt_5" $ stmtSequence $ [
-      skip,
-      assign "x_next" ("x" +.  EInt 1),
-      assign "x_lt_5_next" ("x" <. EInt 5),
-      assign "x" "x_next",
-      assign "x_lt_5" "x_lt_5_next"
-  ],
-  assign "z" ("x" +. EInt (-5))],
- OpaqueVals (M.fromList $ [(PC 4, [Id "x"])]))
-
-pTwoNestedLoop :: (Stmt, OpaqueVals)
-pTwoNestedLoop = (stmtBuild . stmtSequence $ [
-  assign "x" (EInt 1),
-  assign "x_lt_5" ("x" <. EInt 5),
-  while "x_lt_5" $ stmtSequence $ [
-      skip,
-      assign "x_next" ("x" +.  EInt 1),
-      assign "x_lt_5_next" ("x" <. EInt 5),
-
-      assign "y" (EInt 2),
-      assign "y_lt_10" ("y" <. EInt 10),
-      while "y_lt_10" $ stmtSequence $ [
-        skip,
-        assign "y_plus_x" ("y" +. "x"),
-        assign "y_plus_x_next" ("y" +. "x_next"),
-        assign "y_next" ("y" +.  EInt 5),
-        assign "y" "y_next",
-        assign "y_lt_10_next" ("y" <. EInt 10),
-        assign "y_lt_10" "y_lt_10_next"
-    ],
-    assign "x" "x_next",
-    assign "x_lt_5" "x_lt_5_next",
-    assign "alpha" ("y" +. EInt (-12))
-  ],
-  assign "beta" ("x" +. EInt (-5))],
- OpaqueVals (M.fromList $ [(PC 4, [Id "x"]), (PC 12, [Id "y"])]))
-
--- ========================
--- CHOOSE YOUR PROGRAM HERE
--- ========================
-pcur :: Stmt
-pcur = fst pLoop
-
-curToOpaqify :: OpaqueVals
-curToOpaqify = snd pLoop
-
--- Derived properties of the chosen program
--- ========================================
-
-curCSemInt :: CSem (LiftedLattice Int)
-curCSemInt = stmtCollectFix concreteCSem (PC (-1)) pcur (initCollectingSem pcur)
+builderCurBBModify :: (BB -> BB) -> ST.State ProgramBuilder ()
+builderCurBBModify f = 
+  ST.modify (\s -> let m = bbid2bb s
+                       (Just bbid) = curbbid s
+                       m' = OM.adjust f bbid m
+                 in s { bbid2bb = m' })
 
 
-curCSemSym :: CSem (LiftedLattice SymVal)
-curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
+appendInst :: Inst -> ST.State ProgramBuilder ()
+appendInst i = builderCurBBModify (bbModifyInsts (++ [i]))
 
-curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice SymVal)
-curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (PC (-1)) pcur (initCollectingSem pcur)
+appendPhi :: Phi -> ST.State ProgramBuilder ()
+appendPhi ph = builderCurBBModify (bbModifyPhis (++ [ph]))
 
--- map identifiers to a function of loop iterations to values
-curAbs :: Id2CollectedVal (LiftedLattice Int, LiftedLattice SymVal)
-curAbs = alphacsem curCSemIntSym pcur
+setTerm :: Term -> ST.State ProgramBuilder ()
+setTerm term = builderCurBBModify (bbModifyTerm (const term))
 
-lookupAbsAtVals :: Id  --- value to lookup
-  -> [(Id, Int)] --- value of identifiers expected at the definition of value
-  -> (LiftedLattice Int, LiftedLattice SymVal) -- value of identifier discovered
-lookupAbsAtVals needle idvals = 
-  let
-  -- Extract out the concrete int value
-  extractConcrete :: Maybe (LiftedLattice Int, LiftedLattice SymVal) -> Maybe Int
-  extractConcrete (Just (LL i, _)) = Just i
-  extractConcrete _ = Nothing
 
-  -- check if the pair of (Id, Int) is in env
-  envContains :: CSemEnv (LiftedLattice Int, LiftedLattice SymVal) -> (Id, Int) -> Bool
-  envContains env (id, i) = extractConcrete (env !!? id) == Just i
+-- data StmtBuilder = StmtBuilder { sbpc :: Loc }
+-- 
+-- sbLocIncr :: ST.State StmtBuilder Loc
+-- sbLocIncr = do
+--   pc <- ST.gets sbpc
+--   ST.modify  (\s -> s { sbpc = (locincr (sbpc s)) })
+--   return pc
+-- 
+--   
+-- 
+-- stmtBuild :: ST.State StmtBuilder Stmt -> Stmt
+-- stmtBuild st = let begin = StmtBuilder (locincr pcinit) in 
+--              ST.evalState st begin
+-- 
+-- stmtSequence :: [ST.State StmtBuilder Stmt] -> ST.State StmtBuilder Stmt
+-- stmtSequence [x] = x
+-- stmtSequence (x:xs) = do
+--   x' <- x
+--   xs' <- stmtSequence xs
+--   return $ Seq x' xs'
 
-  in
-  curAbs needle (\env -> all (envContains env) idvals)
-
+-- assign :: ToExpr a => String -> a -> ST.State StmtBuilder Stmt
+-- assign id a =
+--   do
+--     pc <- sbLocIncr
+--     let s = Assign pc (Id id) (toexpr a)
+--     return s
+-- 
+-- 
+-- skip :: ST.State StmtBuilder Stmt
+-- skip = do
+--   pc <- sbLocIncr
+--   let s = Skip pc
+--   return s
+-- 
+-- 
+-- while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
+-- while idcond loopbuilder = do
+--   pc <- sbLocIncr
+--   loop <- loopbuilder
+--   pc' <- sbLocIncr
+-- 
+--   let l = While pc (Id idcond) loop pc'
+--   return l
+-- 
+-- if_ :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
+-- if_ idcond thenbuilder elsebuilder = do
+--   pc <- ST.gets sbpc
+--   sbLocIncr
+--   then_ <- thenbuilder
+--   else_ <- elsebuilder
+--   pc' <- sbLocIncr
+--   return (If pc (Id idcond) then_ else_ pc')
+-- 
+-- 
+--   
+-- (+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
+-- (+.) a b = EBinop Add (toexpr a) (toexpr b)
+-- 
+-- 
+-- (<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
+-- (<.) a b = EBinop Lt (toexpr a) (toexpr b)
+-- 
+-- pIf :: (Stmt, OpaqueVals) 
+-- pIf =
+--   let if1_then = stmtSequence $ [
+--         assign "y" (EInt 1)]
+-- 
+--       if1_else =  stmtSequence $ [
+--         assign "y" (EInt 3) ]
+--   
+--   in (stmtBuild . stmtSequence $ [
+--   skip,
+--   assign "x" (EInt 5),
+--   assign "x_lt_10" ("x" <. EInt 10),
+--   if_ "x_lt_10" if1_then if1_else,
+--   assign "z" ("y" +. EInt 1 )], OpaqueVals mempty)
+-- 
+-- pLoop :: (Stmt, OpaqueVals)
+-- pLoop = (stmtBuild . stmtSequence $ [
+--   assign "x" (EInt 1),
+--   assign "x_lt_5" ("x" <. EInt 5),
+--   while "x_lt_5" $ stmtSequence $ [
+--       skip,
+--       assign "x_next" ("x" +.  EInt 1),
+--       assign "x_lt_5_next" ("x" <. EInt 5),
+--       assign "x" "x_next",
+--       assign "x_lt_5" "x_lt_5_next"
+--   ],
+--   assign "z" ("x" +. EInt (-5))],
+--  OpaqueVals (M.fromList $ [(Loc 4, [Id "x"])]))
+-- 
+-- pTwoNestedLoop :: (Stmt, OpaqueVals)
+-- pTwoNestedLoop = (stmtBuild . stmtSequence $ [
+--   assign "x" (EInt 1),
+--   assign "x_lt_5" ("x" <. EInt 5),
+--   while "x_lt_5" $ stmtSequence $ [
+--       skip,
+--       assign "x_next" ("x" +.  EInt 1),
+--       assign "x_lt_5_next" ("x" <. EInt 5),
+-- 
+--       assign "y" (EInt 2),
+--       assign "y_lt_10" ("y" <. EInt 10),
+--       while "y_lt_10" $ stmtSequence $ [
+--         skip,
+--         assign "y_plus_x" ("y" +. "x"),
+--         assign "y_plus_x_next" ("y" +. "x_next"),
+--         assign "y_next" ("y" +.  EInt 5),
+--         assign "y" "y_next",
+--         assign "y_lt_10_next" ("y" <. EInt 10),
+--         assign "y_lt_10" "y_lt_10_next"
+--     ],
+--     assign "x" "x_next",
+--     assign "x_lt_5" "x_lt_5_next",
+--     assign "alpha" ("y" +. EInt (-12))
+--   ],
+--   assign "beta" ("x" +. EInt (-5))],
+--  OpaqueVals (M.fromList $ [(Loc 4, [Id "x"]), (Loc 12, [Id "y"])]))
+-- 
+-- -- ========================
+-- -- CHOOSE YOUR PROGRAM HERE
+-- -- ========================
+pcur :: Program
+pcur = undefined
+-- pcur = fst pLoop
+-- 
+-- curToOpaqify :: OpaqueVals
+-- curToOpaqify = snd pLoop
+-- 
+-- -- Derived properties of the chosen program
+-- -- ========================================
+-- 
+-- curCSemInt :: CSem (LiftedLattice Int)
+-- curCSemInt = stmtCollectFix concreteCSem (Loc (-1)) pcur (initCollectingSem pcur)
+-- 
+-- 
+-- curCSemSym :: CSem (LiftedLattice SymVal)
+-- curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (Loc (-1)) pcur (initCollectingSem pcur)
+-- 
+-- curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice SymVal)
+-- curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (Loc (-1)) pcur (initCollectingSem pcur)
+-- 
+-- -- map identifiers to a function of loop iterations to values
+-- curAbs :: Id2CollectedVal (LiftedLattice Int, LiftedLattice SymVal)
+-- curAbs = alphacsem curCSemIntSym pcur
+-- 
+-- lookupAbsAtVals :: Id  --- value to lookup
+--   -> [(Id, Int)] --- value of identifiers expected at the definition of value
+--   -> (LiftedLattice Int, LiftedLattice SymVal) -- value of identifier discovered
+-- lookupAbsAtVals needle idvals = 
+--   let
+--   -- Extract out the concrete int value
+--   extractConcrete :: Maybe (LiftedLattice Int, LiftedLattice SymVal) -> Maybe Int
+--   extractConcrete (Just (LL i, _)) = Just i
+--   extractConcrete _ = Nothing
+-- 
+--   -- check if the pair of (Id, Int) is in env
+--   envContains :: CSemEnv (LiftedLattice Int, LiftedLattice SymVal) -> (Id, Int) -> Bool
+--   envContains env (id, i) = extractConcrete (env !!? id) == Just i
+-- 
+--   in
+--   curAbs needle (\env -> all (envContains env) idvals)
+-- 
 
 example1 :: String
 example1 = unlines
@@ -1093,20 +1286,20 @@ main = do
     putStrLn ""
     
     putStrLn "***program output***"
-    let outenv =  (stmtExec pcur) envBegin
+    let outenv =  (programExec pcur) envBegin
     print outenv
 
 
     putStrLn "***collecting semantics (concrete x symbol):***"
-    forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
+    -- forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
     putStrLn "***sampling program using the abstraction:***"
 
     -- let idsToLookup = ["x", "x_lt_5", "y", "z"]
-    let idsToLookup = ["x_lt_5", "x_lt_5_next", "x", "x_next", "z"]
-    forM_ idsToLookup 
-      (\id -> (putDocW 80 $ 
-                pretty id <+> 
-                pretty "=" <+> 
-                pretty (lookupAbsAtVals (Id id) [])) >> putStrLn "")
+    -- let idsToLookup = ["x_lt_5", "x_lt_5_next", "x", "x_next", "z"]
+    -- forM_ idsToLookup 
+    --   (\id -> (putDocW 80 $ 
+    --             pretty id <+> 
+    --             pretty "=" <+> 
+    --             pretty (lookupAbsAtVals (Id id) [])) >> putStrLn "")
 
