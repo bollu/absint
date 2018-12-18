@@ -253,6 +253,8 @@ locincr (Loc i) = Loc (i + 1)
 pcinit :: Loc
 pcinit = Loc 0
 
+class Located a where
+  location :: a -> Loc
 
 data BBId = BBId String deriving(Eq, Ord, Show)
 instance Pretty BBId where
@@ -264,6 +266,9 @@ instance Pretty Inst where
   pretty (Assign pc id expr) =
     pretty pc <+> pretty id <+> equals <+> pretty expr
 
+instance Located Inst where
+  location (Assign loc _ _) = loc
+
 data Phity = PhityLoop | PhityCond deriving(Eq, Ord, Show)
 
 instance Pretty Phity where
@@ -272,6 +277,9 @@ instance Pretty Phity where
 
 -- Phi nodes
 data Phi = Phi !Loc Phity Id (BBId, Id) (BBId, Id) deriving(Eq, Ord, Show)
+
+instance Located Phi where
+  location (Phi loc _ _ _ _) = loc
 
 instance Pretty Phi where
   pretty (Phi pc ty id l r) =
@@ -284,6 +292,12 @@ data Term = Br !Loc BBId
           | Ret !Loc Id 
           | Unreachable !Loc deriving(Eq, Ord)
 
+instance Located Term where
+  location (Br loc _) = loc
+  location (BrCond loc _ _ _) = loc
+  location (Ret loc _) = loc
+  location (Unreachable loc) = loc
+
 instance Pretty Term where
   pretty (Br pc bbid) = pretty pc <+> pretty "br" <+> pretty bbid
   pretty (BrCond pc cid bbidl bbidr) = 
@@ -293,6 +307,16 @@ instance Pretty Term where
   pretty (Unreachable loc) = pretty loc <+> pretty "unreachable"
 
 data BB = BB BBId Loc [Phi] [Inst] Term deriving(Eq, Ord)
+
+
+instance Pretty BB where
+  pretty (BB bbid bbpc phis is term) = 
+    pretty bbpc <+> pretty bbid <> line <>
+      indent 4 (vcat $ (map pretty phis) ++  (map pretty is) ++ [pretty term])
+
+instance Located BB where
+  location (BB _ loc _ _ _) = loc
+
 
 -- Get the ID of the basic block
 bbGetId :: BB -> BBId
@@ -310,17 +334,21 @@ bbModifyTerm :: (Term -> Term) -> BB -> BB
 bbModifyTerm f (BB id loc phis insts term) = 
   BB id loc phis insts (f term)
 
-instance Pretty BB where
-  pretty (BB bbid bbpc phis is term) = 
-    pretty bbpc <+> pretty bbid <+>  indent 1 
-      (line <> vcat (map pretty phis) <>
-      line <> vcat (map pretty is) <>
-      line <> pretty term)
+-- return locations of everything in the BB
+bbGetLocs :: BB -> [Loc]
+bbGetLocs (BB _ loc phis insts term) = 
+  [loc] ++ (map location phis) ++ (map location insts) ++ [location term]
 
 
 -- Program is a collection of basic blocks. First basic block is the
 -- entry block (block that gets executed on startup
 newtype Program = Program [BB] deriving(Eq)
+
+
+programMaxLoc :: Program -> Loc
+programMaxLoc (Program bbs) = 
+  let locs = bbs >>= bbGetLocs 
+   in maximum locs
 
 instance Pretty Program where
   pretty (Program bbs) = vcat $ map pretty bbs
@@ -533,12 +561,12 @@ statePropogate pc pc' f st = let e = st M.! pc  in
 
 -- Initial collecting semantics, which contains one Loc2Env.
 -- This initial Loc2Env maps every Loc to the empty environment
--- initCollectingSem :: Program -> CSem v
--- initCollectingSem p = let 
---   finalpc = unLoc (stmtLocEnd p) + 1
---   st = M.fromList (zip (map Loc [-1..finalpc]) (repeat csemenvbegin)) 
---   in S.singleton $ st
--- 
+initCollectingSem :: Program -> CSem v
+initCollectingSem p = let 
+  finalpc = unLoc (programMaxLoc p) + 1
+  st = M.fromList (zip (map Loc [-1..finalpc]) (repeat csemenvbegin)) 
+  in S.singleton $ st
+
 -- -- propogate the value of an environment at the first Loc to the second
 -- -- Loc across all states.
 -- collectingSemPropogate :: Ord v => Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
