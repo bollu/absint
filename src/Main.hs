@@ -297,10 +297,10 @@ instance Pretty Term where
       pretty cid <+> pretty bbidl <+> pretty bbidr
   pretty (Done loc) = pretty loc <+> pretty "done"
 
-data BBTy = BBLoop deriving(Eq, Ord)
+data BBTy = BBLoop String deriving(Eq, Ord)
 
 instance Pretty BBTy where
-  pretty (BBLoop) = pretty "bbloop"
+  pretty (BBLoop name) = pretty "bbloop:" <> pretty name
 
 data BB = BB {
  bbid :: BBId,
@@ -351,66 +351,9 @@ programMaxLoc (Program bbs) =
 instance Pretty Program where
   pretty (Program bbs) = vcat $ map pretty bbs
 
--- Statements of the language
--- data Stmt = Assign !Loc !Id !Expr
---             | If !Loc !Id !Stmt !Stmt !Loc -- branch value id, true branch, false branch
---             | While !Loc !Id !Stmt !Loc -- while cond stmt, pc of entry, pc of exit
---             | Seq !Stmt !Stmt
---             | Skip !Loc deriving(Eq)
--- 
--- -- Return the Loc of the first statement in the block
--- stmtLocStart :: Stmt -> Loc
--- stmtLocStart (Assign pc _ _)  = pc
--- stmtLocStart (If pc _ _ _ _) = pc
--- stmtLocStart (While pc _ _ _) = pc
--- stmtLocStart (Seq s1 _) = stmtLocStart s1
--- stmtLocStart (Skip pc) = pc
--- 
--- 
--- -- Return the Loc of the last statement in the block
--- stmtLocEnd :: Stmt -> Loc
--- stmtLocEnd (Assign pc _ _)  = pc
--- stmtLocEnd (If _ _ _ _ pc') = pc'
--- stmtLocEnd (While _ _ _ pc') = pc'
--- stmtLocEnd (Seq _ s2) = stmtLocEnd s2
--- stmtLocEnd (Skip pc) = pc
--- 
--- instance Show Stmt where
---   show (Assign pc id e) = show pc ++ ":" ++ "(= " ++  show id ++ " " ++ show e ++  ")"
---   show (If pc cond t e pc') = show pc ++ ":" ++ "(if " ++ show cond ++ " " ++ show t ++ " " ++ show e ++ ")" ++ show pc' ++ ":END IF"
---   show (While pc cond s pc') = show pc ++ ":" ++ "(while " ++ show cond ++ " " ++ show s ++ ")" ++ show pc' ++ ":END WHILE"
---   show (Seq s1 s2) =  show s1 ++ ";;" ++ show s2
---   show (Skip pc) = show pc ++ ":" ++ "done"
--- 
--- instance Pretty Stmt where
---   pretty s@(Assign pc id e) = pretty pc <+> (parens $ pretty "=" <+> pretty id <+> pretty e)
---   pretty s@(If pc cond t e pc') = 
---     pretty pc <+> 
---       (parens $ pretty "if" <+> 
---                 pretty cond <+> 
---                 indent 1 (line <> pretty t <> 
---                           line <> pretty e <>
---                           line <> pretty pc' <+> pretty "ENDIF"))
---   pretty (Seq s1 s2) =  pretty s1 <> line <> pretty s2
---   pretty (While pc cond s pc') = 
---     pretty pc <+> 
---       (parens $ 
---         pretty "(while" <+> 
---           pretty cond <+> 
---             indent 1 (line <> pretty s <> line <> pretty pc' <+> pretty "ENDWHILE"))
---   pretty (Skip pc) = pretty pc <+> pretty "Skip"
 
--- A Program is a top level statement
--- type Program = Stmt 
-
-
-
-
--- Language semantics
--- ==================
-
-
-type BBId2Loc = M.Map BBId Loc
+-- Denotational ish semantics
+-- ==========================
 
 -- current basic block and location within the basic block being executed
 data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord)
@@ -463,22 +406,24 @@ termExec (BrCond _ condid bbidl bbidr) bbid env =
 
 termExec (Done _) _ env = PCDone
 
+envInsertOrUpdate :: Ord k => v -> (v -> v) -> k -> M.Map k v -> M.Map k v
+envInsertOrUpdate v f k m = 
+  case m M.!? k  of
+    Just v' -> M.insert k (f v') m
+    Nothing -> M.insert k v m
+
 
 -- Execute a basic block
-bbExec :: BB  -- current basic block
-       -> Maybe BBId  -- BB id of previous basic block
-       -> Env -> (Env, PC)
-bbExec (BB bbid _ _ phis insts term) Nothing env = 
-  let env' = foldl (flip instExec) env insts
-      pc' = termExec term bbid env'
-   in (env', pc')
-
-bbExec (BB bbid _ _ phis insts term) (Just prevbbid) env = 
-  do
-    let env' = foldl (flip (phiExec prevbbid)) env phis
-    let env'' = foldl (flip instExec) env' insts
-        pc' = termExec term bbid env'' 
-     in (env'', pc')
+bbExec (BB bbid bbty _ phis insts term) mprevbbid env = 
+      let envbb = case bbty of
+                Nothing -> env
+                Just (BBLoop name) -> envInsertOrUpdate 0 (+1) (Id name) env
+          envphi = case mprevbbid of
+            Just prevbbid -> foldl (flip (phiExec prevbbid)) envbb phis
+            Nothing -> envbb
+          envinst = foldl (flip instExec) envphi insts
+          pc' = termExec term bbid envinst 
+     in (envinst, pc')
 
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
@@ -498,8 +443,7 @@ programExec p@(Program bbs) env =
       go (env, PCDone) = env
   in go (env, PCEntry)
 
--- Denotational semantics
--- ========================
+
 
 -- Example
 -- =======
@@ -614,7 +558,7 @@ br bbid = do
 pLoop :: Program
 pLoop = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing 
-  loop <- buildNewBB "loop" (Just BBLoop)
+  loop <- buildNewBB "loop" (Just $ BBLoop "loop")
   exit <- buildNewBB "exit" Nothing
 
   focusBB entry
@@ -631,121 +575,6 @@ pLoop = runProgramBuilder $ do
   assign "x_next" ("x_loop" +. (EInt 1))
 
   condbr "x_loop_lt_5" loop exit
-
-
-
--- data StmtBuilder = StmtBuilder { sbpc :: Loc }
--- 
--- sbLocIncr :: ST.State StmtBuilder Loc
--- sbLocIncr = do
---   pc <- ST.gets sbpc
---   ST.modify  (\s -> s { sbpc = (locincr (sbpc s)) })
---   return pc
--- 
---   
--- 
--- stmtBuild :: ST.State StmtBuilder Stmt -> Stmt
--- stmtBuild st = let begin = StmtBuilder (locincr pcinit) in 
---              ST.evalState st begin
--- 
--- stmtSequence :: [ST.State StmtBuilder Stmt] -> ST.State StmtBuilder Stmt
--- stmtSequence [x] = x
--- stmtSequence (x:xs) = do
---   x' <- x
---   xs' <- stmtSequence xs
---   return $ Seq x' xs'
-
--- assign :: ToExpr a => String -> a -> ST.State StmtBuilder Stmt
--- assign id a =
---   do
---     pc <- sbLocIncr
---     let s = Assign pc (Id id) (toexpr a)
---     return s
--- 
--- 
--- skip :: ST.State StmtBuilder Stmt
--- skip = do
---   pc <- sbLocIncr
---   let s = Skip pc
---   return s
--- 
--- 
--- while :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
--- while idcond loopbuilder = do
---   pc <- sbLocIncr
---   loop <- loopbuilder
---   pc' <- sbLocIncr
--- 
---   let l = While pc (Id idcond) loop pc'
---   return l
--- 
--- if_ :: String -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt -> ST.State StmtBuilder Stmt
--- if_ idcond thenbuilder elsebuilder = do
---   pc <- ST.gets sbpc
---   sbLocIncr
---   then_ <- thenbuilder
---   else_ <- elsebuilder
---   pc' <- sbLocIncr
---   return (If pc (Id idcond) then_ else_ pc')
--- 
--- 
---   
--- 
--- pIf :: (Stmt, OpaqueVals) 
--- pIf =
---   let if1_then = stmtSequence $ [
---         assign "y" (EInt 1)]
--- 
---       if1_else =  stmtSequence $ [
---         assign "y" (EInt 3) ]
---   
---   in (stmtBuild . stmtSequence $ [
---   skip,
---   assign "x" (EInt 5),
---   assign "x_lt_10" ("x" <. EInt 10),
---   if_ "x_lt_10" if1_then if1_else,
---   assign "z" ("y" +. EInt 1 )], OpaqueVals mempty)
--- 
--- pLoop :: (Stmt, OpaqueVals)
--- pLoop = (stmtBuild . stmtSequence $ [
---   assign "x" (EInt 1),
---   assign "x_lt_5" ("x" <. EInt 5),
---   while "x_lt_5" $ stmtSequence $ [
---       skip,
---       assign "x_next" ("x" +.  EInt 1),
---       assign "x_lt_5_next" ("x" <. EInt 5),
---       assign "x" "x_next",
---       assign "x_lt_5" "x_lt_5_next"
---   ],
---   assign "z" ("x" +. EInt (-5))],
---  OpaqueVals (M.fromList $ [(Loc 4, [Id "x"])]))
--- 
--- pTwoNestedLoop :: (Stmt, OpaqueVals)
--- pTwoNestedLoop = (stmtBuild . stmtSequence $ [
---   assign "x" (EInt 1),
---   assign "x_lt_5" ("x" <. EInt 5),
---   while "x_lt_5" $ stmtSequence $ [
---       skip,
---       assign "x_next" ("x" +.  EInt 1),
---       assign "x_lt_5_next" ("x" <. EInt 5),
--- 
---       assign "y" (EInt 2),
---       assign "y_lt_10" ("y" <. EInt 10),
---       while "y_lt_10" $ stmtSequence $ [
---         skip,
---         assign "y_plus_x" ("y" +. "x"),
---         assign "y_plus_x_next" ("y" +. "x_next"),
---         assign "y_next" ("y" +.  EInt 5),
---         assign "y" "y_next",
---         assign "y_lt_10_next" ("y" <. EInt 10),
---         assign "y_lt_10" "y_lt_10_next"
---     ],
---     assign "x" "x_next",
---     assign "x_lt_5" "x_lt_5_next",
---     assign "alpha" ("y" +. EInt (-12))
---   ],
---   assign "beta" ("x" +. EInt (-5))],
---  OpaqueVals (M.fromList $ [(Loc 4, [Id "x"]), (Loc 12, [Id "y"])]))
 -- 
 -- -- ========================
 -- -- CHOOSE YOUR PROGRAM HERE
