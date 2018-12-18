@@ -536,6 +536,7 @@ programExec p@(Program bbs) env =
 -- environment + PC
 type CSemEnv v = SemiMeetMap Id v
 
+
 data CSemDefn v = CSemDefn {
   -- the value of `true` that is used for conditionals in the environment
   csemDefnValIsTrue :: !(v -> Bool),
@@ -547,38 +548,43 @@ data CSemDefn v = CSemDefn {
 csemenvbegin :: CSemEnv v
 csemenvbegin = lmempty
 
+type CSemState v = (CSemEnv v, Maybe BBId)
+type Loc2CSemState v = M.Map Loc (CSemState v)
+type CSem v = S.Set (Loc2CSemState v)
 
-type Loc2CSemEnv v = M.Map Loc (CSemEnv v)
-type CSem v = S.Set (Loc2CSemEnv v)
-
-pc2csemenvShow :: Show v => Loc2CSemEnv v -> String
+pc2csemenvShow :: Show v => Loc2CSemState v -> String
 pc2csemenvShow m = fold $ map (\(k, v) -> show k ++ " -> " ++ show v ++ "\n") (M.toList m)
 
 
--- Propogate the value of the environment at the first Loc to the second Loc.
+-- Propogate the value of the state at the first Loc to the second Loc.
 -- Needed to implicitly simulate the flow graph.
-statePropogate :: Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> Loc2CSemEnv v -> Loc2CSemEnv v
-statePropogate pc pc' f st = let e = st M.! pc  in
-  M.insert pc' (f e) st
-
+l2CSemStateUpdate :: Loc -> Loc -> (CSemState v -> CSemState v) -> Loc2CSemState v -> Loc2CSemState v
+l2CSemStateUpdate loc loc' f l2st = 
+  let st = l2st M.! loc in M.insert loc' (f st) l2st
 
 -- Initial collecting semantics, which contains one Loc2Env.
 -- This initial Loc2Env maps every Loc to the empty environment
 initCollectingSem :: Program -> CSem v
 initCollectingSem p = let 
   finalpc = unLoc (programMaxLoc p) + 1
-  st = M.fromList (zip (map Loc [-1..finalpc]) (repeat csemenvbegin)) 
+  st = M.fromList (zip (map Loc [-1..finalpc]) (repeat (csemenvbegin, Nothing))) 
   in S.singleton $ st
+
+-- propogate the value of a state at the first Loc to the second
+-- Loc across all states.
+csemUpdateState :: Ord v => Loc -> Loc -> (CSemState v -> CSemState v) -> CSem v -> CSem v
+csemUpdateState loc loc' f = S.map (l2CSemStateUpdate loc loc' f) 
 
 -- propogate the value of an environment at the first Loc to the second
 -- Loc across all states.
-collectingSemPropogate :: Ord v => Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
-collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
+csemUpdateEnv :: Ord v => Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
+csemUpdateEnv loc loc' f = 
+  csemUpdateState loc loc' (\(env, mbbid) -> (f env, mbbid))
 
 -- filter the collecting semantics at a given Loc with a predicate over the 
 -- environment at that Loc
-collectingSemFilter :: Ord v => Loc -> (CSemEnv v -> Bool) -> CSem v -> CSem v
-collectingSemFilter pc f csem = 
+csemFilter :: Ord v => Loc -> (CSemState v -> Bool) -> CSem v -> CSem v
+csemFilter pc f csem = 
   S.filter (\s -> f ((s M.! pc))) csem
 
 phiTransferCSem :: (Ord v, SemiMeet v) => CSemDefn v 
@@ -591,45 +597,56 @@ phiTransferCSem csemDefn locold (Phi loc _ id (bbidl, idl) (bbidr, idr)) bbidpre
     -- f :: CSemEnv v -> CSemEnv v
     f env = 
       lminsert id (if bbidprev == bbidl then env !!! idl else env !!! idr) env
-  in collectingSemPropogate locold loc f csem
+  in csemUpdateEnv locold loc f csem
+
+
+-- get the next basic block to be executed under this semantics
+termNextBBIdCSem :: (Ord v, SemiMeet v) => 
+  CSemDefn v -> Term -> CSemEnv v -> Maybe BBId 
+termNextBBIdCSem csemDefn (Br _ bbid) env = Just bbid
+termNextBBIdCSem csemDefn (BrCond _ condid bbidl bbidr) env = 
+  if csemDefnValIsTrue csemDefn (env !!! condid)
+     then Just bbidl 
+     else Just bbidr
+termNextBBIdCSem _ (Ret _ _) _ = Nothing
 
 
 
-
-
-termTransferCSem :: (Ord v, SemiMeet v) => BBId2Loc
-                 -> CSemDefn v 
+termTransferCSem :: (Ord v, SemiMeet v) => CSemDefn v 
                  -> Loc -- location to transfer to
                  -> Term -- instruction
                  -> CSem v -> CSem v
-termTransferCSem bbId2Loc csemDefn locold (Br _ bbid) csem = 
-  collectingSemPropogate locold (bbId2Loc M.! bbid) id csem
-
--- TODO: simplify this
-termTransferCSem bbId2Loc csemDefn locold (BrCond _ condid bbidl bbidr) csem = 
-  let -- brval :: Loc2CSemEnv v -> v
-      brval l2env = (l2env M.! locold) !!! condid
-
-      -- isCondTrue :: Loc2CSemEnv v -> Bool
-      isCondTrue l2env = csemDefnValIsTrue csemDefn (brval l2env)
-
-      -- nextloc :: Loc2CSemEnv v -> Loc
-      nextloc l2env = bbId2Loc M.! (if isCondTrue l2env then bbidl else bbidr)
-  in 
- S.map (\l2env -> let oldenv = l2env M.! locold in M.insert (nextloc l2env) oldenv l2env) csem
-
-
--- TODO: create some mechanism to signal the return value
-termTransferCSem bbId2Loc csemDefn locold (Ret loc _) csem = 
-  collectingSemPropogate locold loc id csem
+termTransferCSem csemDefn loc term csem =
+  let -- f :: CSemState v -> CSemState v
+      f (env, _) = (env, termNextBBIdCSem csemDefn term env)
+   in csemUpdateState loc (location term) f csem
 
 instTransferCSem :: Ord v => CSemDefn v 
                  -> Loc 
                  -> Inst 
                  -> CSem v -> CSem v
 instTransferCSem csemDefn locold (Assign loc id expr) = 
-  collectingSemPropogate locold loc 
+  csemUpdateEnv locold loc 
     (\env -> lminsert id (csemDefnExprEval csemDefn expr env) env)
+
+bbTransferCSem :: (Ord v, SemiMeet v) => CSemDefn v 
+               -- -> BBId2Loc -- mapping from basic blocks to their locations
+               -> Loc -- location to pull from
+               -> BB -- basic block
+               -> Maybe BBId -- previous basic block ID
+               -> CSem v
+               -> CSem v
+bbTransferCSem csemDefn locold (BB loc _ phis insts term) mbbidold csem =
+  let 
+    -- csem' :: CSem v
+    csem' = case mbbidold of
+              Nothing -> csem
+              Just bbidold ->  foldl (\csem phi -> phiTransferCSem csemDefn locold phi bbidold csem) csem phis
+
+    ( csem'', loc') = foldl (\(csem, loc) inst -> (instTransferCSem csemDefn loc inst csem, location inst)) (csem', locold) insts
+
+  in termTransferCSem csemDefn loc' term csem''
+
 
 
 -- -- affect the statement, by borrowing the Loc2Env from the given Loc
@@ -643,15 +660,15 @@ instTransferCSem csemDefn locold (Assign loc id expr) =
 -- stmtCollect csemDefn pcold (While pc condid loop pc') csem =
 --   let -- filter_allowed_iter :: CSem v -> CSem v
 --       filter_allowed_iter csem = 
---         collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) csem
+--         csemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) csem
 --   
 --       -- pre_to_entry :: CSem v -> CSem v
---       pre_to_entry = filter_allowed_iter . collectingSemPropogate pcold pc id
+--       pre_to_entry = filter_allowed_iter . csemUpdateEnv pcold pc id
 -- 
 -- 
 --       -- exit block to entry 
 --       -- exit_to_entry :: CSem v -> CSem v
---       exit_to_entry = filter_allowed_iter . collectingSemPropogate pc' pc id
+--       exit_to_entry = filter_allowed_iter . csemUpdateEnv pc' pc id
 -- 
 -- 
 --       -- everything entering the entry block 
@@ -664,7 +681,7 @@ instTransferCSem csemDefn locold (Assign loc id expr) =
 -- 
 --       -- final statement in while to exit block
 --       -- final_to_exit :: CSem v -> CSem v
---       final_to_exit csem = collectingSemPropogate (stmtLocEnd loop) pc' id (entry_to_exit csem)
+--       final_to_exit csem = csemUpdateEnv (stmtLocEnd loop) pc' id (entry_to_exit csem)
 -- 
 --       -- f :: CSem v -> CSem v
 --       f csem = final_to_exit csem
@@ -678,23 +695,23 @@ instTransferCSem csemDefn locold (Assign loc id expr) =
 -- -- then, else -> exit
 -- stmtCollect csemDefn pcold (If pc condid s s' pc') csem = 
 --   let
---     pre_to_entry csem = collectingSemPropogate pcold pc id csem
+--     pre_to_entry csem = csemUpdateEnv pcold pc id csem
 -- 
 --     filter_then csem = 
---       collectingSemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
+--       csemFilter pc (csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
 --     
 --     filter_else csem = 
---       collectingSemFilter pc (not . csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
+--       csemFilter pc (not . csemDefnValIsTrue csemDefn . (!!! condid)) (pre_to_entry csem)
 -- 
 --     entry_to_then csem = stmtCollect csemDefn pc s (filter_then csem)
 -- 
 --     entry_to_else csem = stmtCollect csemDefn pc s' (filter_else csem)
 -- 
 --     then_to_exit csem = 
---       collectingSemPropogate (stmtLocEnd s) pc' id  (entry_to_then csem)
+--       csemUpdateEnv (stmtLocEnd s) pc' id  (entry_to_then csem)
 -- 
 --     else_to_exit csem = 
---       collectingSemPropogate (stmtLocEnd s') pc' id (entry_to_else csem)
+--       csemUpdateEnv (stmtLocEnd s') pc' id (entry_to_else csem)
 -- 
 --   in 
 --     then_to_exit csem `S.union` else_to_exit csem
@@ -706,11 +723,11 @@ instTransferCSem csemDefn locold (Assign loc id expr) =
 -- 
 -- -- TODO: merge code of Assign, Skip?
 -- stmtCollect csemDefn pcold s@(Assign _ _ _) csem =
---   (collectingSemPropogate pcold (stmtLocEnd s) (csemDefnInstSingleStep csemDefn s)) $ csem
+--   (csemUpdateEnv pcold (stmtLocEnd s) (csemDefnInstSingleStep csemDefn s)) $ csem
 -- 
 -- 
 -- stmtCollect csemDefn pcold s@(Skip _) csem = 
---   (collectingSemPropogate pcold (stmtLocEnd s) (csemDefnInstSingleStep csemDefn s)) $ csem
+--   (csemUpdateEnv pcold (stmtLocEnd s) (csemDefnInstSingleStep csemDefn s)) $ csem
 -- 
 -- 
 -- 
@@ -744,26 +761,26 @@ listTuplesCollect abs =
 -- Explode the collecting semantics object to a gargantuan list so we can
 -- then rearrange it
 -- Collectingsem :: S.Set (M.Map Loc (M.Map Id ToppedLattice Int))
-collectingSemExplode :: CSem v -> [(Id, (Loc, v))]
-collectingSemExplode csem = 
-  let -- set2list :: [Loc2CSemEnv v]
-      set2list = S.toList csem
-      
-      -- pc2aenvlist :: [[(Loc, CSemEnv v)]]
-      pc2aenvlist = map M.toList set2list
-
-      -- aenvlist :: [[(Loc, [(Id, ToppedLattice v)])]]
-      aenvlist = (map . map) ((\(pc, aenv) -> (pc, lmtolist aenv))) pc2aenvlist 
-
-      -- flatten1 :: [(Loc, [(Id, ToppedLattice v)])]
-      flatten1 = concat aenvlist
-
-      -- tuples :: [(Loc, (Id, ToppedLattice v))]
-      tuples = concat $ map pushTupleInList flatten1
-
-      -- tuples' :: [(Id, (Loc, ToppedLattice v))]
-      tuples' = map (\(pc, (id, val)) -> (id, (pc, val))) tuples
-  in tuples'
+-- collectingSemExplode :: CSem v -> [(Id, (Loc, v))]
+-- collectingSemExplode csem = undefined
+--   let -- set2list :: [Loc2CSemState v]
+--       set2list = S.toList csem
+--       
+--       -- pc2aenvlist :: [[((Loc, CSemEnv v), Maybe BBId)]]
+--       pc2aenvlist = map (\(env, mbbid) -> (M.toList env, mbbid)) set2list
+-- 
+--       -- aenvlist :: [[(Loc, [(Id, ToppedLattice v)])]]
+--       aenvlist = (map . map) ((\(pc, aenv) -> (pc, lmtolist aenv))) pc2aenvlist 
+-- 
+--       -- flatten1 :: [(Loc, [(Id, ToppedLattice v)])]
+--       flatten1 = concat aenvlist
+-- 
+--       -- tuples :: [(Loc, (Id, ToppedLattice v))]
+--       tuples = concat $ map pushTupleInList flatten1
+-- 
+--       -- tuples' :: [(Id, (Loc, ToppedLattice v))]
+--       tuples' = map (\(pc, (id, val)) -> (id, (pc, val))) tuples
+--   in tuples'
 
 
 -- Find the assignment statement that first assigns to the ID.
