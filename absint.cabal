@@ -58,6 +58,8 @@ executable absint
     , ISL.Native.C2Hs
     , ISL.Native.Types
     , ISL.Types
+    , OrderedMap
+    , PrettyUtils
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -69,6 +71,7 @@ executable absint
                       , prettyprinter
                       , inline-c
                       , template-haskell
+                      , text
 
 
   build-tools: c2hs >= 0.19.1
