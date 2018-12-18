@@ -1035,6 +1035,14 @@ instance ToExpr Bool where
 instance ToExpr Expr where
   toexpr = id
 
+(+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
+(+.) a b = EBinop Add (toexpr a) (toexpr b)
+
+
+(<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
+(<.) a b = EBinop Lt (toexpr a) (toexpr b)
+
+-- Builder of program state
 data ProgramBuilder = ProgramBuilder { 
   builderpc :: Loc, 
   curbbid :: Maybe BBId,
@@ -1088,6 +1096,55 @@ appendPhi ph = builderCurBBModify (bbModifyPhis (++ [ph]))
 
 setTerm :: Term -> ST.State ProgramBuilder ()
 setTerm term = builderCurBBModify (bbModifyTerm (const term))
+
+assign :: String -> Expr -> ST.State ProgramBuilder ()
+assign id e = do
+  loc <- builderLocIncr
+  appendInst (Assign loc (Id id) e)
+
+ret :: String -> ST.State ProgramBuilder ()
+ret id = do
+  loc <- builderLocIncr
+  setTerm (Ret loc (Id id))
+
+
+philoop :: String -> (BBId, String) -> (BBId, String) -> ST.State ProgramBuilder ()
+philoop id (bbidl, idl) (bbidr, idr) = do
+  loc <- builderLocIncr
+  appendPhi (Phi loc PhityLoop (Id id) (bbidl, Id idl) (bbidr, Id idr))
+
+condbr :: String -> BBId -> BBId -> ST.State ProgramBuilder ()
+condbr id bbidt bbidf = do
+  loc <- builderLocIncr
+  setTerm (BrCond loc (Id id) bbidt bbidf)
+
+
+br :: BBId -> ST.State ProgramBuilder ()
+br bbid = do
+  loc <- builderLocIncr
+  setTerm (Br loc bbid)
+
+pLoop :: Program
+pLoop = runProgramBuilder $ do
+  entry <- buildNewBB "entry"
+  loop <- buildNewBB "loop"
+  exit <- buildNewBB "exit"
+
+  focusBB entry
+  assign "x_entry" (EInt 1)
+  br loop
+
+  focusBB exit
+  ret "x_loop"
+
+  focusBB loop
+  philoop "x_loop" (entry, "x_entry") (loop, "x_next")
+
+  assign "x_loop_lt_5" ("x_loop" <. (EInt 5))
+  assign "x_next" ("x_loop" +. (EInt 1))
+
+  condbr "x_loop_lt_5" loop exit
+
 
 
 -- data StmtBuilder = StmtBuilder { sbpc :: Loc }
@@ -1146,12 +1203,6 @@ setTerm term = builderCurBBModify (bbModifyTerm (const term))
 -- 
 -- 
 --   
--- (+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
--- (+.) a b = EBinop Add (toexpr a) (toexpr b)
--- 
--- 
--- (<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
--- (<.) a b = EBinop Lt (toexpr a) (toexpr b)
 -- 
 -- pIf :: (Stmt, OpaqueVals) 
 -- pIf =
@@ -1213,8 +1264,7 @@ setTerm term = builderCurBBModify (bbModifyTerm (const term))
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
 pcur :: Program
-pcur = undefined
--- pcur = fst pLoop
+pcur = pLoop
 -- 
 -- curToOpaqify :: OpaqueVals
 -- curToOpaqify = snd pLoop
