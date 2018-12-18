@@ -141,8 +141,8 @@ instance Show a => Show (BottomedLattice a) where
 data SemiMeetMap k v = LM !(M.Map k v)  deriving (Eq, Ord, Functor)
 
 -- Insert a regular value into a lattice map
-insert :: Ord k => k -> v -> SemiMeetMap k v -> SemiMeetMap k v
-insert k v (LM m) = LM $ M.insert k v m
+lminsert :: Ord k => k -> v -> SemiMeetMap k v -> SemiMeetMap k v
+lminsert k v (LM m) = LM $ M.insert k v m
 
 -- pointwise produce of two lattice maps
 -- If a value is missing in either lattice, put a bottom in its place
@@ -533,11 +533,14 @@ programExec p@(Program bbs) env =
 --  Collecting semantics Framework
 -- ===============================
 
+-- environment + PC
 type CSemEnv v = SemiMeetMap Id v
 
 data CSemDefn v = CSemDefn {
   -- the value of `true` that is used for conditionals in the environment
   csemDefnValIsTrue :: !(v -> Bool),
+  -- evaluate an expression to an abstract value
+  csemDefnExprEval :: Expr -> CSemEnv v -> v,
   csemDefnInstSingleStep :: !(Inst -> CSemEnv v -> CSemEnv v)
 }
 
@@ -567,18 +570,68 @@ initCollectingSem p = let
   st = M.fromList (zip (map Loc [-1..finalpc]) (repeat csemenvbegin)) 
   in S.singleton $ st
 
--- -- propogate the value of an environment at the first Loc to the second
--- -- Loc across all states.
--- collectingSemPropogate :: Ord v => Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
--- collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
--- 
--- -- filter the collecting semantics at a given Loc with a predicate over the 
--- -- environment at that Loc
--- collectingSemFilter :: Ord v => Loc -> (CSemEnv v -> Bool) -> CSem v -> CSem v
--- collectingSemFilter pc f csem = 
---   S.filter (\s -> f ((s M.! pc))) csem
--- 
--- 
+-- propogate the value of an environment at the first Loc to the second
+-- Loc across all states.
+collectingSemPropogate :: Ord v => Loc -> Loc -> (CSemEnv v -> CSemEnv v) -> CSem v -> CSem v
+collectingSemPropogate pc pc' f = S.map (statePropogate pc pc' f)
+
+-- filter the collecting semantics at a given Loc with a predicate over the 
+-- environment at that Loc
+collectingSemFilter :: Ord v => Loc -> (CSemEnv v -> Bool) -> CSem v -> CSem v
+collectingSemFilter pc f csem = 
+  S.filter (\s -> f ((s M.! pc))) csem
+
+phiTransferCSem :: (Ord v, SemiMeet v) => CSemDefn v 
+                -> Loc -- location to pull data from
+                -> Phi -- instruction
+                -> BBId -- basic block ID of the previous basic block
+                -> CSem v -> CSem v
+phiTransferCSem csemDefn locold (Phi loc _ id (bbidl, idl) (bbidr, idr)) bbidprev csem = 
+  let
+    -- f :: CSemEnv v -> CSemEnv v
+    f env = 
+      lminsert id (if bbidprev == bbidl then env !!! idl else env !!! idr) env
+  in collectingSemPropogate locold loc f csem
+
+
+
+
+
+termTransferCSem :: (Ord v, SemiMeet v) => BBId2Loc
+                 -> CSemDefn v 
+                 -> Loc -- location to transfer to
+                 -> Term -- instruction
+                 -> CSem v -> CSem v
+termTransferCSem bbId2Loc csemDefn locold (Br _ bbid) csem = 
+  collectingSemPropogate locold (bbId2Loc M.! bbid) id csem
+
+-- TODO: simplify this
+termTransferCSem bbId2Loc csemDefn locold (BrCond _ condid bbidl bbidr) csem = 
+  let -- brval :: Loc2CSemEnv v -> v
+      brval l2env = (l2env M.! locold) !!! condid
+
+      -- isCondTrue :: Loc2CSemEnv v -> Bool
+      isCondTrue l2env = csemDefnValIsTrue csemDefn (brval l2env)
+
+      -- nextloc :: Loc2CSemEnv v -> Loc
+      nextloc l2env = bbId2Loc M.! (if isCondTrue l2env then bbidl else bbidr)
+  in 
+ S.map (\l2env -> let oldenv = l2env M.! locold in M.insert (nextloc l2env) oldenv l2env) csem
+
+
+-- TODO: create some mechanism to signal the return value
+termTransferCSem bbId2Loc csemDefn locold (Ret loc _) csem = 
+  collectingSemPropogate locold loc id csem
+
+instTransferCSem :: Ord v => CSemDefn v 
+                 -> Loc 
+                 -> Inst 
+                 -> CSem v -> CSem v
+instTransferCSem csemDefn locold (Assign loc id expr) = 
+  collectingSemPropogate locold loc 
+    (\env -> lminsert id (csemDefnExprEval csemDefn expr env) env)
+
+
 -- -- affect the statement, by borrowing the Loc2Env from the given Loc
 -- stmtCollect :: (SemiMeet v, Ord v) => CSemDefn v -> Loc -> Stmt -> CSem v -> CSem v
 -- 
@@ -914,7 +967,7 @@ data OpaqueVals = OpaqueVals !(M.Map Loc [Id])
 envOpaqify :: Loc -> OpaqueVals -> CSemEnv (LiftedLattice SymVal) -> CSemEnv (LiftedLattice SymVal)
 envOpaqify pc (OpaqueVals ovs) env =
   case ovs M.!? pc of
-    Just ids -> foldl (\env id -> insert id (LL (symValId id)) env) env ids
+    Just ids -> foldl (\env id -> lminsert id (LL (symValId id)) env) env ids
     Nothing -> env
 
 
