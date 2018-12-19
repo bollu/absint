@@ -61,6 +61,7 @@ type PtrId = Ptr Id
   { id `Ptr Ctx'
   , `String'
   } -> `Ptr Set' id #}
+-- map
 {#fun isl_map_read_from_str as mapReadFromStr
   { id `Ptr Ctx'
   , `String'
@@ -113,6 +114,15 @@ type PtrId = Ptr Id
 {#fun isl_map_to_str as mapToStr
   { id `Ptr Map'
   } -> `String' #}
+
+
+{#fun isl_map_from_pw_aff as mapFromPwaff
+  { id `Ptr Pwaff'
+  } -> `Ptr Map' id #}
+
+
+
+-- set
 
 {#fun isl_set_intersect as setIntersect
   { id `Ptr Set'
