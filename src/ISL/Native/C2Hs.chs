@@ -145,7 +145,7 @@ type PtrId = Ptr Id
   , id `Ptr Constraint'
   } -> `Ptr BasicSet' id #}
 
-{#fun isl_space_set_alloc as spaceSetAlloc
+{#fun isl_space_set_alloc as spaceSetAlloc_
   { id `Ptr Ctx'
   , id `CUInt'
   , id `CUInt'
@@ -169,8 +169,9 @@ type PtrId = Ptr Id
   } -> `Ptr Space' id #}
 
 {#fun isl_space_alloc as spaceAlloc_
-  { id `Ptr Ctx', `CULong', `CULong', `CULong'
+  { id `Ptr Ctx', `CUInt', `CUInt', `CUInt'
   } -> `Ptr Space' id #}
+
 
 -- basic set
 {#fun isl_basic_set_project_out as basicSetProjectOut
@@ -218,6 +219,15 @@ pwaffInt ctx ls i = do
     aff <- affInt ctx ls i
     pwaffFromAff aff
     
+spaceSetAlloc :: Ptr Ctx -> Int -> Int -> IO (Ptr Space)
+spaceSetAlloc ctx nparam ndim = 
+    spaceSetAlloc_ ctx (fromIntegral nparam) (fromIntegral ndim)
+
+localSpaceSetAlloc :: Ptr Ctx -> Int -> Int -> IO (Ptr LocalSpace)
+localSpaceSetAlloc ctx nparam ndim = 
+    spaceSetAlloc ctx nparam ndim >>= localSpaceFromSpace
+
+
 spaceAlloc :: Ptr Ctx -> Int -> Int -> Int -> IO (Ptr Space)
 spaceAlloc ctx nparam nin nout = 
     spaceAlloc_ ctx (fromIntegral nparam) (fromIntegral nin) (fromIntegral nout)

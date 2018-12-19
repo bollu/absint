@@ -934,10 +934,10 @@ symaffToPwaff :: Ptr Ctx -> Symaff -> IO (Ptr Pwaff)
 symaffToPwaff ctx (Symaff (c, coeffs)) = 
   if M.null coeffs
      then do 
-      ls <- localSpaceAlloc ctx 0 0 0
+      ls <- localSpaceSetAlloc ctx 0 0
       pwaffInt ctx ls c
   else do
-    ls <- localSpaceAlloc ctx 0 0 0
+    ls <- localSpaceSetAlloc ctx 0 0
     pwaffInt ctx ls 42
 
 symValToPwaff :: Ptr Ctx -> SymVal -> IO (Ptr Pwaff)
@@ -945,7 +945,7 @@ symValToPwaff ctx (SymValAff aff) = symaffToPwaff ctx aff
 symValToPwaff ctx (SymValBinop bop l r) = symValToPwaff ctx l
 symValToPwaff ctx (SymValPhi l r) = 
   do
-    ls <- localSpaceAlloc ctx 0 0 0
+    ls <- localSpaceSetAlloc ctx 0 0
     pwaffInt ctx ls(-42)
 
 -- Abstract interpretation
@@ -1186,6 +1186,7 @@ main = do
 
 
     putStrLn ""
+    putStrLn "***pwaff values***"
     id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx) id2sym
 
     putDocW 80 (pretty id2pwaff)
