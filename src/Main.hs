@@ -189,17 +189,17 @@ instance SemiMeet v => SemiMeet (SemiMeetMap k v) where
 -- ===============================
 
 
-repeatTillFix :: (Eq a) =>  (a -> a) -> a -> [a]
+repeatTillFix :: (Eq a) =>  (a -> a) -> a -> a
 repeatTillFix f a =
   let a' = f a in
-  if a == a' then [a] else a:repeatTillFix f a'
+  if a == a' then a else repeatTillFix f a'
 
 
 -- repeat till fixpoint, or the max count
-repeatTillFixDebug :: Eq a => Int -> (a -> a) -> a -> [a]
-repeatTillFixDebug 0 f a = [a]
+repeatTillFixDebug :: Eq a => Int -> (a -> a) -> a -> a
+repeatTillFixDebug 0 f a = a
 repeatTillFixDebug n f a = 
-  let a' = f a in if a' == a then [a] else a': repeatTillFixDebug (n - 1) f a'
+  let a' = f a in if a' == a then a else repeatTillFixDebug (n - 1) f a'
 
 -- Program syntax
 -- ==============
@@ -379,6 +379,12 @@ type AbsDomain = M.Map Loc AbsEnv
 
 -- collecting semantics in general. Map PC to a set of environments
 type Collecting a = M.Map Loc (S.Set (Env a))
+
+collectingBegin :: Program -> Collecting a
+collectingBegin p@(Program (entry:_)) = 
+  let locs = map Loc [-1..(unLoc (programMaxLoc p))]
+      allempty = M.fromList $ zip locs mempty
+   in M.insert (location entry) (S.singleton envBegin) allempty
 
 -- concrete environments
 type ConcreteEnv = Env Int
@@ -576,16 +582,12 @@ phiExecCollecting phi loc csem = undefined
 bbExecCollecting :: Ord a => Semantics a 
                  -> M.Map BBId Loc
                  -> BB 
-                 -> Loc
                  -> Collecting a -> Collecting a
-bbExecCollecting sem bbid2loc bb loc csem = let
-  -- loc -> bb
-  csembb = mapEnvCollecting loc (bbloc bb) (mapLEnvEnv  (bbLenvUpdate (bbid bb) (bbty bb))) csem
-
+bbExecCollecting sem bbid2loc bb csem = let
   -- bb -> phis
   (locphis, csemphis) = 
     foldl (\(loc, csem) phi -> (location phi, phiExecCollecting phi loc csem)) 
-      (location bb, csembb) (bbphis bb)
+      (location bb, csem) (bbphis bb)
 
   -- prev inst -> inst
   (locinsts, cseminsts) = 
@@ -601,8 +603,16 @@ bbExecCollecting sem bbid2loc bb loc csem = let
   
 
 
-programExecCollecting :: Semantics a -> Program -> Collecting a -> Collecting a
-programExecCollecting sem p envs = undefined
+programExecCollecting :: Ord a => Semantics a -> Program -> Collecting a -> Collecting a
+programExecCollecting sem p@(Program bbs) csem = 
+  let bbid2loc = M.map bbloc (programBBId2BB p) 
+   in foldl (\csem bb -> bbExecCollecting sem bbid2loc bb csem) csem bbs
+
+
+programFixCollecting :: (Eq a, Ord a) => 
+  Semantics a -> Program -> Collecting a -> Collecting a
+programFixCollecting sem p csem = 
+  repeatTillFix (programExecCollecting sem p) csem
 
 -- Abstract interpretation
 -- ==========================
@@ -826,6 +836,9 @@ main = do
 
 
     putStrLn "***collecting semantics (concrete x symbol):***"
+    let csem = programFixCollecting semConcrete pcur (collectingBegin pcur)
+
+    print csem
     -- forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
     putStrLn "***sampling program using the abstraction:***"
