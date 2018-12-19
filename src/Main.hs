@@ -566,14 +566,10 @@ termExecCollecting :: Ord a => Pretty a => (a -> Maybe Bool)
                    -> BBId  -- current BBId
                    -> Collecting a -> Collecting a
 termExecCollecting sempred term loc curbbid csem = let
-  -- venvToPc :: VEnv a -> PC
-  venvToPc venv = mkSemTerm sempred term curbbid venv
-
-  -- envAdjustPC :: Env a -> Env a
-  envAdjustPC (Env venv lenv _) = 
-    (Env venv lenv (venvToPc venv))
-
- in mapEnvCollecting loc (location term) envAdjustPC csem
+  -- envMap :: Env a -> Env a
+  envMap (Env venv lenv pc) = 
+    (Env venv lenv (mkSemTerm sempred term curbbid venv))
+ in mapEnvCollecting loc (location term) envMap csem
 
 setCatMaybes :: Ord a => S.Set (Maybe a) -> S.Set a
 setCatMaybes s = S.map fromJust $ S.filter (/= Nothing) s
@@ -584,38 +580,24 @@ setCatMaybes s = S.map fromJust $ S.filter (/= Nothing) s
 flowIntoBBExecCollecting :: Ord a => Pretty a => 
   Loc  --  location of terminator to pull from
   -> M.Map BBId Loc  -- map from BB ids to locations
-  -> M.Map BBId (Maybe BBTy)
   -> Collecting a 
   -> Collecting a
-flowIntoBBExecCollecting loc bbid2loc bbid2ty csem = 
+flowIntoBBExecCollecting loc bbid2loc csem = 
   let -- tocopy :: S.Set (Env a)
       tocopy = csem !!# loc
 
       -- targets :: S.Set (Maybe (Env a, Loc))
-      targets = 
-        S.map 
-          (\env@(Env _ _ pc) -> 
-            case pc of
-              PCNext _ nextbbid -> Just (env, bbid2loc !!# nextbbid)
-              _ -> Nothing) tocopy
+      targets = S.map (\env@(Env _ _ pc) -> case pc of
+                                            PCNext _ nextbbid -> Just (env, bbid2loc !!# nextbbid)
+                                            _ -> Nothing) tocopy
 
       -- targets' :: S.Set (Env a, Loc)
       targets' = setCatMaybes targets
 
+      -- updateEnv :: Collecting a -> (Env a, Loc) -> Collecting a
+      updateEnv csem (env, loc) = M.adjust (`S.union` (S.singleton env)) loc csem
 
-      -- targetsWithLoopUpdates :: S.Set (Env a, Loc)
-      targetsWithLoopUpdates = 
-        S.map 
-          (\(env@(Env venv lenv pc), loc) -> 
-            case pc of
-              PCNext _ nextbbid -> ((Env venv (bbLenvUpdate nextbbid (bbid2ty !!# nextbbid) lenv) pc), loc)
-              _ -> (env, loc)) targets'
-
-      -- pullEnv :: Collecting a -> (Env a, Loc) -> Collecting a
-      pullEnv csem (env, loc) = 
-        M.adjust (`S.union` (S.singleton env)) loc csem
-
-  in foldl pullEnv csem targetsWithLoopUpdates
+  in foldl updateEnv csem targets'
 
 
 
@@ -629,26 +611,24 @@ phiExecCollecting phi loc csem =
   let
     -- f :: Env a -> Env a
     f env@(Env venv lenv (PCNext prevbbid _)) = mapVenvEnv (mkSemPhi phi prevbbid) env
-    -- f env@(Env venv lenv PCDone) = env
+    f env@(Env venv lenv PCDone) = env
   in 
    mapEnvCollecting loc (location phi) f  csem
 
 
 bbExecCollecting :: Ord a => Pretty a => Semantics a 
                  -> M.Map BBId Loc
-                 -> M.Map BBId (Maybe BBTy)
                  -> BB 
                  -> Collecting a -> Collecting a
-bbExecCollecting sem bbid2loc bbid2ty bb csem = let
+bbExecCollecting sem bbid2loc bb csem = let
   -- bb -> bb updated loop env
-  -- bbcsem = Trace.trace (prettyableToString csem)
-  --           updateEnvCollecting (bbloc bb) (mapLEnvEnv (bbLenvUpdate (bbid bb) (bbty bb))) csem
+  bbcsem = Trace.trace (prettyableToString csem)
+            updateEnvCollecting (bbloc bb) (mapLEnvEnv (bbLenvUpdate (bbid bb) (bbty bb))) csem
 
   -- bb -> phis
-  -- HACK: don't update the loop counts
   (locphis, csemphis) = 
     foldl (\(loc, csem) phi -> (location phi, phiExecCollecting phi loc csem)) 
-      (location bb, csem) (bbphis bb)
+      (location bb, bbcsem) (bbphis bb)
 
   -- prev inst -> inst
   (locinsts, cseminsts) = 
@@ -659,7 +639,7 @@ bbExecCollecting sem bbid2loc bbid2ty bb csem = let
   csemterm = termExecCollecting (semPredicate sem) (bbterm bb) locinsts (bbid bb) cseminsts
 
   -- term -> next bb
-  csemflow = flowIntoBBExecCollecting (location (bbterm bb)) bbid2loc bbid2ty csemterm
+  csemflow = flowIntoBBExecCollecting (location (bbterm bb)) bbid2loc csemterm
   in csemflow
   
 
@@ -667,8 +647,7 @@ bbExecCollecting sem bbid2loc bbid2ty bb csem = let
 programExecCollecting :: Ord a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
 programExecCollecting sem p@(Program bbs) csem = 
   let bbid2loc = M.map bbloc (programBBId2BB p) 
-      bbid2ty = M.map bbty (programBBId2BB p)
-   in foldl (\csem bb -> bbExecCollecting sem bbid2loc bbid2ty bb csem) csem bbs
+   in foldl (\csem bb -> bbExecCollecting sem bbid2loc bb csem) csem bbs
 
 
 programFixCollecting :: (Eq a, Ord a, Pretty a, Pretty a) => 
