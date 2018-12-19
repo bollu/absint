@@ -500,48 +500,66 @@ mapVenvEnv f (ve, le, pc) = (f ve, le, pc)
 mapLEnvEnv :: (LEnv -> LEnv) -> Env a -> Env a
 mapLEnvEnv f (ve, le, pc) = (ve, f le, pc)
 
-mapEnvCollecting :: Ord a => Loc 
+mapEnvCollecting :: Ord a => 
+                    Loc 
+                 -> Loc 
                  -> (Env a -> Env a) 
                  -> Collecting a -> Collecting a
-mapEnvCollecting loc f csem = M.adjust (S.map f)  loc csem
+mapEnvCollecting loc loc' f csem = 
+  let envs = csem M.! loc 
+      envs' = S.map f envs in
+      M.adjust (`S.union` envs') loc' csem
+
+
 
 instExecCollecting :: Ord a => (Expr -> VEnv a -> a) 
                    -> Inst 
+                   -> Loc -- loc to pull from
                    -> Collecting a -> Collecting a
-instExecCollecting exprsem a csem = 
-  mapEnvCollecting (location a)
-    (mapVenvEnv (mkSemInst exprsem a)) csem
+instExecCollecting exprsem inst loc csem = 
+  mapEnvCollecting loc (location inst)
+    (mapVenvEnv (mkSemInst exprsem inst)) csem
 
 termExecCollecting :: Ord a => (a -> Maybe Bool) 
                    -> Term 
+                   -> Loc
                    -> BBId  -- current BBId
                    -> Collecting a -> Collecting a
-termExecCollecting sempred term curbbid csem = let
+termExecCollecting sempred term loc curbbid csem = let
   -- envMap :: Env a -> Env a
   envMap (venv, lenv, PCNext prevbbid _) = 
     (venv, lenv, mkSemTerm sempred term curbbid venv)
- in mapEnvCollecting (location term) envMap csem
+ in mapEnvCollecting loc (location term) envMap csem
 
-phiExecCollecting :: Ord a => Phi 
-                  -> BBId -- previous bb id
+phiExecCollecting :: Ord a => 
+                     Phi 
+                  -> Loc 
                   -> Collecting a 
                   -> Collecting a 
-phiExecCollecting phi curbbid csem = 
-  mapEnvCollecting (location phi)
-    (mapVenvEnv (mkSemPhi phi curbbid)) csem
+phiExecCollecting phi loc csem = undefined
+--   mapEnvCollecting loc (location phi)
+--     (mapVenvEnv (mkSemPhi phi curbbid)) csem
 
 
 bbExecCollecting :: Ord a => Semantics a 
                  -> BB 
+                 -> Loc
                  -> Collecting a -> Collecting a
-bbExecCollecting sem bb csem = let
-  csembb = mapEnvCollecting (bbloc bb) (mapLEnvEnv  (bbLenvUpdate (bbid bb) (bbty bb))) csem
+bbExecCollecting sem bb loc csem = let
+  -- loc -> bb
+  csembb = mapEnvCollecting loc (bbloc bb) (mapLEnvEnv  (bbLenvUpdate (bbid bb) (bbty bb))) csem
 
-  csemphis = foldl (\csem phi -> phiExecCollecting phi (bbid bb) csem) csembb (bbphis bb)
+  -- bb -> phis
+  (locphis, csemphis) = 
+    foldl (\(loc, csem) phi -> (location phi, phiExecCollecting phi loc csem)) 
+      (location bb, csembb) (bbphis bb)
 
-  cseminsts = foldl (\csem inst -> instExecCollecting (semExpr sem) inst csem) csemphis (bbinsts bb)
+  -- prev inst -> inst
+  (locinsts, cseminsts) = 
+    foldl (\(loc, csem) inst -> (location inst, instExecCollecting (semExpr sem) inst loc csem)) 
+      (locphis, csemphis) (bbinsts bb)
 
-  csemterm = termExecCollecting (semPredicate sem) (bbterm bb) (bbid bb) cseminsts
+  csemterm = termExecCollecting (semPredicate sem) (bbterm bb) locinsts (bbid bb) cseminsts
   in csemterm
   
 
