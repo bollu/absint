@@ -374,11 +374,11 @@ type TripCount = M.Map Id Int
 type AbsVal = (TripCount -> Int) -- map trip counts to integers
 -- abstract environments
 type AbsEnv = Env AbsVal
-type AbsDomain = M.Map PC AbsEnv 
+type AbsDomain = M.Map Loc AbsEnv 
 
 
 -- collecting semantics in general. Map PC to a set of environments
-type Collecting a = M.Map PC (S.Set (Env a))
+type Collecting a = M.Map Loc (S.Set (Env a))
 
 -- concrete environments
 type ConcreteEnv = Env Int
@@ -404,7 +404,7 @@ mkSemInst sem (Assign _ id e) env  =
 
 mkSemTerm :: (a -> Maybe Bool) -- concrete value to truth value
           -> Term
-          -> BBId
+          -> BBId -- current bb id
           -> VEnv a 
           -> PC
 mkSemTerm _ (Br _ bbid') bbid env = PCNext bbid bbid'
@@ -415,7 +415,10 @@ mkSemTerm judgement (BrCond _ condid bbidl bbidr) bbid env =
    in PCNext bbid bbid'
 mkSemTerm _ (Done _) _ _ = PCDone
 
-mkSemPhi :: Phi -> BBId -> VEnv a -> VEnv a
+mkSemPhi :: Phi 
+         -> BBId  -- prevbbid
+         -> VEnv a 
+         -> VEnv a
 mkSemPhi  p@(Phi _ id (bbidl, idl) (bbidr, idr)) prevbbid env = 
   if prevbbid == bbidl 
      then M.insert id (env M.! idl) env
@@ -430,20 +433,22 @@ envInsertOrUpdate v f k m =
     Just v' -> M.insert k (f v') m
     Nothing -> M.insert k v m
 
+-- updat the lenv with respect to the bb type
+bbLenvUpdate :: BBId -> Maybe BBTy -> LEnv -> LEnv
+bbLenvUpdate _ Nothing lenv = lenv
+bbLenvUpdate bbid (Just BBLoop) lenv = envInsertOrUpdate 0 (+1) bbid lenv
 
 -- Execute a basic block
 bbExec :: Semantics a -> BB -> Env a -> Env a
 bbExec sem (BB bbid bbty _ phis insts term) (venv, lenv, pcprev) = 
-      let lenvbb = case bbty of
-                Nothing -> lenv
-                Just BBLoop -> envInsertOrUpdate 0 (+1) bbid lenv
-          venvphi = case pcprev of
+  let lenvbb = bbLenvUpdate bbid bbty lenv
+      venvphi = case pcprev of
                       PCNext prevbbid _ -> foldl (\venv phi -> mkSemPhi phi prevbbid venv) venv phis
                       PCEntry -> venv
                       PCDone -> error "canot have PC done and then execute a BB"
-          venvinst = foldl (\venv inst -> mkSemInst (semExpr sem) inst venv) venvphi insts
-          pc' = mkSemTerm (semPredicate sem) term bbid venvinst 
-       in (venvinst, lenvbb, pc')
+      venvinst = foldl (\venv inst -> mkSemInst (semExpr sem) inst venv) venvphi insts
+      pc' = mkSemTerm (semPredicate sem) term bbid venvinst 
+  in (venvinst, lenvbb, pc')
 
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
@@ -489,7 +494,59 @@ semConcrete = Semantics {
 -- Collecting semantics
 -- ====================
 
-programExecCollecting :: Semantics a -> Program -> S.Set (Env a) -> Collecting a
+mapVenvEnv :: (VEnv a -> VEnv a) -> Env a -> Env a
+mapVenvEnv f (ve, le, pc) = (f ve, le, pc)
+
+mapLEnvEnv :: (LEnv -> LEnv) -> Env a -> Env a
+mapLEnvEnv f (ve, le, pc) = (ve, f le, pc)
+
+mapEnvCollecting :: Ord a => Loc 
+                 -> (Env a -> Env a) 
+                 -> Collecting a -> Collecting a
+mapEnvCollecting loc f csem = M.adjust (S.map f)  loc csem
+
+instExecCollecting :: Ord a => (Expr -> VEnv a -> a) 
+                   -> Inst 
+                   -> Collecting a -> Collecting a
+instExecCollecting exprsem a csem = 
+  mapEnvCollecting (location a)
+    (mapVenvEnv (mkSemInst exprsem a)) csem
+
+termExecCollecting :: Ord a => (a -> Maybe Bool) 
+                   -> Term 
+                   -> BBId  -- current BBId
+                   -> Collecting a -> Collecting a
+termExecCollecting sempred term curbbid csem = let
+  -- envMap :: Env a -> Env a
+  envMap (venv, lenv, PCNext prevbbid _) = 
+    (venv, lenv, mkSemTerm sempred term curbbid venv)
+ in mapEnvCollecting (location term) envMap csem
+
+phiExecCollecting :: Ord a => Phi 
+                  -> BBId -- previous bb id
+                  -> Collecting a 
+                  -> Collecting a 
+phiExecCollecting phi curbbid csem = 
+  mapEnvCollecting (location phi)
+    (mapVenvEnv (mkSemPhi phi curbbid)) csem
+
+
+bbExecCollecting :: Ord a => Semantics a 
+                 -> BB 
+                 -> Collecting a -> Collecting a
+bbExecCollecting sem bb csem = let
+  csembb = mapEnvCollecting (bbloc bb) (mapLEnvEnv  (bbLenvUpdate (bbid bb) (bbty bb))) csem
+
+  csemphis = foldl (\csem phi -> phiExecCollecting phi (bbid bb) csem) csembb (bbphis bb)
+
+  cseminsts = foldl (\csem inst -> instExecCollecting (semExpr sem) inst csem) csemphis (bbinsts bb)
+
+  csemterm = termExecCollecting (semPredicate sem) (bbterm bb) (bbid bb) cseminsts
+  in csemterm
+  
+
+
+programExecCollecting :: Semantics a -> Program -> Collecting a -> Collecting a
 programExecCollecting sem p envs = undefined
 
 -- Abstract interpretation
