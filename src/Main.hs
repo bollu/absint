@@ -989,9 +989,20 @@ symValToPwaff ctx id2sym (SymValBinop bop l r) = do
       
 symValToPwaff ctx id2sym (SymValPhi l r) = 
   do
+    idaccell <- idAlloc ctx "viv"
+    idaccelr <- idCopy idaccell
+
     pwl <- symValToPwaff ctx id2sym l
     mapl <- mapFromPwaff pwl
-    mapl' <- mapAddDims  mapl IslDimIn 1 >>= (\m -> mapSetDimName m IslDimIn 0 "viv")
+    mapl <- mapAddDims  mapl IslDimIn 1 >>= (\m -> mapSetDimId m IslDimIn 0 idaccell)
+
+    leq0set <- mapCopy mapl >>= mapDomain
+    leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
+    leq0 <- constraintSetCoefficientSi leq0 IslDimSet 0 1
+    leq0set <- setAddConstraint leq0set leq0
+
+    mapl <- mapIntersectDomain mapl leq0set
+    mapToStr mapl >>= (\s -> putStrLn $ "mapl: " ++ s)
 
     
     -- TODO: Prove that this pattern always occurs, otherwise I will get an irrefutable.
@@ -1001,13 +1012,32 @@ symValToPwaff ctx id2sym (SymValPhi l r) =
     let (SymValAff symaffr) = r
     let idr = fromJust (symAffExtractId symaffr)
     pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
-    -- mapr <- mapFromPwaff pwr
-    pwma <- (pwmultiaffFromMap mapl') --  >>= (\pwma -> pwmultiaffGetPwaff pwma 0)
+    mapr <- mapFromPwaff pwr
+    mapr <- mapAddDims  mapr IslDimIn 1
+    mapr <- mapSetDimId mapr IslDimIn 0 idaccelr
+    
+    rgt0set <- (mapCopy mapr) >>= mapDomain
+    rgt0 <- setGetSpace rgt0set >>= localSpaceFromSpace >>= constraintAllocInequality
+    rgt0 <- constraintSetConstantSi rgt0 (-1)
+    rgt0 <- constraintSetCoefficientSi rgt0 IslDimSet 0 1
+    rgt0set <- setAddConstraint rgt0set rgt0
 
-    pwmultiaffToStr pwma >>= (\s -> putStrLn $  "pwma: " ++ s)
+    mapr <- mapIntersectDomain mapr rgt0set
 
-    ls <- localSpaceIds ctx (M.keys id2sym)
-    pwaffInt ctx ls (-42)
+    mapToStr mapr >>= (\s -> putStrLn $ "mapr: " ++ s)
+    mapfull <- mapUnion mapl mapr
+    mapToStr mapfull >>= (\s -> putStrLn $ "total map: " ++ s)
+
+    (mapfull, _) <- mapPower mapfull
+    mapToStr mapfull >>= (\s -> putStrLn $ "total map power: " ++ s)
+
+    -- TODO: understand why map is not single valued?
+    pwma <- (pwmultiaffFromMap mapfull) --  >>= (\pwma -> pwmultiaffGetPwaff pwma 0)
+    -- pwmultiaffToStr pwma >>= (\s -> putStrLn $  "pwma: " ++ s)
+    pwa <- pwmultiaffGetPwaff pwma 0
+    -- pwaffToStr pwa >>= (\s -> putStrLn $ "pwa: " ++ s)
+    return pwa
+
 
 -- Abstract interpretation
 -- =======================

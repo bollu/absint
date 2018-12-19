@@ -4,12 +4,13 @@
 -- for now, which uses inline-c instead.
 module ISL.Native.C2Hs where
 
+#include <isl/aff.h>
 #include <isl/ctx.h>
 #include <isl/constraint.h>
+#include <isl/id.h>
 #include <isl/map.h>
 #include <isl/set.h>
 #include <isl/space.h>
-#include <isl/aff.h>
 
 import Foreign.Ptr
 import Foreign.Marshal.Alloc
@@ -59,6 +60,14 @@ type PtrConstraint = Ptr Constraint
 type PtrId = Ptr Id
 {#pointer *isl_id as PtrId -> Id nocode #}
 
+-- ID
+
+{#fun isl_id_alloc as idAlloc_ { id `Ptr Ctx', `String', `Ptr ()' } -> `Ptr Id'  id #}
+{#fun isl_id_copy as idCopy { id `Ptr Id' } -> `Ptr Id'  id #}
+
+idAlloc :: Ptr Ctx -> String -> IO (Ptr Id)
+idAlloc ctx s = idAlloc_ ctx s nullPtr
+
 {#fun isl_map_free as mapFree { id `Ptr Map' } -> `()' #}
 {#fun isl_set_free as setFree { id `Ptr Set' } -> `()' #}
 {#fun isl_set_read_from_str as setReadFromStr
@@ -98,6 +107,15 @@ type PtrId = Ptr Id
   { id `Ptr Map'
   , alloca- `CInt' peek*
   } -> `Ptr Map' id #}
+
+
+{#fun isl_map_copy as mapCopy
+  { id `Ptr Map'
+  } -> `Ptr Map' id #}
+
+{#fun isl_map_domain as mapDomain
+  { id `Ptr Map'
+  } -> `Ptr Set' id #}
 
 {#fun isl_map_intersect_domain as mapIntersectDomain
   { id `Ptr Map'
@@ -140,6 +158,18 @@ type PtrId = Ptr Id
   } -> `Ptr Map' id #}
 
 
+{#fun isl_map_set_dim_id as mapSetDimId
+  { id `Ptr Map'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , id `Ptr Id'
+  } -> `Ptr Map' id #}
+
+
+{#fun isl_map_get_space as mapGetSpace
+  { id `Ptr Map' } -> `Ptr Space' id #}
+
+
 -- set
 
 {#fun isl_set_intersect as setIntersect
@@ -152,7 +182,25 @@ type PtrId = Ptr Id
   , id `Ptr Set'
   } -> `Ptr Set' id #}
 
+
+{#fun isl_set_get_space as setGetSpace
+  { id `Ptr Set'
+  } -> `Ptr Space' id #}
+
+
+{#fun isl_set_to_str as setToStr
+  { id `Ptr Set'
+  } -> `String' #}
+
+-- constraint
+
 {#fun isl_constraint_alloc_equality as constraintAllocEquality
+  { id `Ptr LocalSpace'
+  } -> `Ptr Constraint' id #}
+
+
+
+{#fun isl_constraint_alloc_inequality as constraintAllocInequality
   { id `Ptr LocalSpace'
   } -> `Ptr Constraint' id #}
 
@@ -172,6 +220,12 @@ type PtrId = Ptr Id
   { id `Ptr BasicSet'
   , id `Ptr Constraint'
   } -> `Ptr BasicSet' id #}
+
+
+{#fun isl_set_add_constraint as setAddConstraint
+  { id `Ptr Set'
+  , id `Ptr Constraint'
+  } -> `Ptr Set' id #}
 
 {#fun isl_space_set_alloc as spaceSetAlloc_
   { id `Ptr Ctx'
@@ -226,6 +280,9 @@ type PtrId = Ptr Id
   } -> `String' #}
 
 -- set
+
+{# fun isl_set_universe as setUniverse
+    {id `Ptr Space'} -> `Ptr Set' id #}
 {# fun isl_set_indicator_function as setIndicatorFunction
     {id `Ptr Set'} -> `Ptr Pwaff' id #}
 -- aff
