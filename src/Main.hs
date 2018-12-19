@@ -311,10 +311,12 @@ instance Pretty Term where
       pretty cid <+> pretty bbidl <+> pretty bbidr
   pretty (Done loc) = pretty loc <+> pretty "done"
 
-data BBTy = BBLoop deriving(Eq, Ord, Show)
+data BBTy = 
+  BBLoop [BBId] -- if it's a loop, the list of basic blocks that are bodies of this loop
+  deriving(Eq, Ord, Show)
 
 instance Pretty BBTy where
-  pretty (BBLoop) = pretty "bbloop" 
+  pretty (BBLoop bs) = pretty "bbloop"  <+> pretty bs
 
 data BB = BB {
  bbid :: BBId,
@@ -461,10 +463,10 @@ envInsertOrUpdate v f k m =
     Just v' -> M.insert k (f v') m
     Nothing -> M.insert k v m
 
--- updat the lenv with respect to the bb type
+-- update the lenv with respect to the bb type
 bbLenvUpdate :: BBId -> Maybe BBTy -> LEnv -> LEnv
 bbLenvUpdate _ Nothing lenv = lenv
-bbLenvUpdate bbid (Just BBLoop) lenv = envInsertOrUpdate 0 (+1) bbid lenv
+bbLenvUpdate bbid (Just (BBLoop _)) lenv = envInsertOrUpdate 0 (+1) bbid lenv
 
 -- Execute a basic block
 bbExec :: Pretty a => Semantics a -> BB -> Env a -> Env a
@@ -483,6 +485,16 @@ bbExec sem (BB bbid bbty _ phis insts term) (Env venv lenv pcprev) =
 programBBId2BB :: Program -> M.Map BBId BB
 programBBId2BB (Program bbs) = 
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
+
+programBBId2nl :: Program -> M.Map BBId NaturalLoop
+programBBId2nl (Program bbs) = M.fromList $ do
+  bb <- bbs
+  let ty = bbty bb
+  case ty of
+    Just (BBLoop bodies) -> return (bbid bb, NaturalLoop (bbid bb) (S.fromList bodies))
+    Nothing -> []
+
+
 
 programExec :: Pretty a => Semantics a -> Program -> Env a -> Env a
 programExec sem p@(Program bbs) env@(Env _ _ pc) = 
@@ -518,6 +530,21 @@ semConcrete = Semantics {
   semExpr = semExprConcrete,
   semPredicate = semPredicateConcrete
 }
+
+-- Loop definitions
+-- ================
+
+data NaturalLoop = 
+  NaturalLoop { nlHeader :: BBId, nlbody :: S.Set BBId } deriving(Eq, Ord, Show)
+
+instance Pretty NaturalLoop where
+  pretty (NaturalLoop header body) = 
+    pretty "natural loop" <+> pretty header <+> pretty body
+  
+-- Return if the natural loop contains the basic block
+nlContainsBB :: BBId -> NaturalLoop ->  Bool
+nlContainsBB id (NaturalLoop headerid bodyids) = 
+  id == headerid || id `S.member` bodyids
 
 -- Collecting semantics
 -- ====================
@@ -574,21 +601,33 @@ termExecCollecting sempred term loc curbbid csem = let
 setCatMaybes :: Ord a => S.Set (Maybe a) -> S.Set a
 setCatMaybes s = S.map fromJust $ S.filter (/= Nothing) s
 
+
+-- update the loop environment given the terminator PC status in the next basic block:w
+lenvUpdate :: M.Map BBId NaturalLoop 
+           -> PC -- pc of the terminator instruction
+           -> LEnv -> LEnv
+lenvUpdate bbid2nl (PCNext prevbbid nextbbid) lenv = 
+  case fmap (nlContainsBB prevbbid) (bbid2nl M.!? nextbbid) of
+    Just True -> M.adjust (+1) nextbbid lenv
+    Just False -> M.insert nextbbid 0 lenv
+    Nothing -> lenv
+
 -- at term: [PCNext loop loop, PCNext loop exit]
 -- copy data from term into  loop and exit
 -- copy data from loop into loop, copy data from entry into loop
 flowIntoBBExecCollecting :: Ord a => Pretty a => 
   Loc  --  location of terminator to pull from
+  -> M.Map BBId NaturalLoop
   -> M.Map BBId Loc  -- map from BB ids to locations
   -> Collecting a 
   -> Collecting a
-flowIntoBBExecCollecting loc bbid2loc csem = 
+flowIntoBBExecCollecting loc bbid2nl bbid2loc csem = 
   let -- tocopy :: S.Set (Env a)
       tocopy = csem !!# loc
 
       -- targets :: S.Set (Maybe (Env a, Loc))
-      targets = S.map (\env@(Env _ _ pc) -> case pc of
-                                            PCNext _ nextbbid -> Just (env, bbid2loc !!# nextbbid)
+      targets = S.map (\env@(Env venv lenv pc) -> case pc of
+                                            PCNext _ nextbbid -> Just (Env venv (lenvUpdate bbid2nl pc lenv) pc, bbid2loc !!# nextbbid)
                                             _ -> Nothing) tocopy
 
       -- targets' :: S.Set (Env a, Loc)
@@ -616,19 +655,37 @@ phiExecCollecting phi loc csem =
    mapEnvCollecting loc (location phi) f  csem
 
 
+-- bbUpdateLenvCollecting :: Ord a => Pretty a =>
+--   M.Map BBId NaturalLoop
+--   M.Map BBId Location
+--   -> Collecting a
+--   -> Collecting a
+-- bbUpdateLenvCollecting bbid2nl bbid2loc bbid csem = 
+--   let
+--     lenvUpdate :: PC -> LEnv -> LEnv
+--     lenvUpdate (PCNext prevbbid _) lenv = 
+--       case fmap (nlContainsBB prevbbid) (bbid2nl M.!? bbid) of
+--         Just True -> M.adjust (+1) (bbid) lenv
+--         Just False -> M.insert (bbid) 0 lenv
+--         Nothing -> lenv
+--     lenvUpdate _ lenv = lenv
+--  in updateEnvCollecting 
+--      (bbid2loc M.! bbid)
+--      (\(Env venv lenv pc) -> Env venv (lenvUpdate pc lenv) pc)
+--      csem
+-- 
+
+
 bbExecCollecting :: Ord a => Pretty a => Semantics a 
+                 -> M.Map BBId NaturalLoop
                  -> M.Map BBId Loc
                  -> BB 
                  -> Collecting a -> Collecting a
-bbExecCollecting sem bbid2loc bb csem = let
-  -- bb -> bb updated loop env
-  bbcsem = Trace.trace (prettyableToString csem)
-            updateEnvCollecting (bbloc bb) (mapLEnvEnv (bbLenvUpdate (bbid bb) (bbty bb))) csem
-
+bbExecCollecting sem bbid2nl bbid2loc bb csem = let
   -- bb -> phis
   (locphis, csemphis) = 
     foldl (\(loc, csem) phi -> (location phi, phiExecCollecting phi loc csem)) 
-      (location bb, bbcsem) (bbphis bb)
+      (location bb, csem) (bbphis bb)
 
   -- prev inst -> inst
   (locinsts, cseminsts) = 
@@ -639,7 +696,11 @@ bbExecCollecting sem bbid2loc bb csem = let
   csemterm = termExecCollecting (semPredicate sem) (bbterm bb) locinsts (bbid bb) cseminsts
 
   -- term -> next bb
-  csemflow = flowIntoBBExecCollecting (location (bbterm bb)) bbid2loc csemterm
+  csemflow = flowIntoBBExecCollecting (location (bbterm bb)) bbid2nl bbid2loc csemterm
+
+  -- next bb -> next bb lenv counter
+  -- csemupdatenext = bbUpdateLenvCollecting bbid2nl bbid2loc bb csemflow
+
   in csemflow
   
 
@@ -647,7 +708,8 @@ bbExecCollecting sem bbid2loc bb csem = let
 programExecCollecting :: Ord a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
 programExecCollecting sem p@(Program bbs) csem = 
   let bbid2loc = M.map bbloc (programBBId2BB p) 
-   in foldl (\csem bb -> bbExecCollecting sem bbid2loc bb csem) csem bbs
+      bbid2nl = programBBId2nl p
+   in foldl (\csem bb -> bbExecCollecting sem bbid2nl bbid2loc bb csem) csem bbs
 
 
 programFixCollecting :: (Eq a, Ord a, Pretty a, Pretty a) => 
@@ -778,7 +840,7 @@ br bbid = do
 pLoop :: Program
 pLoop = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing 
-  loop <- buildNewBB "loop" (Just $ BBLoop)
+  loop <- buildNewBB "loop" (Just $ BBLoop [])
   exit <- buildNewBB "exit" Nothing
 
   focusBB entry
