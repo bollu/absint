@@ -38,7 +38,7 @@ instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
   pretty m = 
     if M.null m 
        then pretty "emptymap" 
-       else (vcat $ [pretty "(" <> pretty k <+> pretty "->" <+> (pretty v) <> pretty ")" | (k, v) <- M.toList m])
+       else (indent 1 (vcat $ [pretty "(" <> pretty k <+> pretty "->" <+> (pretty v) <> pretty ")" | (k, v) <- M.toList m]))
 
 -- Lattice theory
 -- ==============
@@ -379,11 +379,15 @@ type VEnv v = M.Map Id v
 -- trip count
 type LEnv = M.Map BBId Int
 
-type Env v = (VEnv v, LEnv, PC)
+data Env v = Env (VEnv v) LEnv PC deriving(Eq, Ord, Show)
+
+instance Pretty v => Pretty (Env v) where
+  pretty (Env venv lenv pc) = 
+    pretty "venv:" <> indent 1 (vcat [pretty pc, pretty "venv: " <+> pretty venv, pretty "lenv:" <+> pretty lenv ])
 
 
 envBegin :: Env v
-envBegin = (mempty, mempty, PCEntry)
+envBegin = Env mempty mempty PCEntry
 
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
@@ -462,7 +466,7 @@ bbLenvUpdate bbid (Just BBLoop) lenv = envInsertOrUpdate 0 (+1) bbid lenv
 
 -- Execute a basic block
 bbExec :: Show a => Semantics a -> BB -> Env a -> Env a
-bbExec sem (BB bbid bbty _ phis insts term) (venv, lenv, pcprev) = 
+bbExec sem (BB bbid bbty _ phis insts term) (Env venv lenv pcprev) = 
   let lenvbb = bbLenvUpdate bbid bbty lenv
       venvphi = case pcprev of
                       PCNext prevbbid _ -> foldl (\venv phi -> mkSemPhi phi prevbbid venv) venv phis
@@ -470,7 +474,7 @@ bbExec sem (BB bbid bbty _ phis insts term) (venv, lenv, pcprev) =
                       PCDone -> error "canot have PC done and then execute a BB"
       venvinst = foldl (\venv inst -> mkSemInst (semExpr sem) inst venv) venvphi insts
       pc' = mkSemTerm (semPredicate sem) term bbid venvinst 
-  in (venvinst, lenvbb, pc')
+   in Env venvinst lenvbb pc'
 
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
@@ -479,7 +483,7 @@ programBBId2BB (Program bbs) =
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
 
 programExec :: Show a => Semantics a -> Program -> Env a -> Env a
-programExec sem p@(Program bbs) env@(_, _, pc) = 
+programExec sem p@(Program bbs) env@(Env _ _ pc) = 
   let bbid2bb :: M.Map BBId BB
       bbid2bb = programBBId2BB p
   in
@@ -517,10 +521,10 @@ semConcrete = Semantics {
 -- ====================
 
 mapVenvEnv :: (VEnv a -> VEnv a) -> Env a -> Env a
-mapVenvEnv f (ve, le, pc) = (f ve, le, pc)
+mapVenvEnv f (Env ve le pc) = Env (f ve) le pc
 
 mapLEnvEnv :: (LEnv -> LEnv) -> Env a -> Env a
-mapLEnvEnv f (ve, le, pc) = (ve, f le, pc)
+mapLEnvEnv f (Env ve le pc) = Env ve (f le) pc
 
 
 mapEnvCollecting :: Ord a => Show a =>
@@ -551,8 +555,8 @@ termExecCollecting :: Ord a => Show a => (a -> Maybe Bool)
                    -> Collecting a -> Collecting a
 termExecCollecting sempred term loc curbbid csem = let
   -- envMap :: Env a -> Env a
-  envMap (venv, lenv, pc) = 
-    (venv, lenv, mkSemTerm sempred term curbbid venv)
+  envMap (Env venv lenv pc) = 
+    (Env venv lenv (mkSemTerm sempred term curbbid venv))
  in mapEnvCollecting loc (location term) envMap csem
 
 setCatMaybes :: Ord a => S.Set (Maybe a) -> S.Set a
@@ -571,7 +575,7 @@ flowIntoBBExecCollecting loc bbid2loc csem =
       tocopy = csem !!# loc
 
       -- targets :: S.Set (Maybe (Env a, Loc))
-      targets = S.map (\env@(_, _, pc) -> case pc of
+      targets = S.map (\env@(Env _ _ pc) -> case pc of
                                             PCNext _ nextbbid -> Just (env, bbid2loc !!# nextbbid)
                                             _ -> Nothing) tocopy
 
@@ -594,8 +598,8 @@ phiExecCollecting :: Ord a => Show a =>
 phiExecCollecting phi loc csem = 
   let
     -- f :: Env a -> Env a
-    f env@(venv, lenv, PCNext prevbbid _) = mapVenvEnv (mkSemPhi phi prevbbid) env
-    f env@(venv, lenv, PCDone) = env
+    f env@(Env venv lenv (PCNext prevbbid _)) = mapVenvEnv (mkSemPhi phi prevbbid) env
+    f env@(Env venv lenv PCDone) = env
   in 
    mapEnvCollecting loc (location phi) f  csem
 
