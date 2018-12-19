@@ -213,9 +213,15 @@ type PtrId = Ptr Id
 {# fun isl_pw_aff_add as pwaffAdd
     {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Pwaff' id #}
 
-
 {# fun isl_pw_aff_lt_set as pwaffLtSet
     {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Set' id #}
+
+{# fun isl_pw_aff_align_params as pwaffAlignParams
+    {id `Ptr Pwaff', id `Ptr Space'} -> `Ptr Pwaff' id #}
+
+{# fun isl_pw_aff_get_space as pwaffGetSpace
+    {id `Ptr Pwaff' } -> `Ptr Space' id #}
+
 
 
 -- val
