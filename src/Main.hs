@@ -928,6 +928,10 @@ programGetSymbolic (Program bbs) =
     initenv = mconcat $ map bbInitSymbolic bbs
  in (repeatTillFix runbbs) initenv
 
+
+
+-- Symbolic expression to Pwaff
+-- ============================
 -- pwaff comprising of IDs with parametric dimensions
 localSpaceIds :: Ptr Ctx -> [Id] -> IO (Ptr LocalSpace)
 localSpaceIds ctx ids = do
@@ -936,17 +940,29 @@ localSpaceIds ctx ids = do
   return ls
 
 
--- Symbolic expression to Pwaff
--- ============================
+termToPwaff :: Ptr Ctx -> M.Map Id SymVal -> Id -> Int -> IO (Ptr Pwaff)
+termToPwaff ctx id2sym id coeff = do
+  -- TODO: refactor this
+  let id2key = M.fromList $ zip (M.keys id2sym) [0, 1..]
+
+  ls <- localSpaceIds ctx (M.keys id2sym)
+  ls' <- localSpaceCopy ls
+  var <- affVarOnDomain ls IslDimParam (id2key M.! id)
+  coeff <- affInt ctx ls coeff
+
+  term <- affMul var coeff
+  pwaffFromAff term
+  
+
 symaffToPwaff :: Ptr Ctx -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
-symaffToPwaff ctx id2sym(Symaff (c, coeffs)) = 
-  if M.null coeffs
-     then do 
-      ls <- localSpaceIds ctx (M.keys id2sym)
-      pwaffInt ctx ls c
-  else do
+symaffToPwaff ctx id2sym(Symaff (c, terms)) = do
     ls <- localSpaceIds ctx (M.keys id2sym)
-    pwaffInt ctx ls 42
+    pwconst <- pwaffInt ctx ls c
+    if M.null terms
+       then return pwconst
+       else do
+         pwterms <- traverse (\(id, coeff) -> termToPwaff ctx id2sym id coeff) (M.toList terms)
+         foldM pwaffAdd pwconst pwterms 
 
 
 

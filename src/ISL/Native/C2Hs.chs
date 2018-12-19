@@ -219,6 +219,12 @@ type PtrId = Ptr Id
 {#fun isl_aff_val_on_domain as affValOnDomain
     {id `Ptr LocalSpace', id `Ptr Val'} -> `Ptr Aff' id #}
 
+{#fun isl_aff_mul as affMul
+    {id `Ptr Aff', id `Ptr Aff'} -> `Ptr Aff' id #}
+
+{#fun isl_aff_var_on_domain as affVarOnDomain
+    {id `Ptr LocalSpace',  fromDimType `DimType', id `CUInt' } -> `Ptr Aff' id #}
+
 -- Pwaff
 {# fun isl_pw_aff_from_aff as pwaffFromAff
     {id `Ptr Aff' } -> `Ptr Pwaff' id #}
@@ -238,7 +244,6 @@ type PtrId = Ptr Id
 
 {# fun isl_pw_aff_get_space as pwaffGetSpace
     {id `Ptr Pwaff' } -> `Ptr Space' id #}
-
 
 
 -- val
