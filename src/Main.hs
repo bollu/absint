@@ -20,8 +20,9 @@ import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
-import ISL.Native.Types (DimType(..))
+import ISL.Native.Types (DimType(..), PwAff)
 import PrettyUtils (prettyableToString, docToString)
+import Foreign.Ptr
 
 (!!#) :: Ord k => Pretty k => Pretty v => M.Map k v -> k -> v
 (!!#) m k = 
@@ -395,7 +396,7 @@ envBegin = Env mempty mempty PCEntry
 
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
-type AbsVal = Ptr Pwaff
+type AbsVal = Ptr PwAff
 -- abstract environments
 type AbsEnv = Env AbsVal
 type AbsDomain = M.Map Loc AbsEnv 
@@ -697,6 +698,131 @@ programFixCollecting :: (Eq a, Ord a, Pretty a, Pretty a) =>
   Semantics a -> Program -> Collecting a -> Collecting a
 programFixCollecting sem p csem = 
   repeatTillFix (programExecCollecting sem p) csem
+
+-- Symbolic values
+-- ===============
+
+
+-- Symbolic polynomial with constant term and coefficients for the other terms
+data SymAff = SymAff !(Int, M.Map Id Int) deriving (Eq, Ord)
+
+instance Show SymAff where
+  show (SymAff (c, coeffs)) = 
+    let 
+        showTerm :: Int -> Id -> Maybe String
+        showTerm 0 x = Nothing
+        showTerm 1 x = Just $ show x
+        showTerm c x = Just $ show c ++ show x
+
+        coeffs' :: [String]
+        coeffs' = catMaybes [showTerm c id | (id, c) <- M.toList coeffs]
+        
+        c' :: String
+        c' = if c == 0
+                then "" 
+                else if length coeffs' == 0 then show c else " + " ++ show c
+     in (intercalate " + " $ coeffs') ++ c'
+
+-- lift an identifier to a polynomial
+symAffId :: Id -> SymAff
+symAffId id = SymAff (0, M.fromList [(id, 1)])
+
+-- Lift a constant to a polynomial
+symAffConst :: Int -> SymAff
+symAffConst c = SymAff (c, M.empty)
+
+-- remove IDs that have value 0 in the SymAff
+-- Call internally after peforming operations
+_symAffRemoveZeroIds :: SymAff -> SymAff
+_symAffRemoveZeroIds (SymAff (c, cs)) = 
+  (SymAff (c, M.filter (/= 0) cs))
+
+-- Add two symbolic polynomials
+symAffAdd :: SymAff -> SymAff -> SymAff
+symAffAdd (SymAff (c1, p1)) (SymAff (c2, p2)) = 
+  let pres = 
+        M.merge 
+          M.preserveMissing
+          M.preserveMissing
+          (M.zipWithMatched (\k x y -> x + y)) p1 p2 
+       in _symAffRemoveZeroIds $ SymAff (c1 + c2, pres)
+
+-- If a symAff is constant, return the constant value, otherwise
+-- return Nothing
+symAffAsConst :: SymAff -> Maybe Int
+symAffAsConst (SymAff (c, cs)) = if cs == M.empty then Just c else Nothing
+
+-- negate a Symbolic affine value
+symAffNegate :: SymAff -> SymAff
+symAffNegate (SymAff (c, cs)) = SymAff (-c, M.map (\x -> (-x)) cs)
+
+-- Check if one SymAff is defnitely less than the other
+-- Use the fact that x < y <-> x - y < 0
+symAffIsLt :: SymAff -> SymAff -> Maybe Bool
+symAffIsLt a1 a2 = 
+  let sub = symAffAdd a1 (symAffNegate a2)
+      msubc = symAffAsConst sub
+   in fmap (< 0)  msubc
+
+
+instance Pretty SymAff where
+  pretty (SymAff (c, coeffs)) = 
+    let 
+    prettyTerm :: Int -> Id -> Maybe (Doc a)
+    prettyTerm 0 x = Nothing
+    prettyTerm 1 x = Just $ pretty x
+    prettyTerm c x = Just $ pretty c <> pretty x 
+
+    c' :: Doc a
+    c' = if c == 0 then mempty 
+         else if null coeffs then pretty c else pretty "+" <+> pretty c
+
+    coeffs' :: [Doc a]
+    coeffs' = catMaybes [prettyTerm c id | (id, c) <- M.toList coeffs]
+     in hcat (punctuate (pretty "+") coeffs') <+> c'
+
+-- Symbolic value that is either a symbolic polynomial or a binop of two such
+-- polynomials
+data SymVal = SymValAff !SymAff | SymValBinop !Binop !SymVal !SymVal deriving(Eq, Ord)
+
+symValId :: Id -> SymVal
+symValId = SymValAff . symAffId
+
+symValConst :: Int -> SymVal
+symValConst = SymValAff . symAffConst
+
+instance Show SymVal where
+  show (SymValAff p) = show p
+  show (SymValBinop op sym sym') = 
+   "(" ++ show op ++ " " ++ show sym ++ " " ++ show sym' ++ ")"
+
+instance Pretty SymVal where
+  pretty (SymValAff p) = pretty p
+  pretty (SymValBinop op sym sym') =
+    parens $  pretty sym <+> pretty op <+> pretty sym'
+
+-- constant folding for symbols
+symConstantFold :: SymVal -> SymVal
+symConstantFold (SymValBinop op s1 s2) = 
+  let 
+    s1' = symConstantFold s1
+    s2' = symConstantFold s2
+ in case (op, s1', s2') of
+      (Add, SymValAff p1, SymValAff p2) -> SymValAff $ symAffAdd p1 p2
+      (Lt, SymValAff p1, SymValAff p2) -> 
+        case symAffIsLt p1 p2 of
+          Just True -> symValConst 1
+          Just False -> symValConst 0
+          Nothing -> (SymValBinop op s1' s2')
+      _ -> SymValBinop  op s1' s2'
+      
+-- if it's a polynomial, leave it unchanged
+symConstantFold p = p
+
+
+-- Values to make opaque at a given PC
+data OpaqueVals = OpaqueVals !(M.Map PC [Id])
+
 
 -- Abstract interpretation
 -- ==========================

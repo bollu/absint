@@ -173,8 +173,8 @@ type PtrId = Ptr Id
   { id `Ptr BasicSet'
   } -> `String' #}
 -- aff
-{#fun isl_aff_val_on_domain as affValOnDomain
-    {id `Ptr LocalSpace', id `Ptr Val'} -> `Ptr Aff' id #}
+-- {#fun isl_aff_val_on_domain as affValOnDomain
+--     {id `Ptr LocalSpace', id `Ptr Val'} -> `Ptr Aff' id #}
 
 -- pwaff
 
