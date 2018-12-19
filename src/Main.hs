@@ -216,6 +216,12 @@ repeatTillFixDebug 0 f a = a
 repeatTillFixDebug n f a = 
   let a' = f a in if a' == a then a else repeatTillFixDebug (n - 1) f a'
 
+
+repeatTillFixDebugTrace :: Eq a => Int -> (a -> a) -> a -> [a]
+repeatTillFixDebugTrace 0 f a = [a]
+repeatTillFixDebugTrace n f a = 
+  let a' = f a in if a' == a then [a] else a':repeatTillFixDebugTrace (n - 1) f a'
+
 -- Program syntax
 -- ==============
 
@@ -783,7 +789,9 @@ instance Pretty SymAff where
 
 -- Symbolic value that is either a symbolic polynomial or a binop of two such
 -- polynomials
-data SymVal = SymValAff !SymAff | SymValBinop !Binop !SymVal !SymVal deriving(Eq, Ord)
+data SymVal = SymValAff !SymAff 
+            | SymValBinop !Binop !SymVal !SymVal 
+            | SymValPhi !SymVal !SymVal deriving(Eq, Ord)
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
@@ -800,6 +808,7 @@ instance Pretty SymVal where
   pretty (SymValAff p) = pretty p
   pretty (SymValBinop op sym sym') =
     parens $  pretty sym <+> pretty op <+> pretty sym'
+  pretty (SymValPhi sym sym') = pretty "phi" <+> pretty sym <+> pretty sym'
 
 -- constant folding for symbols
 symConstantFold :: SymVal -> SymVal
@@ -826,6 +835,51 @@ data OpaqueVals = OpaqueVals !(M.Map PC [Id])
 
 -- Abstract interpretation
 -- ==========================
+
+exprGetSymbolic :: Expr -> M.Map Id SymVal -> Maybe SymVal
+exprGetSymbolic (EInt i) _ =  Just $ symValConst i
+exprGetSymbolic (EBool b) _ =  Just $ if b then (symValConst 1) else (symValConst 0)
+exprGetSymbolic (EId id) env = env M.!? id
+exprGetSymbolic (EBinop op e1 e2) env = 
+  liftA2 opimpl (exprGetSymbolic e1 env) (exprGetSymbolic e2 env) where
+    opimpl v1 v2 = symConstantFold $ SymValBinop op v1 v2
+
+mapInsertMaybe :: Ord k => k -> Maybe v -> M.Map k v -> M.Map k v
+mapInsertMaybe k (Just v) m = M.insert k v m
+mapInsertMaybe _ Nothing m = m
+
+phiGetSymbolic :: Phi -> M.Map Id SymVal -> M.Map Id SymVal
+phiGetSymbolic (Phi _ id (bbidl, idl) (bbidr, idr)) env = 
+  let
+    ml = env M.!? idl
+    mr = env M.!? idr
+    mphi = (liftA2 SymValPhi ml mr)
+ in case mphi of
+      Just sym -> M.insert id sym env
+      Nothing -> M.insert id (symValId id) env
+
+
+instGetSymbolic :: Inst -> M.Map Id SymVal -> M.Map Id SymVal
+instGetSymbolic (Assign _ id expr) env = 
+  case exprGetSymbolic expr env of
+    Just v -> M.insert id v env
+    Nothing -> M.insert id (symValId id) env
+
+  -- mapInsertMaybe id (exprGetSymbolic expr env) env
+
+bbGetSymbolic :: BB -> M.Map Id SymVal -> M.Map Id SymVal
+bbGetSymbolic bb env = 
+  let envphis = foldl (flip phiGetSymbolic) env (bbphis bb)
+      envinsts = foldl (flip instGetSymbolic) envphis (bbinsts bb)
+   in envinsts
+
+programGetSymbolic :: Program -> [M.Map Id SymVal]
+programGetSymbolic (Program bbs) = 
+  let 
+    runbbs :: M.Map Id SymVal -> M.Map Id SymVal
+    runbbs env = foldl (flip bbGetSymbolic) env bbs
+ in (repeatTillFixDebugTrace 20 runbbs) mempty
+
 
 absint :: Program -> AbsDomain
 absint = undefined
@@ -1050,6 +1104,12 @@ main = do
     let csem = programFixCollecting semConcrete pcur cbegin
     putDocW 80 (pretty csem)
     -- forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
+
+  
+    putStrLn ""
+    putStrLn "***symbolic values***"
+    let sym = programGetSymbolic pcur
+    putDocW 80 (pretty sym)
 
     putStrLn "***sampling program using the abstraction:***"
 
