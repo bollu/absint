@@ -62,7 +62,7 @@ data Id
 
 data Val
 data Aff
-data PwAff
+data Pwaff
 
 {#enum isl_dim_type as DimType {underscoreToCase} #}
 

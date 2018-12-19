@@ -12,7 +12,8 @@ import qualified Data.Set as S
 import Data.List (intercalate, nub)
 import Data.Semigroup
 import qualified Control.Monad.State as ST
-import Data.Foldable
+import Data.Foldable 
+import Data.Traversable (sequenceA)
 import Control.Applicative
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
@@ -20,9 +21,11 @@ import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
-import ISL.Native.Types (DimType(..), PwAff)
+import ISL.Native.Types (DimType(..), Pwaff, Ctx, Space, LocalSpace)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
+import qualified System.IO.Unsafe as Unsafe (unsafePerformIO)
+
 
 (!!#) :: Ord k => Pretty k => Pretty v => M.Map k v -> k -> v
 (!!#) m k = 
@@ -45,6 +48,11 @@ instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
        then pretty "emptymap" 
        else (indent 1 (vcat $ [pretty "(" <> pretty k <+> pretty "->" <+> (pretty v) <> pretty ")" | (k, v) <- M.toList m]))
 
+-- ISL Pretty hacks
+-- ================
+
+instance Pretty (Ptr Pwaff) where
+  pretty pwaff = pretty . Unsafe.unsafePerformIO $ pwaffToStr pwaff
 -- Lattice theory
 -- ==============
 -- top = join of all elements
@@ -402,7 +410,7 @@ envBegin = Env mempty mempty PCEntry
 
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
-type AbsVal = Ptr PwAff
+type AbsVal = Ptr Pwaff
 -- abstract environments
 type AbsEnv = Env AbsVal
 type AbsDomain = M.Map Loc AbsEnv 
@@ -710,14 +718,14 @@ programFixCollecting sem p csem =
 
 
 -- Symbolic polynomial with constant term and coefficients for the other terms
-data SymAff = SymAff !(Int, M.Map Id Int) deriving (Eq, Ord)
+data Symaff = Symaff !(Int, M.Map Id Int) deriving (Eq, Ord)
 
 -- return a list of IDs that occur in this sym aff
-symAffOccurs :: SymAff -> S.Set Id
-symAffOccurs (SymAff (_, coeffs)) = S.fromList $ M.keys $ M.filter (> 0) coeffs
+symAffOccurs :: Symaff -> S.Set Id
+symAffOccurs (Symaff (_, coeffs)) = S.fromList $ M.keys $ M.filter (> 0) coeffs
 
-instance Show SymAff where
-  show (SymAff (c, coeffs)) = 
+instance Show Symaff where
+  show (Symaff (c, coeffs)) = 
     let 
         showTerm :: Int -> Id -> Maybe String
         showTerm 0 x = Nothing
@@ -734,49 +742,49 @@ instance Show SymAff where
      in (intercalate " + " $ coeffs') ++ c'
 
 -- lift an identifier to a polynomial
-symAffId :: Id -> SymAff
-symAffId id = SymAff (0, M.fromList [(id, 1)])
+symAffId :: Id -> Symaff
+symAffId id = Symaff (0, M.fromList [(id, 1)])
 
 -- Lift a constant to a polynomial
-symAffConst :: Int -> SymAff
-symAffConst c = SymAff (c, M.empty)
+symAffConst :: Int -> Symaff
+symAffConst c = Symaff (c, M.empty)
 
--- remove IDs that have value 0 in the SymAff
+-- remove IDs that have value 0 in the Symaff
 -- Call internally after peforming operations
-_symAffRemoveZeroIds :: SymAff -> SymAff
-_symAffRemoveZeroIds (SymAff (c, cs)) = 
-  (SymAff (c, M.filter (/= 0) cs))
+_symAffRemoveZeroIds :: Symaff -> Symaff
+_symAffRemoveZeroIds (Symaff (c, cs)) = 
+  (Symaff (c, M.filter (/= 0) cs))
 
 -- Add two symbolic polynomials
-symAffAdd :: SymAff -> SymAff -> SymAff
-symAffAdd (SymAff (c1, p1)) (SymAff (c2, p2)) = 
+symAffAdd :: Symaff -> Symaff -> Symaff
+symAffAdd (Symaff (c1, p1)) (Symaff (c2, p2)) = 
   let pres = 
         M.merge 
           M.preserveMissing
           M.preserveMissing
           (M.zipWithMatched (\k x y -> x + y)) p1 p2 
-       in _symAffRemoveZeroIds $ SymAff (c1 + c2, pres)
+       in _symAffRemoveZeroIds $ Symaff (c1 + c2, pres)
 
--- If a symAff is constant, return the constant value, otherwise
+-- If a Symaff is constant, return the constant value, otherwise
 -- return Nothing
-symAffAsConst :: SymAff -> Maybe Int
-symAffAsConst (SymAff (c, cs)) = if cs == M.empty then Just c else Nothing
+symAffAsConst :: Symaff -> Maybe Int
+symAffAsConst (Symaff (c, cs)) = if cs == M.empty then Just c else Nothing
 
 -- negate a Symbolic affine value
-symAffNegate :: SymAff -> SymAff
-symAffNegate (SymAff (c, cs)) = SymAff (-c, M.map (\x -> (-x)) cs)
+symAffNegate :: Symaff -> Symaff
+symAffNegate (Symaff (c, cs)) = Symaff (-c, M.map (\x -> (-x)) cs)
 
--- Check if one SymAff is defnitely less than the other
+-- Check if one Symaff is defnitely less than the other
 -- Use the fact that x < y <-> x - y < 0
-symAffIsLt :: SymAff -> SymAff -> Maybe Bool
+symAffIsLt :: Symaff -> Symaff -> Maybe Bool
 symAffIsLt a1 a2 = 
   let sub = symAffAdd a1 (symAffNegate a2)
       msubc = symAffAsConst sub
    in fmap (< 0)  msubc
 
 
-instance Pretty SymAff where
-  pretty (SymAff (c, coeffs)) = 
+instance Pretty Symaff where
+  pretty (Symaff (c, coeffs)) = 
     let 
     prettyTerm :: Int -> Id -> Maybe (Doc a)
     prettyTerm 0 x = Nothing
@@ -793,7 +801,7 @@ instance Pretty SymAff where
 
 -- Symbolic value that is either a symbolic polynomial or a binop of two such
 -- polynomials
-data SymVal = SymValAff !SymAff 
+data SymVal = SymValAff !Symaff 
             | SymValBinop !Binop !SymVal !SymVal 
             | SymValPhi !SymVal !SymVal deriving(Eq, Ord)
 
@@ -843,8 +851,8 @@ symConstantFold p = p
 data OpaqueVals = OpaqueVals !(M.Map PC [Id])
 
 
--- Abstract interpretation
--- ==========================
+-- Symbolic interpretation
+-- =======================
 -- check if sym occurs in itself. ie, you're trying to construct an infinite type
 symInfiniteType :: Id -> SymVal -> Bool
 symInfiniteType id val = id `S.member` symValOccurs val
@@ -909,7 +917,7 @@ bbInitSymbolic bb =
       envinsts = M.fromList $ map (\(Assign _ id _ ) -> (id, symValId id)) (bbinsts bb)
    in envphis <> envinsts
 
-programGetSymbolic :: Program -> [M.Map Id SymVal]
+programGetSymbolic :: Program -> M.Map Id SymVal
 programGetSymbolic (Program bbs) = 
   let 
     runbbs :: M.Map Id SymVal -> M.Map Id SymVal
@@ -917,14 +925,38 @@ programGetSymbolic (Program bbs) =
 
     initenv :: M.Map Id SymVal
     initenv = mconcat $ map bbInitSymbolic bbs
- in (repeatTillFixDebugTrace 3 runbbs) initenv
+ in (repeatTillFix runbbs) initenv
 
+
+-- Symbolic expression to Pwaff
+-- ============================
+symaffToPwaff :: Ptr Ctx -> Symaff -> IO (Ptr Pwaff)
+symaffToPwaff ctx (Symaff (c, coeffs)) = 
+  if M.null coeffs
+     then do 
+      ls <- localSpaceAlloc ctx 0 0 0
+      pwaffInt ctx ls c
+  else do
+    ls <- localSpaceAlloc ctx 0 0 0
+    pwaffInt ctx ls 42
+
+symValToPwaff :: Ptr Ctx -> SymVal -> IO (Ptr Pwaff)
+symValToPwaff ctx (SymValAff aff) = symaffToPwaff ctx aff
+symValToPwaff ctx (SymValBinop bop l r) = symValToPwaff ctx l
+symValToPwaff ctx (SymValPhi l r) = 
+  do
+    ls <- localSpaceAlloc ctx 0 0 0
+    pwaffInt ctx ls(-42)
+
+-- Abstract interpretation
+-- =======================
 
 absint :: Program -> AbsDomain
 absint = undefined
 
 gamma :: AbsDomain -> ConcreteDomain
 gamma = undefined
+
 
 
 -- Example
@@ -1128,6 +1160,8 @@ main :: IO ()
 main = do
   -- putStrLn "***ISL test***"
   --   testisl
+    islctx <- ctxAlloc
+
 
     putStrLn "***program***"
     putDocW 80 (pretty pcur)
@@ -1147,10 +1181,14 @@ main = do
   
     putStrLn ""
     putStrLn "***symbolic values***"
-    let sym = programGetSymbolic pcur
-    putDocW 80 (pretty sym)
+    let id2sym = programGetSymbolic pcur
+    putDocW 80 (pretty id2sym)
 
-    putStrLn "***sampling program using the abstraction:***"
+
+    putStrLn ""
+    id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx) id2sym
+
+    putDocW 80 (pretty id2pwaff)
 
     -- let idsToLookup = ["x", "x_lt_5", "y", "z"]
     -- let idsToLookup = ["x_lt_5", "x_lt_5_next", "x", "x_next", "z"]
