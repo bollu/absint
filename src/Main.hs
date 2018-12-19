@@ -989,9 +989,11 @@ symValToPwaff ctx id2sym (SymValBinop bop l r) = do
       
 symValToPwaff ctx id2sym (SymValPhi l r) = 
   do
-    -- ls <- localSpaceIds ctx (M.keys id2sym)
     pwl <- symValToPwaff ctx id2sym l
     mapl <- mapFromPwaff pwl
+    mapl' <- mapAddDims  mapl IslDimIn 1 >>= (\m -> mapSetDimName m IslDimIn 0 "viv")
+
+    
     -- TODO: Prove that this pattern always occurs, otherwise I will get an irrefutable.
     -- pattern match error
     -- TODO: We will probably need to take a map M.Map Id Pwaff, and 
@@ -1000,9 +1002,12 @@ symValToPwaff ctx id2sym (SymValPhi l r) =
     let idr = fromJust (symAffExtractId symaffr)
     pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
     -- mapr <- mapFromPwaff pwr
-    return pwr
+    pwma <- (pwmultiaffFromMap mapl') --  >>= (\pwma -> pwmultiaffGetPwaff pwma 0)
 
-    -- pwaffInt ctx ls(-42)
+    pwmultiaffToStr pwma >>= (\s -> putStrLn $  "pwma: " ++ s)
+
+    ls <- localSpaceIds ctx (M.keys id2sym)
+    pwaffInt ctx ls (-42)
 
 -- Abstract interpretation
 -- =======================

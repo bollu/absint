@@ -40,7 +40,11 @@ type PtrAff = Ptr Aff
 {#pointer *isl_aff as PtrAff -> Aff nocode #}
 
 type PtrPwAff = Ptr Pwaff
-{#pointer *isl_pw_aff as PtrPwAff -> Aff nocode #}
+{#pointer *isl_pw_aff as PtrPwAff -> Pwaff nocode #}
+
+
+type PtrPwmultiaff = Ptr Pwmultiaff
+{#pointer *isl_pw_multi_aff as PtrPwmultiaff -> Pwmultiaff nocode #}
 
 
 type PtrVal = Ptr Val
@@ -120,6 +124,20 @@ type PtrId = Ptr Id
   { id `Ptr Pwaff'
   } -> `Ptr Map' id #}
 
+
+{#fun isl_map_set_tuple_name as mapSetTupleName
+  { id `Ptr Map'
+  , fromDimType `DimType'
+  , `String'
+  } -> `Ptr Map' id #}
+
+
+{#fun isl_map_set_dim_name as mapSetDimName
+  { id `Ptr Map'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , `String'
+  } -> `Ptr Map' id #}
 
 
 -- set
@@ -245,6 +263,16 @@ type PtrId = Ptr Id
 {# fun isl_pw_aff_get_space as pwaffGetSpace
     {id `Ptr Pwaff' } -> `Ptr Space' id #}
 
+-- pw multi aff
+{# fun isl_pw_multi_aff_from_map as pwmultiaffFromMap
+    {id `Ptr Map' } -> `Ptr Pwmultiaff' id #}
+
+
+{# fun isl_pw_multi_aff_to_str as pwmultiaffToStr
+    {id `Ptr Pwmultiaff' } -> `String' #}
+
+{# fun isl_pw_multi_aff_get_pw_aff as pwmultiaffGetPwaff
+    {id `Ptr Pwmultiaff', id `CInt' } -> `Ptr Pwaff' id #}
 
 -- val
 {#fun isl_val_int_from_si as valIntFromSI
