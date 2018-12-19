@@ -372,11 +372,15 @@ type AbsVal = (TripCount -> Int) -- map trip counts to integers
 type AbsEnv = Env AbsVal
 type AbsDomain = M.Map PC AbsEnv 
 
+
+-- collecting semantics in general. Map PC to a set of environments
+type Collecting a = M.Map PC (S.Set (Env a))
+
 -- concrete environments
 type ConcreteEnv = Env Int
 
--- The concrete domain
-type ConcreteDomain  = M.Map PC (S.Set ConcreteEnv)
+-- The concrete domain is the collecting semantics of the concrete environment
+type ConcreteDomain  = Collecting ConcreteEnv
 
 
 -- type SemExpr = Expr -> Env a -> a
@@ -478,6 +482,12 @@ semConcrete = Semantics {
   semExpr = semExprConcrete,
   semPredicate = semPredicateConcrete
 }
+
+-- Collecting semantics
+-- ====================
+
+programExecCollecting :: Semantics a -> Program -> S.Set (Env a) -> Collecting a
+programExecCollecting sem p envs = undefined
 
 -- Abstract interpretation
 -- ==========================
