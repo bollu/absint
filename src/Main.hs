@@ -297,10 +297,10 @@ instance Pretty Term where
       pretty cid <+> pretty bbidl <+> pretty bbidr
   pretty (Done loc) = pretty loc <+> pretty "done"
 
-data BBTy = BBLoop String deriving(Eq, Ord)
+data BBTy = BBLoop deriving(Eq, Ord)
 
 instance Pretty BBTy where
-  pretty (BBLoop name) = pretty "bbloop:" <> pretty name
+  pretty (BBLoop) = pretty "bbloop" 
 
 data BB = BB {
  bbid :: BBId,
@@ -352,59 +352,69 @@ instance Pretty Program where
   pretty (Program bbs) = vcat $ map pretty bbs
 
 
--- Denotational ish semantics
--- ==========================
+-- Denotational ish semantics, execution abstracted over semantic domain
+-- =====================================================================
+--
 
 -- current basic block and location within the basic block being executed
 data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord)
 
--- Environments of the language
-type Env = (M.Map Id Int)
+type VEnv v = M.Map Id v
+-- trip count
+type LEnv = M.Map BBId Int
+
+type Env v = (VEnv v, LEnv)
+
+-- map variables to functions of loop trip counts
+type TripCount = M.Map Id Int
+type AbsVal = (TripCount -> Int) -- map trip counts to integers
+-- abstract environments
+type AbsEnv = Env AbsVal
+type AbsDomain = M.Map PC AbsEnv 
+
+-- concrete environments
+type ConcreteEnv = Env Int
+
+-- The concrete domain
+type ConcreteDomain  = M.Map PC (S.Set ConcreteEnv)
 
 
--- Initial env
-envBegin :: Env
-envBegin = M.empty
+-- type SemExpr = Expr -> Env a -> a
+-- type SemPhi = Phi -> BBId -> Env a -> Env a
+-- type SemInst = Inst -> Env a -> Env a
+-- type SemTerm = Term -> BBId -> Env a -> PC
+-- 
+-- definitino of semantics
+data Semantics a = Semantics {
+ semExpr :: Expr -> VEnv a -> a,
+ semPredicate :: a -> Maybe Bool
+}
 
--- Expression evaluation
-exprEval :: Expr -> Env -> Int
-exprEval (EInt i) _ =  i
-exprEval (EBool b) _ =  if b then 1 else 0
-exprEval (EId id) env = env M.! id
-exprEval (EBinop op e1 e2) env = exprEval e1 env `opimpl` exprEval e2 env where
-  opimpl = case op of
-             Add -> (+)
-             Lt -> (\a b -> if a < b then 1 else 0)
+mkSemInst :: (Expr -> VEnv a -> a) -> Inst -> VEnv a -> VEnv a
+mkSemInst sem (Assign _ id e) env  = 
+  M.insert id (sem e env) env
 
--- Execute a phi node
-phiExec ::  BBId -- previous BB ID
-        -> Phi  -- Phi node to execute
-        -> Env -> Env
-phiExec prevbbid p@(Phi _ id (bbidl, idl) (bbidr, idr)) env = 
+mkSemTerm :: (a -> Maybe Bool) -- concrete value to truth value
+          -> Term
+          -> BBId
+          -> VEnv a 
+          -> PC
+mkSemTerm _ (Br _ bbid') bbid env = PCNext bbid bbid'
+
+mkSemTerm judgement (BrCond _ condid bbidl bbidr) bbid env = 
+  let (Just bcond) = judgement (env M.! condid) 
+      bbid' =  (if bcond then  bbidl else bbidr)
+   in PCNext bbid bbid'
+mkSemTerm _ (Done _) _ _ = PCDone
+
+mkSemPhi :: Phi -> BBId -> VEnv a -> VEnv a
+mkSemPhi  p@(Phi _ id (bbidl, idl) (bbidr, idr)) prevbbid env = 
   if prevbbid == bbidl 
      then M.insert id (env M.! idl) env
      else if prevbbid == bbidr 
      then M.insert id (env M.! idr) env
      else error $ "incorrect phi: " ++ show p
 
-
-
--- Execute an instruction
-instExec :: Inst -> Env -> Env
-instExec (Assign _ id e) env = M.insert id (exprEval e env) env
-
--- Execute a terminator instruction
-termExec :: Term 
-         -> BBId  -- ID of the current basic block
-         -> Env  -- environment 
-         -> PC
-termExec (Br _ bbid') bbid env = PCNext bbid bbid'
-
-termExec (BrCond _ condid bbidl bbidr) bbid env = 
-  let bbid' =  (if env M.! condid == 1 then  bbidl else bbidr)
-   in PCNext bbid bbid'
-
-termExec (Done _) _ env = PCDone
 
 envInsertOrUpdate :: Ord k => v -> (v -> v) -> k -> M.Map k v -> M.Map k v
 envInsertOrUpdate v f k m = 
@@ -414,16 +424,17 @@ envInsertOrUpdate v f k m =
 
 
 -- Execute a basic block
-bbExec (BB bbid bbty _ phis insts term) mprevbbid env = 
-      let envbb = case bbty of
-                Nothing -> env
-                Just (BBLoop name) -> envInsertOrUpdate 0 (+1) (Id name) env
-          envphi = case mprevbbid of
-            Just prevbbid -> foldl (flip (phiExec prevbbid)) envbb phis
-            Nothing -> envbb
-          envinst = foldl (flip instExec) envphi insts
-          pc' = termExec term bbid envinst 
-     in (envinst, pc')
+bbExec :: Semantics a -> BB -> Maybe BBId -> Env a -> (Env a, PC)
+bbExec sem (BB bbid bbty _ phis insts term) mprevbbid (venv, lenv) = 
+      let lenvbb = case bbty of
+                Nothing -> lenv
+                Just BBLoop -> envInsertOrUpdate 0 (+1) bbid lenv
+          venvphi = case mprevbbid of
+                     Just prevbbid -> foldl (\venv phi -> mkSemPhi phi prevbbid venv) venv phis
+                     Nothing -> venv
+          venvinst = foldl (\venv inst -> mkSemInst (semExpr sem) inst venv) venvphi insts
+          pc' = mkSemTerm (semPredicate sem) term bbid venvinst 
+       in ((venvinst, lenvbb), pc')
 
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
@@ -431,18 +442,51 @@ programBBId2BB :: Program -> M.Map BBId BB
 programBBId2BB (Program bbs) = 
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
 
-programExec :: Program -> Env -> Env
-programExec p@(Program bbs) env = 
+programExec :: Semantics a -> Program -> Env a -> Env a
+programExec sem p@(Program bbs) env = 
   let bbid2bb :: M.Map BBId BB
       bbid2bb = programBBId2BB p
 
-      go :: (Env, PC) -> Env
-      go (env, PCEntry) = go $ bbExec (head bbs) Nothing env 
+      -- go :: (Env a, PC) -> Env a
+      go (env, PCEntry) = go $ bbExec sem (head bbs) Nothing env 
       go (env, (PCNext prevbbid curbbid)) = 
-        go $ bbExec (bbid2bb M.! curbbid) (Just prevbbid) env
+        go $ bbExec sem (bbid2bb M.! curbbid) (Just prevbbid) env
       go (env, PCDone) = env
   in go (env, PCEntry)
 
+-- Concrete semantics
+-- ===================
+
+
+-- Expression evaluation
+semExprConcrete :: Expr -> VEnv Int -> Int
+semExprConcrete (EInt i) _ =  i
+semExprConcrete (EBool b) _ =  if b then 1 else 0
+semExprConcrete (EId id) env = env M.! id
+semExprConcrete (EBinop op e1 e2) env = semExprConcrete e1 env `opimpl` semExprConcrete e2 env where
+  opimpl = case op of
+             Add -> (+)
+             Lt -> (\a b -> if a < b then 1 else 0)
+
+semPredicateConcrete :: Int -> Maybe Bool
+semPredicateConcrete 0 = Just False
+semPredicateConcrete 1 = Just True
+semPredicateConcrete _ = Nothing
+
+semConcrete :: Semantics Int
+semConcrete = Semantics {
+  semExpr = semExprConcrete,
+  semPredicate = semPredicateConcrete
+}
+
+-- Abstract interpretation
+-- ==========================
+
+absint :: Program -> AbsDomain
+absint = undefined
+
+gamma :: AbsDomain -> ConcreteDomain
+gamma = undefined
 
 
 -- Example
@@ -558,7 +602,7 @@ br bbid = do
 pLoop :: Program
 pLoop = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing 
-  loop <- buildNewBB "loop" (Just $ BBLoop "loop")
+  loop <- buildNewBB "loop" (Just $ BBLoop)
   exit <- buildNewBB "exit" Nothing
 
   focusBB entry
@@ -652,7 +696,7 @@ main = do
     putStrLn ""
     
     putStrLn "***program output***"
-    let outenv =  (programExec pcur) envBegin
+    let outenv =  (programExec semConcrete pcur) mempty
     print outenv
 
 
