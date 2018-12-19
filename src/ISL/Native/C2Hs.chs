@@ -195,6 +195,9 @@ type PtrId = Ptr Id
 {# fun isl_pw_aff_from_aff as pwAffFromAff
     {id `Ptr Aff' } -> `Ptr PwAff' id #}
 
+{# fun isl_pw_aff_to_str as pwAffToString
+    {id `Ptr PwAff' } -> `String'  #}
+
 -- val
 {#fun isl_val_int_from_si as valIntFromSI
     {id  `Ptr Ctx', id `CLong'} -> `Ptr Val' id #}
