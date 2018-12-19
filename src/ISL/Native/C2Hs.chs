@@ -189,6 +189,10 @@ type PtrId = Ptr Id
 {#fun isl_basic_set_to_str as basicSetToStr
   { id `Ptr BasicSet'
   } -> `String' #}
+
+-- set
+{# fun isl_set_indicator_function as setIndicatorFunction
+    {id `Ptr Set'} -> `Ptr Pwaff' id #}
 -- aff
 
 {#fun isl_aff_copy as affCopy
@@ -204,6 +208,15 @@ type PtrId = Ptr Id
 
 {# fun isl_pw_aff_to_str as pwaffToStr
     {id `Ptr Pwaff' } -> `String'  #}
+
+
+{# fun isl_pw_aff_add as pwaffAdd
+    {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Pwaff' id #}
+
+
+{# fun isl_pw_aff_lt_set as pwaffLtSet
+    {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Set' id #}
+
 
 -- val
 {#fun isl_val_int_from_si as valIntFromSI

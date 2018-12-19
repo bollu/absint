@@ -942,7 +942,13 @@ symaffToPwaff ctx (Symaff (c, coeffs)) =
 
 symValToPwaff :: Ptr Ctx -> SymVal -> IO (Ptr Pwaff)
 symValToPwaff ctx (SymValAff aff) = symaffToPwaff ctx aff
-symValToPwaff ctx (SymValBinop bop l r) = symValToPwaff ctx l
+symValToPwaff ctx (SymValBinop bop l r) = do
+  pwl <- symValToPwaff ctx l
+  pwr <- symValToPwaff ctx r
+  case bop of
+    Add -> pwaffAdd pwl pwr
+    Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
+      
 symValToPwaff ctx (SymValPhi l r) = 
   do
     ls <- localSpaceSetAlloc ctx 0 0
