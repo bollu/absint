@@ -220,7 +220,7 @@ repeatTillFixDebug n f a =
 repeatTillFixDebugTrace :: Eq a => Int -> (a -> a) -> a -> [a]
 repeatTillFixDebugTrace 0 f a = [a]
 repeatTillFixDebugTrace n f a = 
-  let a' = f a in if a' == a then [a] else a':repeatTillFixDebugTrace (n - 1) f a'
+  let a' = f a in if a' == a then [a] else a:repeatTillFixDebugTrace (n - 1) f a'
 
 -- Program syntax
 -- ==============
@@ -712,6 +712,10 @@ programFixCollecting sem p csem =
 -- Symbolic polynomial with constant term and coefficients for the other terms
 data SymAff = SymAff !(Int, M.Map Id Int) deriving (Eq, Ord)
 
+-- return a list of IDs that occur in this sym aff
+symAffOccurs :: SymAff -> S.Set Id
+symAffOccurs (SymAff (_, coeffs)) = S.fromList $ M.keys $ M.filter (> 0) coeffs
+
 instance Show SymAff where
   show (SymAff (c, coeffs)) = 
     let 
@@ -793,6 +797,12 @@ data SymVal = SymValAff !SymAff
             | SymValBinop !Binop !SymVal !SymVal 
             | SymValPhi !SymVal !SymVal deriving(Eq, Ord)
 
+-- return a list of IDs that occur in this symbolic value
+symValOccurs :: SymVal -> S.Set Id
+symValOccurs (SymValAff aff) = symAffOccurs aff
+symValOccurs (SymValBinop _ l r) = symValOccurs l `S.union` symValOccurs r
+symValOccurs (SymValPhi l r) = symValOccurs l `S.union` symValOccurs r
+
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
 
@@ -835,24 +845,44 @@ data OpaqueVals = OpaqueVals !(M.Map PC [Id])
 
 -- Abstract interpretation
 -- ==========================
+-- check if sym occurs in itself. ie, you're trying to construct an infinite type
+symInfiniteType :: Id -> SymVal -> Bool
+symInfiniteType id val = id `S.member` symValOccurs val
 
-exprGetSymbolic :: Expr -> M.Map Id SymVal -> Maybe SymVal
-exprGetSymbolic (EInt i) _ =  Just $ symValConst i
-exprGetSymbolic (EBool b) _ =  Just $ if b then (symValConst 1) else (symValConst 0)
-exprGetSymbolic (EId id) env = env M.!? id
-exprGetSymbolic (EBinop op e1 e2) env = 
-  liftA2 opimpl (exprGetSymbolic e1 env) (exprGetSymbolic e2 env) where
+
+-- if the val is infinite, block it. Otherwise, let it be constructed
+symBlockInfiniteType :: Id -- id to block
+                     -> SymVal -- symval to use as backup
+                     -> SymVal -- symval to check
+                     -> SymVal
+symBlockInfiniteType id backup val = 
+  if symInfiniteType id val then backup else val
+
+-- get the symbolic value of an expression
+exprGetSymbolic :: Id  -- identifier to avoid occurs check with
+                ->  Expr 
+                -> M.Map Id SymVal -> Maybe SymVal
+exprGetSymbolic _ (EInt i) _ =  Just $ symValConst i
+exprGetSymbolic _ (EBool b) _ =  Just $ if b then (symValConst 1) else (symValConst 0)
+exprGetSymbolic idinf (EId id) env = (symBlockInfiniteType idinf (symValId id)) <$> (env M.!? id)
+exprGetSymbolic idinf (EBinop op e1 e2) env = 
+  let ml = exprGetSymbolic idinf e1 env
+      mr = exprGetSymbolic idinf e2 env
+   in liftA2 opimpl ml mr where
     opimpl v1 v2 = symConstantFold $ SymValBinop op v1 v2
 
 mapInsertMaybe :: Ord k => k -> Maybe v -> M.Map k v -> M.Map k v
 mapInsertMaybe k (Just v) m = M.insert k v m
 mapInsertMaybe _ Nothing m = m
 
+-- If the phi does not create an infinite type, then allow it.
+-- Otherwise, disallow
+-- TODO: clean this up, too many cases
 phiGetSymbolic :: Phi -> M.Map Id SymVal -> M.Map Id SymVal
 phiGetSymbolic (Phi _ id (bbidl, idl) (bbidr, idr)) env = 
   let
-    ml = env M.!? idl
-    mr = env M.!? idr
+    ml = exprGetSymbolic id (EId idl) env
+    mr = exprGetSymbolic id (EId idr) env
     mphi = (liftA2 SymValPhi ml mr)
  in case mphi of
       Just sym -> M.insert id sym env
@@ -861,7 +891,7 @@ phiGetSymbolic (Phi _ id (bbidl, idl) (bbidr, idr)) env =
 
 instGetSymbolic :: Inst -> M.Map Id SymVal -> M.Map Id SymVal
 instGetSymbolic (Assign _ id expr) env = 
-  case exprGetSymbolic expr env of
+  case exprGetSymbolic id expr env of
     Just v -> M.insert id v env
     Nothing -> M.insert id (symValId id) env
 
@@ -873,12 +903,21 @@ bbGetSymbolic bb env =
       envinsts = foldl (flip instGetSymbolic) envphis (bbinsts bb)
    in envinsts
 
+bbInitSymbolic :: BB -> M.Map Id SymVal 
+bbInitSymbolic bb = 
+  let envphis = M.fromList $ map (\(Phi _ id _ _) -> (id, symValId id)) (bbphis bb)
+      envinsts = M.fromList $ map (\(Assign _ id _ ) -> (id, symValId id)) (bbinsts bb)
+   in envphis <> envinsts
+
 programGetSymbolic :: Program -> [M.Map Id SymVal]
 programGetSymbolic (Program bbs) = 
   let 
     runbbs :: M.Map Id SymVal -> M.Map Id SymVal
     runbbs env = foldl (flip bbGetSymbolic) env bbs
- in (repeatTillFixDebugTrace 20 runbbs) mempty
+
+    initenv :: M.Map Id SymVal
+    initenv = mconcat $ map bbInitSymbolic bbs
+ in (repeatTillFixDebugTrace 3 runbbs) initenv
 
 
 absint :: Program -> AbsDomain
