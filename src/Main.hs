@@ -357,13 +357,17 @@ instance Pretty Program where
 --
 
 -- current basic block and location within the basic block being executed
-data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord)
+data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord, Show)
 
 type VEnv v = M.Map Id v
 -- trip count
 type LEnv = M.Map BBId Int
 
-type Env v = (VEnv v, LEnv)
+type Env v = (VEnv v, LEnv, PC)
+
+
+envBegin :: Env v
+envBegin = (mempty, mempty, PCEntry)
 
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
@@ -428,17 +432,18 @@ envInsertOrUpdate v f k m =
 
 
 -- Execute a basic block
-bbExec :: Semantics a -> BB -> Maybe BBId -> Env a -> (Env a, PC)
-bbExec sem (BB bbid bbty _ phis insts term) mprevbbid (venv, lenv) = 
+bbExec :: Semantics a -> BB -> Env a -> Env a
+bbExec sem (BB bbid bbty _ phis insts term) (venv, lenv, pcprev) = 
       let lenvbb = case bbty of
                 Nothing -> lenv
                 Just BBLoop -> envInsertOrUpdate 0 (+1) bbid lenv
-          venvphi = case mprevbbid of
-                     Just prevbbid -> foldl (\venv phi -> mkSemPhi phi prevbbid venv) venv phis
-                     Nothing -> venv
+          venvphi = case pcprev of
+                      PCNext prevbbid _ -> foldl (\venv phi -> mkSemPhi phi prevbbid venv) venv phis
+                      PCEntry -> venv
+                      PCDone -> error "canot have PC done and then execute a BB"
           venvinst = foldl (\venv inst -> mkSemInst (semExpr sem) inst venv) venvphi insts
           pc' = mkSemTerm (semPredicate sem) term bbid venvinst 
-       in ((venvinst, lenvbb), pc')
+       in (venvinst, lenvbb, pc')
 
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
@@ -447,16 +452,14 @@ programBBId2BB (Program bbs) =
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
 
 programExec :: Semantics a -> Program -> Env a -> Env a
-programExec sem p@(Program bbs) env = 
+programExec sem p@(Program bbs) env@(_, _, pc) = 
   let bbid2bb :: M.Map BBId BB
       bbid2bb = programBBId2BB p
-
-      -- go :: (Env a, PC) -> Env a
-      go (env, PCEntry) = go $ bbExec sem (head bbs) Nothing env 
-      go (env, (PCNext prevbbid curbbid)) = 
-        go $ bbExec sem (bbid2bb M.! curbbid) (Just prevbbid) env
-      go (env, PCDone) = env
-  in go (env, PCEntry)
+  in
+    case pc of
+      PCDone -> env
+      PCEntry -> programExec sem p $ bbExec sem (head bbs) env
+      PCNext _ curbbid -> programExec sem p $ bbExec sem (bbid2bb M.! curbbid) env
 
 -- Concrete semantics
 -- ===================
@@ -706,7 +709,7 @@ main = do
     putStrLn ""
     
     putStrLn "***program output***"
-    let outenv =  (programExec semConcrete pcur) mempty
+    let outenv =  (programExec semConcrete pcur) envBegin
     print outenv
 
 
