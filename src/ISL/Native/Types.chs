@@ -60,6 +60,10 @@ data Constraint
 -- and printed using the following functions.
 data Id
 
+data Val
+data Aff
+data PwAff
+
 {#enum isl_dim_type as DimType {underscoreToCase} #}
 
 fromDimType :: DimType -> CInt

@@ -9,6 +9,7 @@ module ISL.Native.C2Hs where
 #include <isl/map.h>
 #include <isl/set.h>
 #include <isl/space.h>
+#include <isl/aff.h>
 
 import Foreign.Ptr
 import Foreign.Marshal.Alloc
@@ -171,3 +172,11 @@ type PtrId = Ptr Id
 {#fun isl_basic_set_to_str as basicSetToStr
   { id `Ptr BasicSet'
   } -> `String' #}
+-- aff
+{#fun isl_aff_val_on_domain as affValOnDomain
+    {id `Ptr LocalSpace', id `Ptr Val'} -> `Ptr Aff' id #}
+
+-- pwaff
+
+-- val
+

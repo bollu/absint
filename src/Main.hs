@@ -395,7 +395,7 @@ envBegin = Env mempty mempty PCEntry
 
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
-type AbsVal = (TripCount -> Int) -- map trip counts to integers
+type AbsVal = Ptr Pwaff
 -- abstract environments
 type AbsEnv = Env AbsVal
 type AbsDomain = M.Map Loc AbsEnv 
@@ -655,26 +655,6 @@ phiExecCollecting phi loc csem =
   in 
    mapEnvCollecting loc (location phi) f  csem
 
-
--- bbUpdateLenvCollecting :: Ord a => Pretty a =>
---   M.Map BBId NaturalLoop
---   M.Map BBId Location
---   -> Collecting a
---   -> Collecting a
--- bbUpdateLenvCollecting bbid2nl bbid2loc bbid csem = 
---   let
---     lenvUpdate :: PC -> LEnv -> LEnv
---     lenvUpdate (PCNext prevbbid _) lenv = 
---       case fmap (nlContainsBB prevbbid) (bbid2nl M.!? bbid) of
---         Just True -> M.adjust (+1) (bbid) lenv
---         Just False -> M.insert (bbid) 0 lenv
---         Nothing -> lenv
---     lenvUpdate _ lenv = lenv
---  in updateEnvCollecting 
---      (bbid2loc M.! bbid)
---      (\(Env venv lenv pc) -> Env venv (lenvUpdate pc lenv) pc)
---      csem
--- 
 
 
 bbExecCollecting :: Ord a => Pretty a => Semantics a 
