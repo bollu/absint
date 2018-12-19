@@ -182,6 +182,13 @@ type PtrId = Ptr Id
   { id `Ptr Ctx', `CUInt', `CUInt', `CUInt'
   } -> `Ptr Space' id #}
 
+-- local space
+{#fun isl_local_space_set_dim_name as localSpaceSetDimName
+  { id `Ptr LocalSpace'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , `String'
+  } -> `Ptr LocalSpace' id #}
 
 -- basic set
 {#fun isl_basic_set_project_out as basicSetProjectOut

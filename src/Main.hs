@@ -24,6 +24,7 @@ import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..), Pwaff, Ctx, Space, LocalSpace)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
+import Control.Monad (foldM)
 import qualified System.IO.Unsafe as Unsafe (unsafePerformIO)
 
 
@@ -927,31 +928,44 @@ programGetSymbolic (Program bbs) =
     initenv = mconcat $ map bbInitSymbolic bbs
  in (repeatTillFix runbbs) initenv
 
+-- pwaff comprising of IDs with parametric dimensions
+localSpaceIds :: Ptr Ctx -> [Id] -> IO (Ptr LocalSpace)
+localSpaceIds ctx ids = do
+  ls <- localSpaceSetAlloc ctx (length ids) 0
+  foldM (\ls ((Id id), ix) -> localSpaceSetDimName ls IslDimParam (fromIntegral ix) id) ls (zip ids [0, 1..])
+  return ls
+
 
 -- Symbolic expression to Pwaff
 -- ============================
-symaffToPwaff :: Ptr Ctx -> Symaff -> IO (Ptr Pwaff)
-symaffToPwaff ctx (Symaff (c, coeffs)) = 
+symaffToPwaff :: Ptr Ctx -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
+symaffToPwaff ctx id2sym(Symaff (c, coeffs)) = 
   if M.null coeffs
      then do 
-      ls <- localSpaceSetAlloc ctx 0 0
+      ls <- localSpaceIds ctx (M.keys id2sym)
       pwaffInt ctx ls c
   else do
-    ls <- localSpaceSetAlloc ctx 0 0
+    ls <- localSpaceIds ctx (M.keys id2sym)
     pwaffInt ctx ls 42
 
-symValToPwaff :: Ptr Ctx -> SymVal -> IO (Ptr Pwaff)
-symValToPwaff ctx (SymValAff aff) = symaffToPwaff ctx aff
-symValToPwaff ctx (SymValBinop bop l r) = do
-  pwl <- symValToPwaff ctx l
-  pwr <- symValToPwaff ctx r
+
+
+-- Given the symbolic representation of all other expressions, maximal
+-- upto occurs check, create the symbolic value for this expression
+symValToPwaff :: Ptr Ctx 
+              -> M.Map Id SymVal  -- values of each ID
+              -> SymVal -> IO (Ptr Pwaff)
+symValToPwaff ctx id2sym (SymValAff aff) = symaffToPwaff ctx id2sym aff
+symValToPwaff ctx id2sym (SymValBinop bop l r) = do
+  pwl <- symValToPwaff ctx id2sym l
+  pwr <- symValToPwaff ctx id2sym r
   case bop of
     Add -> pwaffAdd pwl pwr
     Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
       
-symValToPwaff ctx (SymValPhi l r) = 
+symValToPwaff ctx id2sym (SymValPhi l r) = 
   do
-    ls <- localSpaceSetAlloc ctx 0 0
+    ls <- localSpaceIds ctx (M.keys id2sym)
     pwaffInt ctx ls(-42)
 
 -- Abstract interpretation
@@ -1160,8 +1174,6 @@ testisl = do
   print s
   mapFree m
 
-
-
 main :: IO ()
 main = do
   -- putStrLn "***ISL test***"
@@ -1193,7 +1205,7 @@ main = do
 
     putStrLn ""
     putStrLn "***pwaff values***"
-    id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx) id2sym
+    id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2sym) id2sym
 
     putDocW 80 (pretty id2pwaff)
 
