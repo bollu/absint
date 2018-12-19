@@ -36,6 +36,16 @@ type PtrBasicSet = Ptr BasicSet
 type PtrLocalSpace = Ptr LocalSpace
 {#pointer *isl_local_space as PtrLocalSpace -> LocalSpace nocode #}
 
+type PtrAff = Ptr Aff
+{#pointer *isl_aff as PtrAff -> Aff nocode #}
+
+type PtrPwAff = Ptr PwAff
+{#pointer *isl_pw_aff as PtrPwAff -> Aff nocode #}
+
+
+type PtrVal = Ptr Val
+{#pointer *isl_val as PtrVal -> Val nocode #}
+
 type PtrSpace = Ptr Space
 {#pointer *isl_space as PtrSpace -> Space nocode #}
 
@@ -173,10 +183,30 @@ type PtrId = Ptr Id
   { id `Ptr BasicSet'
   } -> `String' #}
 -- aff
--- {#fun isl_aff_val_on_domain as affValOnDomain
---     {id `Ptr LocalSpace', id `Ptr Val'} -> `Ptr Aff' id #}
+
+{#fun isl_aff_copy as affCopy
+  { id `Ptr Aff'
+  } -> `Ptr Aff' id #}
+
+{#fun isl_aff_val_on_domain as affValOnDomain
+    {id `Ptr LocalSpace', id `Ptr Val'} -> `Ptr Aff' id #}
 
 -- pwaff
+{# fun isl_pw_aff_from_aff as pwAffFromAff
+    {id `Ptr Aff' } -> `Ptr PwAff' id #}
 
 -- val
+{#fun isl_val_int_from_si as valIntFromSI
+    {id  `Ptr Ctx', id `CLong'} -> `Ptr Val' id #}
+
+affInt :: Ptr Ctx -> Ptr LocalSpace -> Int -> IO (Ptr Aff)
+affInt ctx ls i = do
+  v <- valIntFromSI ctx (fromIntegral i)
+  affValOnDomain ls v
+
+pwAffInt :: Ptr Ctx -> Ptr LocalSpace -> Int -> IO (Ptr PwAff)
+pwAffInt ctx ls i = do
+    aff <- affInt ctx ls i
+    pwAffFromAff aff
+    
 
