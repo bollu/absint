@@ -615,6 +615,7 @@ lenvUpdate bbid2nl (PCNext prevbbid nextbbid) lenv =
 -- at term: [PCNext loop loop, PCNext loop exit]
 -- copy data from term into  loop and exit
 -- copy data from loop into loop, copy data from entry into loop
+-- TODO: refactor this, this is ugly as sin.
 flowIntoBBExecCollecting :: Ord a => Pretty a => 
   Loc  --  location of terminator to pull from
   -> M.Map BBId NaturalLoop
