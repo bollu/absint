@@ -574,9 +574,13 @@ phiExecCollecting :: Ord a =>
                   -> Loc 
                   -> Collecting a 
                   -> Collecting a 
-phiExecCollecting phi loc csem = undefined
---   mapEnvCollecting loc (location phi)
---     (mapVenvEnv (mkSemPhi phi curbbid)) csem
+phiExecCollecting phi loc csem = 
+  let
+    f :: Env a -> Env a
+    f env@(venv, lenv, PCNext prevbbid _) = mapVenvEnv (mkSemPhi phi prevbbid) env
+    f env@(venv, lenv, PCDone) = env
+  in 
+   mapEnvCollecting loc (location phi) f  csem
 
 
 bbExecCollecting :: Ord a => Semantics a 
