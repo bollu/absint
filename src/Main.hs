@@ -616,7 +616,7 @@ phiExecCollecting phi loc csem =
    mapEnvCollecting loc (location phi) f  csem
 
 
-bbExecCollecting :: Ord a => Pretty a => Pretty a => Semantics a 
+bbExecCollecting :: Ord a => Pretty a => Semantics a 
                  -> M.Map BBId Loc
                  -> BB 
                  -> Collecting a -> Collecting a
@@ -644,7 +644,7 @@ bbExecCollecting sem bbid2loc bb csem = let
   
 
 
-programExecCollecting :: Ord a => Pretty a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
+programExecCollecting :: Ord a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
 programExecCollecting sem p@(Program bbs) csem = 
   let bbid2loc = M.map bbloc (programBBId2BB p) 
    in foldl (\csem bb -> bbExecCollecting sem bbid2loc bb csem) csem bbs
