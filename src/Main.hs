@@ -17,7 +17,7 @@ import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..))
 
@@ -500,6 +500,7 @@ mapVenvEnv f (ve, le, pc) = (f ve, le, pc)
 mapLEnvEnv :: (LEnv -> LEnv) -> Env a -> Env a
 mapLEnvEnv f (ve, le, pc) = (ve, f le, pc)
 
+
 mapEnvCollecting :: Ord a => 
                     Loc 
                  -> Loc 
@@ -531,6 +532,37 @@ termExecCollecting sempred term loc curbbid csem = let
     (venv, lenv, mkSemTerm sempred term curbbid venv)
  in mapEnvCollecting loc (location term) envMap csem
 
+setCatMaybes :: Ord a => S.Set (Maybe a) -> S.Set a
+setCatMaybes s = S.map fromJust $ S.filter (/= Nothing) s
+
+-- at term: [PCNext loop loop, PCNext loop exit]
+-- copy data from term into  loop and exit
+-- copy data from loop into loop, copy data from entry into loop
+flowIntoBBExecCollecting :: Ord a => 
+  Loc  --  location of terminator to pull from
+  -> M.Map BBId Loc  -- map from BB ids to locations
+  -> Collecting a 
+  -> Collecting a
+flowIntoBBExecCollecting loc bbid2loc csem = 
+  let -- tocopy :: S.Set (Env a)
+      tocopy = csem M.! loc
+
+      -- targets :: S.Set (Maybe (Env a, Loc))
+      targets = S.map (\env@(_, _, pc) -> case pc of
+                                            PCNext _ nextbbid -> Just (env, bbid2loc M.! nextbbid)
+                                            _ -> Nothing) tocopy
+
+      -- targets' :: S.Set (Env a, Loc)
+      targets' = setCatMaybes targets
+
+      -- updateEnv :: Collecting a -> (Env a, Loc) -> Collecting a
+      updateEnv csem (env, loc) = M.adjust (`S.union` (S.singleton env)) loc csem
+
+  in foldl updateEnv csem targets'
+
+
+
+
 phiExecCollecting :: Ord a => 
                      Phi 
                   -> Loc 
@@ -542,10 +574,11 @@ phiExecCollecting phi loc csem = undefined
 
 
 bbExecCollecting :: Ord a => Semantics a 
+                 -> M.Map BBId Loc
                  -> BB 
                  -> Loc
                  -> Collecting a -> Collecting a
-bbExecCollecting sem bb loc csem = let
+bbExecCollecting sem bbid2loc bb loc csem = let
   -- loc -> bb
   csembb = mapEnvCollecting loc (bbloc bb) (mapLEnvEnv  (bbLenvUpdate (bbid bb) (bbty bb))) csem
 
@@ -559,8 +592,12 @@ bbExecCollecting sem bb loc csem = let
     foldl (\(loc, csem) inst -> (location inst, instExecCollecting (semExpr sem) inst loc csem)) 
       (locphis, csemphis) (bbinsts bb)
 
+  -- last inst -> term
   csemterm = termExecCollecting (semPredicate sem) (bbterm bb) locinsts (bbid bb) cseminsts
-  in csemterm
+
+  -- term -> next bb
+  csemflow = flowIntoBBExecCollecting (location (bbterm bb)) bbid2loc csemterm
+  in csemflow
   
 
 
