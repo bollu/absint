@@ -746,6 +746,13 @@ instance Show Symaff where
 symAffId :: Id -> Symaff
 symAffId id = Symaff (0, M.fromList [(id, 1)])
 
+-- extract an ID from a symaff, if the symaff represents an Id
+symAffExtractId :: Symaff -> Maybe Id
+symAffExtractId sa@(Symaff (_, id2coeffs)) = 
+  case M.toList id2coeffs of
+    [(id, _)] -> Just id
+    _ -> Nothing
+
 -- Lift a constant to a polynomial
 symAffConst :: Int -> Symaff
 symAffConst c = Symaff (c, M.empty)
@@ -814,6 +821,7 @@ symValOccurs (SymValPhi l r) = symValOccurs l `S.union` symValOccurs r
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
+
 
 symValConst :: Int -> SymVal
 symValConst = SymValAff . symAffConst
@@ -981,8 +989,20 @@ symValToPwaff ctx id2sym (SymValBinop bop l r) = do
       
 symValToPwaff ctx id2sym (SymValPhi l r) = 
   do
-    ls <- localSpaceIds ctx (M.keys id2sym)
-    pwaffInt ctx ls(-42)
+    -- ls <- localSpaceIds ctx (M.keys id2sym)
+    pwl <- symValToPwaff ctx id2sym l
+    mapl <- mapFromPwaff pwl
+    -- TODO: Prove that this pattern always occurs, otherwise I will get an irrefutable.
+    -- pattern match error
+    -- TODO: We will probably need to take a map M.Map Id Pwaff, and 
+    -- then gradually concretize values to Pwaff from Sym till fixpoint.
+    let (SymValAff symaffr) = r
+    let idr = fromJust (symAffExtractId symaffr)
+    pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
+    -- mapr <- mapFromPwaff pwr
+    return pwr
+
+    -- pwaffInt ctx ls(-42)
 
 -- Abstract interpretation
 -- =======================
