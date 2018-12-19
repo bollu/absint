@@ -383,7 +383,7 @@ data Env v = Env (VEnv v) LEnv PC deriving(Eq, Ord, Show)
 
 instance Pretty v => Pretty (Env v) where
   pretty (Env venv lenv pc) = 
-    pretty "venv:" <> indent 1 (vcat [pretty pc, pretty "venv: " <+> pretty venv, pretty "lenv:" <+> pretty lenv ])
+    pretty "Env:" <> indent 1 (vcat [pretty pc, pretty "venv: " <+> pretty venv, pretty "lenv:" <+> pretty lenv ])
 
 
 envBegin :: Env v
