@@ -4,7 +4,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Main where
-import qualified Data.Map.Strict as M hiding ((!))
+import qualified Debug.Trace as Trace
+import qualified Data.Map.Strict as M
 import qualified OrderedMap as OM
 import qualified Data.Map.Merge.Strict as M
 import qualified Data.Set as S
@@ -20,12 +21,15 @@ import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..))
+import PrettyUtils (prettyableToString, docToString)
 
-(!!#) :: Ord k => Show k => Show v => M.Map k v -> k -> v
+(!!#) :: Ord k => Pretty k => Pretty v => M.Map k v -> k -> v
 (!!#) m k = 
   case M.lookup k m of
     Just v -> v
-    Nothing -> error $ "missing key: " ++ show k ++ "in map: " ++ show m
+    Nothing -> error . docToString $  
+                pretty "missing key: " <+> pretty k <+> 
+                  pretty "in map: " <+> pretty m
 
 -- Pretty Utils
 -- ============
@@ -185,7 +189,7 @@ lmtolist :: Ord k => SemiMeetMap k v -> [(k, v)]
 lmtolist (LM m) = M.toList m
 
 instance (Ord k, Show k, Show v) => Show (SemiMeetMap k v) where
-  show (LM m) = show $ [(k, m !!# k) | k <- M.keys m]
+  show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
 
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (SemiMeetMap k v) where
@@ -361,10 +365,8 @@ programMaxLoc (Program bbs) =
 instance Pretty Program where
   pretty (Program bbs) = vcat $ map pretty bbs
 
-
--- Denotational ish semantics, execution abstracted over semantic domain
--- =====================================================================
---
+-- Setup for the semantics
+-- =======================
 
 -- current basic block and location within the basic block being executed
 data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord, Show)
@@ -428,7 +430,7 @@ mkSemInst :: (Expr -> VEnv a -> a) -> Inst -> VEnv a -> VEnv a
 mkSemInst sem (Assign _ id e) env  = 
   M.insert id (sem e env) env
 
-mkSemTerm :: Show a => (a -> Maybe Bool) -- concrete value to truth value
+mkSemTerm :: Pretty a => (a -> Maybe Bool) -- concrete value to truth value
           -> Term
           -> BBId -- current bb id
           -> VEnv a 
@@ -441,7 +443,7 @@ mkSemTerm judgement (BrCond _ condid bbidl bbidr) bbid env =
    in PCNext bbid bbid'
 mkSemTerm _ (Done _) _ _ = PCDone
 
-mkSemPhi :: Show a => Phi 
+mkSemPhi :: Pretty a => Phi 
          -> BBId  -- prevbbid
          -> VEnv a 
          -> VEnv a
@@ -465,7 +467,7 @@ bbLenvUpdate _ Nothing lenv = lenv
 bbLenvUpdate bbid (Just BBLoop) lenv = envInsertOrUpdate 0 (+1) bbid lenv
 
 -- Execute a basic block
-bbExec :: Show a => Semantics a -> BB -> Env a -> Env a
+bbExec :: Pretty a => Semantics a -> BB -> Env a -> Env a
 bbExec sem (BB bbid bbty _ phis insts term) (Env venv lenv pcprev) = 
   let lenvbb = bbLenvUpdate bbid bbty lenv
       venvphi = case pcprev of
@@ -482,7 +484,7 @@ programBBId2BB :: Program -> M.Map BBId BB
 programBBId2BB (Program bbs) = 
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
 
-programExec :: Show a => Semantics a -> Program -> Env a -> Env a
+programExec :: Pretty a => Semantics a -> Program -> Env a -> Env a
 programExec sem p@(Program bbs) env@(Env _ _ pc) = 
   let bbid2bb :: M.Map BBId BB
       bbid2bb = programBBId2BB p
@@ -526,8 +528,18 @@ mapVenvEnv f (Env ve le pc) = Env (f ve) le pc
 mapLEnvEnv :: (LEnv -> LEnv) -> Env a -> Env a
 mapLEnvEnv f (Env ve le pc) = Env ve (f le) pc
 
+-- update the environment at the location
+updateEnvCollecting :: Ord a => Pretty a => 
+  Loc 
+  -> (Env a -> Env a) 
+  -> Collecting a -> Collecting a
+updateEnvCollecting loc f csem = 
+  let envs = csem !!# loc 
+      envs' = S.map f envs in
+      M.insert loc envs' csem
 
-mapEnvCollecting :: Ord a => Show a =>
+-- This unions the collection of environments at a point
+mapEnvCollecting :: Ord a => Pretty a =>
                     Loc 
                  -> Loc 
                  -> (Env a -> Env a) 
@@ -539,7 +551,7 @@ mapEnvCollecting loc loc' f csem =
 
 
 
-instExecCollecting :: Ord a => Show a =>
+instExecCollecting :: Ord a => Pretty a =>
                      (Expr -> VEnv a -> a) 
                    -> Inst 
                    -> Loc -- loc to pull from
@@ -548,7 +560,7 @@ instExecCollecting exprsem inst loc csem =
   mapEnvCollecting loc (location inst)
     (mapVenvEnv (mkSemInst exprsem inst)) csem
 
-termExecCollecting :: Ord a => Show a => (a -> Maybe Bool) 
+termExecCollecting :: Ord a => Pretty a => (a -> Maybe Bool) 
                    -> Term 
                    -> Loc
                    -> BBId  -- current BBId
@@ -565,7 +577,7 @@ setCatMaybes s = S.map fromJust $ S.filter (/= Nothing) s
 -- at term: [PCNext loop loop, PCNext loop exit]
 -- copy data from term into  loop and exit
 -- copy data from loop into loop, copy data from entry into loop
-flowIntoBBExecCollecting :: Ord a => Show a => 
+flowIntoBBExecCollecting :: Ord a => Pretty a => 
   Loc  --  location of terminator to pull from
   -> M.Map BBId Loc  -- map from BB ids to locations
   -> Collecting a 
@@ -590,7 +602,7 @@ flowIntoBBExecCollecting loc bbid2loc csem =
 
 
 
-phiExecCollecting :: Ord a => Show a => 
+phiExecCollecting :: Ord a => Pretty a => 
                      Phi 
                   -> Loc 
                   -> Collecting a 
@@ -604,15 +616,19 @@ phiExecCollecting phi loc csem =
    mapEnvCollecting loc (location phi) f  csem
 
 
-bbExecCollecting :: Ord a => Show a => Semantics a 
+bbExecCollecting :: Ord a => Pretty a => Pretty a => Semantics a 
                  -> M.Map BBId Loc
                  -> BB 
                  -> Collecting a -> Collecting a
 bbExecCollecting sem bbid2loc bb csem = let
+  -- bb -> bb updated loop env
+  bbcsem = Trace.trace (prettyableToString csem)
+            updateEnvCollecting (bbloc bb) (mapLEnvEnv (bbLenvUpdate (bbid bb) (bbty bb))) csem
+
   -- bb -> phis
   (locphis, csemphis) = 
     foldl (\(loc, csem) phi -> (location phi, phiExecCollecting phi loc csem)) 
-      (location bb, csem) (bbphis bb)
+      (location bb, bbcsem) (bbphis bb)
 
   -- prev inst -> inst
   (locinsts, cseminsts) = 
@@ -628,13 +644,13 @@ bbExecCollecting sem bbid2loc bb csem = let
   
 
 
-programExecCollecting :: Ord a => Show a => Semantics a -> Program -> Collecting a -> Collecting a
+programExecCollecting :: Ord a => Pretty a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
 programExecCollecting sem p@(Program bbs) csem = 
   let bbid2loc = M.map bbloc (programBBId2BB p) 
    in foldl (\csem bb -> bbExecCollecting sem bbid2loc bb csem) csem bbs
 
 
-programFixCollecting :: (Eq a, Ord a, Show a) => 
+programFixCollecting :: (Eq a, Ord a, Pretty a, Pretty a) => 
   Semantics a -> Program -> Collecting a -> Collecting a
 programFixCollecting sem p csem = 
   repeatTillFix (programExecCollecting sem p) csem
