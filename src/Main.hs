@@ -818,7 +818,7 @@ instance Pretty SymVal where
   pretty (SymValAff p) = pretty p
   pretty (SymValBinop op sym sym') =
     parens $  pretty sym <+> pretty op <+> pretty sym'
-  pretty (SymValPhi sym sym') = pretty "phi" <+> pretty sym <+> pretty sym'
+  pretty (SymValPhi sym sym') = parens $ pretty "phi" <+> pretty sym <+> pretty sym'
 
 -- constant folding for symbols
 symConstantFold :: SymVal -> SymVal
