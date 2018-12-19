@@ -29,6 +29,10 @@ import ISL.Native.Types (DimType(..))
 
 -- Pretty Utils
 -- ============
+instance Pretty a => Pretty (S.Set a) where
+  pretty s = case S.toList s of
+               [] -> pretty "{}"
+               xs -> pretty xs
 
 instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
   pretty m = 
@@ -364,6 +368,12 @@ instance Pretty Program where
 
 -- current basic block and location within the basic block being executed
 data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord, Show)
+
+instance Pretty PC where
+  pretty (PCEntry) = pretty "pcentry"
+  pretty (PCNext bbid bbid') = 
+    pretty "pc " <+> parens (pretty bbid <+> pretty "->" <+> pretty bbid')
+  pretty (PCDone) = pretty "pcdone"
 
 type VEnv v = M.Map Id v
 -- trip count
@@ -850,10 +860,7 @@ main = do
     putStrLn "***collecting semantics (concrete x symbol):***"
     let cbegin = (collectingBegin pcur) :: Collecting Int
     let csem = programFixCollecting semConcrete pcur cbegin
-    print (programMaxLoc pcur)
-    print cbegin
-
-    print csem
+    putDocW 80 (pretty csem)
     -- forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
     putStrLn "***sampling program using the abstraction:***"
