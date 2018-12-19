@@ -31,14 +31,14 @@ import ISL.Native.Types (DimType(..))
 -- ============
 instance Pretty a => Pretty (S.Set a) where
   pretty s = case S.toList s of
-               [] -> pretty "{}"
-               xs -> pretty xs
+               [] -> pretty "emptyset"
+               xs -> indent 1 $ vcat $ [pretty "{"] ++ (map pretty xs)  ++ [pretty "}"]
 
 instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
   pretty m = 
     if M.null m 
-       then pretty "{}" 
-       else (vcat $ [pretty "|" <> pretty k <+> pretty ">>" <+> indent 1 (pretty v) | (k, v) <- M.toList m]) <> line
+       then pretty "emptymap" 
+       else (vcat $ [pretty "(" <> pretty k <+> pretty "->" <+> (pretty v) <> pretty ")" | (k, v) <- M.toList m])
 
 -- Lattice theory
 -- ==============
@@ -372,7 +372,7 @@ data PC = PCEntry | PCNext BBId BBId | PCDone deriving(Eq, Ord, Show)
 instance Pretty PC where
   pretty (PCEntry) = pretty "pcentry"
   pretty (PCNext bbid bbid') = 
-    pretty "pc " <+> parens (pretty bbid <+> pretty "->" <+> pretty bbid')
+    pretty "pcnext" <+> pretty bbid <+> pretty bbid'
   pretty (PCDone) = pretty "pcdone"
 
 type VEnv v = M.Map Id v
@@ -551,9 +551,8 @@ termExecCollecting :: Ord a => Show a => (a -> Maybe Bool)
                    -> Collecting a -> Collecting a
 termExecCollecting sempred term loc curbbid csem = let
   -- envMap :: Env a -> Env a
-  envMap (venv, lenv, PCNext prevbbid _) = 
+  envMap (venv, lenv, pc) = 
     (venv, lenv, mkSemTerm sempred term curbbid venv)
-  envMap env = env
  in mapEnvCollecting loc (location term) envMap csem
 
 setCatMaybes :: Ord a => S.Set (Maybe a) -> S.Set a
