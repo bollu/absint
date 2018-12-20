@@ -1064,6 +1064,15 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
     -- VIV -> [LOOP -> ENTRY]
     viv2loop2entry <- mapCopy viv2loop >>= \m1 -> mapCopy viv2entry >>= \m2 -> mapRangeProduct m1 m2
+
+    -- VIV -> [LOOP -> ENTRY ] : VIV = 0
+    viveq0set <- mapCopy viv2loop2entry >>= mapDomain
+    viveq0 <- setGetSpace viveq0set >>= localSpaceFromSpace >>= constraintAllocEquality
+    viveq0 <- constraintSetCoefficientSi viveq0 IslDimSet 0 1
+    viveq0set <- setAddConstraint viveq0set viveq0
+
+    viv2loop2entry <- mapIntersectDomain viv2loop2entry viveq0set
+    
     mapToStr viv2loop2entry >>= \s -> print $ "### viv2loop2entry: " ++ s
       
     -- [k -> val]
