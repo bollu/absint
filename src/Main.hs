@@ -1000,6 +1000,14 @@ pwaffFromMap m = do
     pwa <- pwmultiaffGetPwaff pwma 0
     return pwa
 
+-- returns the position of the first occurence of id if exists, otherwise returns Nothing
+mapGetIxOfId :: Ptr Map -> DimType -> Ptr ISLTy.Id  -> IO (Maybe Int)
+mapGetIxOfId m dt islid = do
+  ndim <- mapDim m dt
+  id2ix <- M.fromList <$> traverse (\ix -> (\(id, _) -> (id, ix)) <$> (mapGetDimId m dt ix)) [0..ndim-1]
+  return $ fromIntegral <$> (id2ix M.!? islid)
+
+
 -- move all other dimensions other than the given dimensions from input to parameter dimensions
 mapMoveOtherInputsParam ::  Ptr ISLTy.Id -> Ptr Map -> IO (Ptr Map)
 mapMoveOtherInputsParam idkeep m = do
@@ -1060,6 +1068,9 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     viv2loop <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
     (viv2loop, _) <- mapAddDim viv2loop IslDimIn (Just islidviv)
     viv2loop <- mapMoveOtherInputsParam islidviv viv2loop
+    -- TODO: low level, this is used to remove the loop dimensions form the params
+    viv2loop <- mapGetIxOfId viv2loop IslDimParam (id2islid M.! idphi) >>= 
+                  \(Just islid) -> mapProjectOut viv2loop IslDimParam (fromIntegral islid) 1
     mapToStr viv2loop >>= \s -> print $ "viv2loop: " ++ s
 
     -- VIV -> [LOOP -> ENTRY]
@@ -1109,6 +1120,9 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     (power, _) <- mapPower mapr
     power <- mapSetDimId power IslDimIn 0 islidviv
     mapToStr power >>= \s -> print $ "power: " ++ s
+
+    combined <- mapUnion power viv2loop2entry
+    mapToStr combined >>= \s -> print $ "combined: " ++ s
 
     pwaffAdd pwl pwr
 
