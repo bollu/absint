@@ -228,6 +228,13 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 -- set
 
+{#fun isl_set_project_out as setProjectOut
+  { id `Ptr Set'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , id `CUInt'
+  } -> `Ptr Set' id #}
+
 {#fun isl_set_intersect as setIntersect
   { id `Ptr Set'
   , id `Ptr Set'

@@ -968,14 +968,8 @@ termToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Id -> In
 termToPwaff ctx id2islid id2sym id coeff = do
   -- TODO: refactor this
   let id2key = M.fromList $ zip (M.keys id2sym) [0, 1..]
-
   ls <- localSpaceIds ctx id2islid
-  ls' <- localSpaceCopy ls
-  print "affVarOnDomain being called"
-
-  var <- affVarOnDomain ls IslDimSet (id2key M.! id)
-
-  affToStr var >>= \s -> print $ "var:"  ++ s
+  var <- localSpaceCopy ls >>= \ls -> affVarOnDomain ls IslDimSet (id2key M.! id)
 
   coeff <- affInt ctx ls coeff
   term <- affMul var coeff
@@ -1032,12 +1026,12 @@ mapConditionallyMoveDims m idfilter din dout =
            else do
                  idin <- mapGetDimId m din (fromIntegral ixin)
                  let shouldmove = idfilter idin
-                 mapToStr m >>= 
-                   (\s -> putStrLn $ "nin: " ++ show nin ++ 
-                            "|ixin: " ++ show ixin ++ 
-                            "|shouldmove: " ++ show shouldmove ++ 
-                            "|nout: " ++ show nout ++ 
-                            " " ++ s)
+                 --mapToStr m >>= 
+                 --  (\s -> putStrLn $ "nin: " ++ show nin ++ 
+                 --           "|ixin: " ++ show ixin ++ 
+                 --           "|shouldmove: " ++ show shouldmove ++ 
+                 --           "|nout: " ++ show nout ++ 
+                 --           " " ++ s)
                  if shouldmove
                     then do
                         m <- mapMoveDims m dout nout din (fromIntegral ixin) (fromIntegral 1)
@@ -1067,36 +1061,6 @@ mapMoveOtherInputsParam idkeep m = do
   (m, _, _) <- foldM f (m, 0, nparam) [0..nin]
   return m
 
-mapReplaceDim :: Ptr Map 
-              -> DimType -- dimension to replace type
-              -> Int -- dimension to replacelocation 
-              -> DimType --dimension to add type
-              -> Ptr ISLTy.Id -- id of new dimension to be added
-              -> IO (Ptr Map)
-mapReplaceDim m indim inix outdim outid = do
-  (m, outix) <- mapAddDim m outdim (Just outid)
-
-  -- if the dimension we are interested in is the input domain, then take 
-  -- the domain. If it is range / parameter, then take range
-  eqset <- if outdim == IslDimIn 
-              then mapDomain m
-              else mapRange m
-  -- cosntraint such that in eq out
-  ineqout_cons <- setGetSpace eqset >>= localSpaceFromSpace >>= constraintAllocEquality
-  ineqout_cons <- constraintSetCoefficientSi ineqout_cons indim (fromIntegral inix) 1
-  ineqout_cons <- constraintSetCoefficientSi ineqout_cons outdim (fromIntegral outix) 1
-
-  -- add the constraint that in = out in the set
-  eqset <- setAddConstraint eqset ineqout_cons
-
-  m <- if outdim == IslDimIn 
-          then mapIntersectDomain m eqset
-          else mapIntersectRange m eqset
-
-  -- project out the dimension
-  mapProjectOut m indim (fromIntegral inix) 1
-
-
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
 symValToPwaff :: Ptr Ctx 
@@ -1114,27 +1078,38 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
-  newid <- idAlloc ctx "newid"
 
-  -- [] -> { [] -> [newid] }
+  -- [] -> { [] -> [x_loop] }
+  -- islidphi <-  idCopy (id2islid M.! idphi)
+  {-
   mapiddom <- spaceFromIds ctx [] >>= setUniverse 
-  mapidrange <- spaceFromIds ctx [newid] >>= setUniverse
+  mapidrange <- idCopy (id2islid M.! idphi) >>= \newid -> spaceFromIds ctx [newid] >>= setUniverse
   mapid <- mapFromDomainAndRange mapiddom mapidrange
   mapToStr mapid >>= \s -> putStrLn $ "mapid: " ++ s
+  setid <- mapWrap mapid
+  setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
+  -}
 
-  -- this should be [] -> { [] -> f (backedge) / backedge replaced with "newid" }
+  -- [id] -> { [] -> [id] }
+  mapid <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
+  mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam
+  mapToStr mapid >>= \s -> putStrLn $ "mapid: " ++ s
+  setid <- mapWrap mapid
+  setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
+
+  -- [id] -> { [] -> [id + delta] }
   mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr) >>= mapFromPwaff
-  mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam 
+  mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam
   mapToStr mapbackedge >>= \s -> putStrLn $ "mapbackedge: " ++ s
+  setbackedge <- mapWrap mapbackedge
+  setToStr setbackedge >>= \s -> putStrLn $ "setbackege: " ++ s
+
 
   -- [x_loop] -> { [[] -> [xloop]] -> [[] -> [xloop + delta]] }
-  mapbackedgeff <- Control.Monad.join $ liftA2 mapFromDomainAndRange (mapWrap mapid) (mapWrap mapbackedge)
+  mapbackedgeff <- mapFromDomainAndRange setid setbackedge
 
-  mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedge eff: " ++ s
 
-  eff' <- mapCopy mapbackedgeff
-  eff2 <- Control.Monad.join $ liftA2 mapApplyRange (mapCopy eff') (mapCopy eff')
-  mapToStr eff2 >>= \s -> putStrLn $ "###eff2: " ++ s
+  mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff: " ++ s
 
   (pow, _) <- mapPower mapbackedgeff
 
