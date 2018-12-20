@@ -997,6 +997,18 @@ pwaffFromMap m = do
     pwa <- pwmultiaffGetPwaff pwma 0
     return pwa
 
+-- move all other dimensions other than the given dimensions from input to parameter dimensions
+mapMoveOtherDimsParam :: M.Map Id (Ptr ISLTy.Id) -> Id -> Ptr Map -> IO (Ptr Map)
+mapMoveOtherDimsParam id2islid idkeep m = do
+  let f = (\(m, ix') ((id, islid), ix) -> 
+              if id == idkeep
+                then return (m, ix')
+                else do
+                      m <- mapMoveDims m IslDimParam ix' IslDimIn (ix - ix') 1
+                      return (m, ix'+1))
+  (m, _) <- foldM f (m, 0) (zip (M.toList id2islid) [0, 1..])
+  return m
+
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
 symValToPwaff :: Ptr Ctx 
@@ -1014,6 +1026,12 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     pwl <- symValToPwaff ctx id2islid id2sym syml
+    mapl <- pwaffCopy pwl >>= mapFromPwaff
+    mapl <- mapMoveOtherDimsParam id2islid idphi mapl
+    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+
+
+    -- right side (acceledrated side)
     pwr <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
 
     pwaffToStr pwr >>= \s -> print $ "pwr: " ++ s
@@ -1021,15 +1039,16 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     mapr <- pwaffCopy pwr >>= mapFromPwaff
     -- mapr <- mapMoveDims mapr IslDimParam 0 IslDimIn 0 1
     -- mapToStr mapr >>= \s -> print $ "mapr: " ++ s
-
-    (mapr, _) <- foldM (\(mapr, ix') ((id, islid), ix) -> 
-                      if id == idphi 
-                       then return (mapr, ix')
-                        else do
-                              mapr <- mapMoveDims mapr IslDimParam ix' IslDimIn (ix - ix') 1
-                              return (mapr, ix'+1)) (mapr, 0) (zip (M.toList id2islid) [0, 1..])
-
+    mapr <- mapMoveOtherDimsParam id2islid idphi mapr
     mapToStr mapr >>= \s -> print $ "mapr: " ++ s
+
+--     (mapr, _) <- foldM (\(mapr, ix') ((id, islid), ix) -> 
+--                       if id == idphi 
+--                        then return (mapr, ix')
+--                         else do
+--                               mapr <- mapMoveDims mapr IslDimParam ix' IslDimIn (ix - ix') 1
+--                               return (mapr, ix'+1)) (mapr, 0) (zip (M.toList id2islid) [0, 1..])
+-- 
     (power, _) <- mapPower mapr
     mapToStr power >>= \s -> print $ "power: " ++ s
 
