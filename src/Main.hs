@@ -1008,6 +1008,30 @@ mapGetIxOfId m dt islid = do
   return $ fromIntegral <$> (id2ix M.!? islid)
 
 
+mapConditionallyMoveDims :: Ptr Map 
+                         -> (Ptr ISLTy.Id -> Bool) -- filter for dimension ID
+                         -> DimType  -- input dimension
+                         -> DimType -- output dimension
+                         -> IO (Ptr Map)
+mapConditionallyMoveDims m idfilter din dout = 
+  let move :: Ptr Map -> Int -> IO (Ptr Map)
+      move m ixin = do
+        nin <- mapDim m din
+        nout <- mapDim m dout
+        
+        if fromIntegral ixin >= nin
+           then return m
+           else do
+                 (idin, _) <- mapGetDimId m din (fromIntegral ixin)
+                 let shouldmove = idfilter idin
+                 if shouldmove
+                    then do
+                        m <- mapMoveDims m din (fromIntegral ixin) dout nout (fromIntegral 1)
+                        move m (ixin + 1)
+                    else move m (ixin + 1)
+  in move m 0 
+
+
 -- move all other dimensions other than the given dimensions from input to parameter dimensions
 mapMoveOtherInputsParam ::  Ptr ISLTy.Id -> Ptr Map -> IO (Ptr Map)
 mapMoveOtherInputsParam idkeep m = do
@@ -1046,85 +1070,8 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
-    let vivname = let (Id phistr) = idphi in "viv_" ++ phistr
-    islidviv <- idAlloc ctx vivname  
-    ---let id2sym = M.insert (Id vivname) idviv id2sym
-
-    pwl <- symValToPwaff ctx id2islid id2sym syml
-
-    -- viv2entry: [viv -> entry]
-    viv2entry <- pwaffCopy pwl >>= mapFromPwaff
-    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-
-    (viv2entry, _) <- mapAddDim viv2entry IslDimIn (Just islidviv)
-    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-
-    viv2entry <- mapMoveOtherInputsParam islidviv viv2entry
-    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-
-
-    -- VIV -> LOOP
-    viv2loop <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
-    (viv2loop, _) <- mapAddDim viv2loop IslDimIn (Just islidviv)
-    viv2loop <- mapMoveOtherInputsParam islidviv viv2loop
-    -- TODO: low level, this is used to remove the loop dimensions form the params
-    viv2loop <- mapGetIxOfId viv2loop IslDimParam (id2islid M.! idphi) >>= 
-                  \(Just islid) -> mapProjectOut viv2loop IslDimParam (fromIntegral islid) 1
-    mapToStr viv2loop >>= \s -> print $ "viv2loop: " ++ s
-
-    -- VIV -> [LOOP -> ENTRY]
-    viv2loop2entry <- mapCopy viv2loop >>= \m1 -> mapCopy viv2entry >>= \m2 -> mapRangeProduct m1 m2
-
-    -- VIV -> [LOOP -> ENTRY ] : VIV = 0
-    viveq0set <- mapCopy viv2loop2entry >>= mapDomain
-    viveq0 <- setGetSpace viveq0set >>= localSpaceFromSpace >>= constraintAllocEquality
-    viveq0 <- constraintSetCoefficientSi viveq0 IslDimSet 0 1
-    viveq0set <- setAddConstraint viveq0set viveq0
-
-    viv2loop2entry <- mapIntersectDomain viv2loop2entry viveq0set
-    
-    mapToStr viv2loop2entry >>= \s -> print $ "### viv2loop2entry: " ++ s
-      
-    -- [k -> val]
-    -- [loopid -> val] -> [[loopid -> val] -> loopid]
-    mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-    viv2entry <- mapReverse viv2entry
-    mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-    -- leq0set <- mapCopy viv2entry >>= mapDomain
-    -- leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
-    -- leq0 <- constraintSetCoefficientSi leq0 IslDimSet 0 1
-    -- leq0set <- setAddConstraint leq0set leq0
-
-    -- viv2entry <- mapIntersectDomain viv2entry leq0set
-    -- mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
-
-    -- right side (acceledrated side)
-    pwr <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
-
-    pwaffToStr pwr >>= \s -> print $ "pwr: " ++ s
-
-    mapr <- pwaffCopy pwr >>= mapFromPwaff
-    -- mapr <- mapMoveDims mapr IslDimParam 0 IslDimIn 0 1
-    -- mapToStr mapr >>= \s -> print $ "mapr: " ++ s
-    mapr <- mapMoveOtherInputsParam (id2islid M.! idphi) mapr
-    mapToStr mapr >>= \s -> print $ "mapr: " ++ s
-
---     (mapr, _) <- foldM (\(mapr, ix') ((id, islid), ix) -> 
---                       if id == idphi 
---                        then return (mapr, ix')
---                         else do
---                               mapr <- mapMoveDims mapr IslDimParam ix' IslDimIn (ix - ix') 1
---                               return (mapr, ix'+1)) (mapr, 0) (zip (M.toList id2islid) [0, 1..])
--- 
-    (power, _) <- mapPower mapr
-    power <- mapSetDimId power IslDimIn 0 islidviv
-    mapToStr power >>= \s -> print $ "power: " ++ s
-
-    combined <- mapUnion power viv2loop2entry
-    mapToStr combined >>= \s -> print $ "combined: " ++ s
-
-    pwaffAdd pwl pwr
+  pwbackedge <- symValToPwaff ctx id2islid id2sym (symValId idphi) 
+  return pwbackedge
 
 
 {-
