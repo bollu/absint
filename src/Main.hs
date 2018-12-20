@@ -1079,17 +1079,6 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
-  -- [] -> { [] -> [x_loop] }
-  -- islidphi <-  idCopy (id2islid M.! idphi)
-  {-
-  mapiddom <- spaceFromIds ctx [] >>= setUniverse 
-  mapidrange <- idCopy (id2islid M.! idphi) >>= \newid -> spaceFromIds ctx [newid] >>= setUniverse
-  mapid <- mapFromDomainAndRange mapiddom mapidrange
-  mapToStr mapid >>= \s -> putStrLn $ "mapid: " ++ s
-  setid <- mapWrap mapid
-  setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
-  -}
-
   -- [id] -> { [] -> [id] }
   mapid <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
   mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam
@@ -1112,60 +1101,31 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   mapbackedgeff <- mapProjectOut mapbackedgeff IslDimParam (fromIntegral phiix) 1
   mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff (after project): " ++ s
 
-  (pow, _) <- mapPower mapbackedgeff
 
+
+  -- [params] -> { [k] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
+  (pow, _) <- mapPower mapbackedgeff
   mapToStr pow >>= \s -> putStrLn $ "###power: " ++ s
+
+  -- [params, k] -> { [] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
+  pow <- mapConditionallyMoveDims pow (const True) IslDimIn IslDimParam
+  -- [params, k] -> { [[] -> [o0]] -> [[] -> [k + o0]] : k > 0 }
+  pow <- mapRange pow >>= setUnwrap
+  mapToStr pow >>= \s -> putStrLn $ "###powset: " ++ s
+  
+
+
+  -- { [params] -> [entryval] }
+  entry <- symValToPwaff ctx id2islid id2sym (symValId idl) >>= mapFromPwaff
+  -- [params] -> { [] -> [entryval] }
+  entry <- mapConditionallyMoveDims entry (const True) IslDimIn IslDimParam
+  mapToStr entry >>= \s -> putStrLn  $ "entry: " ++ s
+
+  -- [params] -> { [[] -> [entryval]] }
+  entryset <- mapWrap entry
+
   symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
 
-
-{-
-  do
-    idaccell <- idAlloc ctx "viv"
-    idaccelr <- idCopy idaccell
-
-    pwl <- symValToPwaff ctx id2sym l
-
-
-    mapl <- mapFromPwaff pwl
-    mapl <- mapAddDims  mapl IslDimSet 1 >>= (\m -> mapSetDimId m IslDimSet 0 idaccell)
-
-    leq0set <- mapCopy mapl >>= mapid
-    leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
-    leq0 <- constraintSetCoefficientSi leq0 IslDimSet 0 1
-    leq0set <- setAddConstraint leq0set leq0
-
-    mapl <- mapIntersectDomain mapl leq0set
-    mapToStr mapl >>= (\s -> putStrLn $ "mapl: " ++ s)
-
-    
-    -- TODO: Prove that this pattern always occurs, otherwise I will get an irrefutable.
-    -- pattern match error
-    -- TODO: We will probably need to take a map M.Map Id Pwaff, and 
-    -- then gradually concretize values to Pwaff from Sym till fixpoint.
-    let (SymValAff symaffr) = r
-    let idr = fromJust (symAffExtractId symaffr)
-    pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
-    mapr <- mapFromPwaff pwr
-    mapr <- mapAddDims  mapr IslDimSet 1
-    mapr <- mapSetDimId mapr IslDimSet 0 idaccelr
-    
-    rgt0set <- (mapCopy mapr) >>= mapid
-    rgt0 <- setGetSpace rgt0set >>= localSpaceFromSpace >>= constraintAllocInequality
-    rgt0 <- constraintSetConstantSi rgt0 (-1)
-    rgt0 <- constraintSetCoefficientSi rgt0 IslDimSet 0 1
-    rgt0set <- setAddConstraint rgt0set rgt0
-
-    mapr <- mapIntersectDomain mapr rgt0set
-
-    mapToStr mapr >>= (\s -> putStrLn $ "mapr: " ++ s)
-    mapfull <- mapUnion mapl mapr
-    mapToStr mapfull >>= (\s -> putStrLn $ "total map: " ++ s)
-
-    (mapfull, _) <- mapPower mapfull
-    mapToStr mapfull >>= (\s -> putStrLn $ "total map power: " ++ s)
-
-    pwaffFromMap mapfull
-  -}
 
 
 -- Abstract interpretation

@@ -255,6 +255,9 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Set'
   } -> `String' #}
 
+{#fun isl_set_unwrap as setUnwrap 
+  { id `Ptr Set' } -> `Ptr Map' id #}
+
 -- constraint
 
 {#fun isl_constraint_alloc_equality as constraintAllocEquality
