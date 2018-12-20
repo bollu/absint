@@ -75,6 +75,9 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , `String'
   } -> `Ptr Set' id #}
 -- map
+{#fun isl_map_gist as mapGist
+  { id `Ptr Map', id `Ptr Map'} -> `Ptr Map' id #}
+
 {#fun isl_map_read_from_str as mapReadFromStr
   { id `Ptr Ctx'
   , `String'
@@ -274,6 +277,14 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , `String'
   } -> `Ptr LocalSpace' id #}
 
+
+{#fun isl_local_space_set_dim_id as localSpaceSetDimId
+  { id `Ptr LocalSpace'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , id `Ptr Id'
+  } -> `Ptr LocalSpace' id #}
+
 -- basic set
 {#fun isl_basic_set_project_out as basicSetProjectOut
   { id `Ptr BasicSet'
@@ -315,6 +326,10 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {# fun isl_aff_to_str as affToStr
     {id `Ptr Aff' } -> `String'  #}
 -- Pwaff
+{#fun isl_pw_aff_copy as pwaffCopy
+  { id `Ptr Pwaff'
+  } -> `Ptr Pwaff' id #}
+
 {# fun isl_pw_aff_from_aff as pwaffFromAff
     {id `Ptr Aff' } -> `Ptr Pwaff' id #}
 

@@ -22,6 +22,7 @@ import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..), Pwaff, Ctx, Space, LocalSpace, Map, Set)
+import qualified ISL.Native.Types as ISLTy (Id)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
 import Control.Monad (foldM)
@@ -942,19 +943,19 @@ programGetSymbolic (Program bbs) =
 -- Symbolic expression to Pwaff
 -- ============================
 -- pwaff comprising of IDs with parametric dimensions
-localSpaceIds :: Ptr Ctx -> [Id] -> IO (Ptr LocalSpace)
-localSpaceIds ctx ids = do
-  ls <- localSpaceSetAlloc ctx 0 (length ids)
-  ls <- foldM (\ls ((Id id), ix) -> localSpaceSetDimName ls IslDimSet (fromIntegral ix) id) ls (zip ids [0, 1..])
+localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
+localSpaceIds ctx id2islid = do
+  ls <- localSpaceSetAlloc ctx 0 (length id2islid)
+  ls <- foldM (\ls (islid, ix) -> localSpaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls (zip (M.elems id2islid) [0, 1..])
   return ls
 
 
-termToPwaff :: Ptr Ctx -> M.Map Id SymVal -> Id -> Int -> IO (Ptr Pwaff)
-termToPwaff ctx id2sym id coeff = do
+termToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Id -> Int -> IO (Ptr Pwaff)
+termToPwaff ctx id2islid id2sym id coeff = do
   -- TODO: refactor this
   let id2key = M.fromList $ zip (M.keys id2sym) [0, 1..]
 
-  ls <- localSpaceIds ctx (M.keys id2sym)
+  ls <- localSpaceIds ctx id2islid
   ls' <- localSpaceCopy ls
   print "affVarOnDomain being called"
 
@@ -963,19 +964,18 @@ termToPwaff ctx id2sym id coeff = do
   affToStr var >>= \s -> print $ "var:"  ++ s
 
   coeff <- affInt ctx ls coeff
-
   term <- affMul var coeff
   pwaffFromAff term
   
 
-symaffToPwaff :: Ptr Ctx -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
-symaffToPwaff ctx id2sym(Symaff (c, terms)) = do
-    ls <- localSpaceIds ctx (M.keys id2sym)
+symaffToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
+symaffToPwaff ctx id2islid id2sym(Symaff (c, terms)) = do
+    ls <- localSpaceIds ctx id2islid 
     pwconst <- pwaffInt ctx ls c
     if M.null terms
        then return pwconst
        else do
-         pwterms <- traverse (\(id, coeff) -> termToPwaff ctx id2sym id coeff) (M.toList terms)
+         pwterms <- traverse (\(id, coeff) -> termToPwaff ctx id2islid id2sym id coeff) (M.toList terms)
          foldM pwaffAdd pwconst pwterms 
 
 -- add a new dimension to the map and return its index
@@ -994,19 +994,27 @@ pwaffFromMap m = do
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
 symValToPwaff :: Ptr Ctx 
+              -> M.Map Id (Ptr ISLTy.Id) -- id to ISL ids of that variable
               -> M.Map Id SymVal  -- values of each ID
               -> SymVal -> IO (Ptr Pwaff)
-symValToPwaff ctx id2sym (SymValAff aff) = symaffToPwaff ctx id2sym aff
-symValToPwaff ctx id2sym (SymValBinop bop l r) = do
-  pwl <- symValToPwaff ctx id2sym l
-  pwr <- symValToPwaff ctx id2sym r
+symValToPwaff ctx id2islid id2sym (SymValAff aff) = 
+  symaffToPwaff ctx id2islid id2sym aff
+symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
+  pwl <- symValToPwaff ctx id2islid id2sym l
+  pwr <- symValToPwaff ctx id2islid id2sym r
   case bop of
     Add -> pwaffAdd pwl pwr
     Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
 
-symValToPwaff ctx id2sym (SymValPhi idl syml idr symr) = do
-    pwl <- symValToPwaff ctx id2sym syml
-    pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
+symValToPwaff ctx id2islid id2sym (SymValPhi idl syml idr symr) = do
+    pwl <- symValToPwaff ctx id2islid id2sym syml
+    pwr <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
+
+    pwaffToStr pwr >>= \s -> print $ "pwr: " ++ s
+
+    (power, _) <- pwaffCopy pwr >>= mapFromPwaff >>= mapPower 
+    mapToStr power >>= \s -> print $ "power: " ++ s
+
     pwaffAdd pwl pwr
 
 
@@ -1297,7 +1305,8 @@ main = do
 
     putStrLn ""
     putStrLn "***pwaff values***"
-    id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2sym) id2sym
+    id2islid <- M.fromList <$> sequenceA (map (\id@(Id idstr) -> (id,) <$>  idAlloc islctx idstr) (M.keys id2sym))
+    id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2islid id2sym) id2sym
 
     putDocW 80 (pretty id2pwaff)
 
