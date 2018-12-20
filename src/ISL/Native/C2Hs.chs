@@ -175,6 +175,18 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_dim as mapDim
   { id `Ptr Map', fromDimType `DimType' } -> `CUInt' id #}
 
+
+-- __isl_give isl_map *isl_map_move_dims(__isl_take isl_map *map,
+-- 	enum isl_dim_type dst_type, unsigned dst_pos,
+-- 	enum isl_dim_type src_type, unsigned src_pos, unsigned n);
+
+
+{#fun isl_map_move_dims as mapMoveDims
+  { id `Ptr Map', 
+  fromDimType `DimType', id `CUInt',
+  fromDimType `DimType', id `CUInt',
+  id `CUInt' } -> `Ptr Map' id #}
+
 -- set
 
 {#fun isl_set_intersect as setIntersect

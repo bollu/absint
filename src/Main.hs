@@ -812,13 +812,13 @@ instance Pretty Symaff where
 -- polynomials
 data SymVal = SymValAff !Symaff 
             | SymValBinop !Binop !SymVal !SymVal 
-            | SymValPhi !Id !SymVal !Id !SymVal deriving(Eq, Ord)
+            | SymValPhi !Id !Id !SymVal !Id !SymVal deriving(Eq, Ord)
 
 -- return a list of IDs that occur in this symbolic value
 symValOccurs :: SymVal -> S.Set Id
 symValOccurs (SymValAff aff) = symAffOccurs aff
 symValOccurs (SymValBinop _ l r) = symValOccurs l `S.union` symValOccurs r
-symValOccurs (SymValPhi _ l _ r) = symValOccurs l `S.union` symValOccurs r
+symValOccurs (SymValPhi _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
@@ -836,8 +836,8 @@ instance Pretty SymVal where
   pretty (SymValAff p) = pretty p
   pretty (SymValBinop op sym sym') =
     parens $  pretty sym <+> pretty op <+> pretty sym'
-  pretty (SymValPhi idl syml idr symr) 
-    = parens $ pretty "phi" <+> pretty (idl, syml)<+> pretty (idr, symr)
+  pretty (SymValPhi idphi idl syml idr symr) 
+    = parens $ pretty "phi" <+> pretty idphi <+> pretty (idl, syml)<+> pretty (idr, symr)
 
 -- constant folding for symbols
 symConstantFold :: SymVal -> SymVal
@@ -898,14 +898,14 @@ mapInsertMaybe _ Nothing m = m
 -- Otherwise, disallow
 -- TODO: clean this up, too many cases
 phiGetSymbolic :: Phi -> M.Map Id SymVal -> M.Map Id SymVal
-phiGetSymbolic (Phi _ id (bbidl, idl) (bbidr, idr)) env = 
+phiGetSymbolic (Phi _ idphi (bbidl, idl) (bbidr, idr)) env = 
   let
-    ml = exprGetSymbolic id (EId idl) env
-    mr = exprGetSymbolic id (EId idr) env
-    mphi = liftA2 (\ml mr -> SymValPhi idl ml idr mr) ml mr
+    ml = exprGetSymbolic idphi (EId idl) env
+    mr = exprGetSymbolic idphi (EId idr) env
+    mphi = liftA2 (\ml mr -> SymValPhi idphi idl ml idr mr) ml mr
  in case mphi of
-      Just sym -> M.insert id sym env
-      Nothing -> M.insert id (symValId id) env
+      Just sym -> M.insert idphi sym env
+      Nothing -> M.insert idphi (symValId idphi) env
 
 
 instGetSymbolic :: Inst -> M.Map Id SymVal -> M.Map Id SymVal
@@ -946,7 +946,13 @@ programGetSymbolic (Program bbs) =
 localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
 localSpaceIds ctx id2islid = do
   ls <- localSpaceSetAlloc ctx 0 (length id2islid)
-  ls <- foldM (\ls (islid, ix) -> localSpaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls (zip (M.elems id2islid) [0, 1..])
+  let islidcounters = zip (M.elems id2islid) [0, 1..]
+  islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
+
+  ls <- foldM 
+          (\ls (islid, ix) -> 
+              localSpaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls
+                islidcounters
   return ls
 
 
@@ -1006,13 +1012,25 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
     Add -> pwaffAdd pwl pwr
     Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
 
-symValToPwaff ctx id2islid id2sym (SymValPhi idl syml idr symr) = do
+symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     pwl <- symValToPwaff ctx id2islid id2sym syml
     pwr <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
 
     pwaffToStr pwr >>= \s -> print $ "pwr: " ++ s
 
-    (power, _) <- pwaffCopy pwr >>= mapFromPwaff >>= mapPower 
+    mapr <- pwaffCopy pwr >>= mapFromPwaff
+    -- mapr <- mapMoveDims mapr IslDimParam 0 IslDimIn 0 1
+    -- mapToStr mapr >>= \s -> print $ "mapr: " ++ s
+
+    (mapr, _) <- foldM (\(mapr, ix') ((id, islid), ix) -> 
+                      if id == idphi 
+                       then return (mapr, ix')
+                        else do
+                              mapr <- mapMoveDims mapr IslDimParam ix' IslDimIn (ix - ix') 1
+                              return (mapr, ix'+1)) (mapr, 0) (zip (M.toList id2islid) [0, 1..])
+
+    mapToStr mapr >>= \s -> print $ "mapr: " ++ s
+    (power, _) <- mapPower mapr
     mapToStr power >>= \s -> print $ "power: " ++ s
 
     pwaffAdd pwl pwr
