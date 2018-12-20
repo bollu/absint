@@ -811,13 +811,13 @@ instance Pretty Symaff where
 -- polynomials
 data SymVal = SymValAff !Symaff 
             | SymValBinop !Binop !SymVal !SymVal 
-            | SymValPhi !SymVal !SymVal deriving(Eq, Ord)
+            | SymValPhi !Id !SymVal !Id !SymVal deriving(Eq, Ord)
 
 -- return a list of IDs that occur in this symbolic value
 symValOccurs :: SymVal -> S.Set Id
 symValOccurs (SymValAff aff) = symAffOccurs aff
 symValOccurs (SymValBinop _ l r) = symValOccurs l `S.union` symValOccurs r
-symValOccurs (SymValPhi l r) = symValOccurs l `S.union` symValOccurs r
+symValOccurs (SymValPhi _ l _ r) = symValOccurs l `S.union` symValOccurs r
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
@@ -835,7 +835,8 @@ instance Pretty SymVal where
   pretty (SymValAff p) = pretty p
   pretty (SymValBinop op sym sym') =
     parens $  pretty sym <+> pretty op <+> pretty sym'
-  pretty (SymValPhi sym sym') = parens $ pretty "phi" <+> pretty sym <+> pretty sym'
+  pretty (SymValPhi idl syml idr symr) 
+    = parens $ pretty "phi" <+> pretty (idl, syml)<+> pretty (idr, symr)
 
 -- constant folding for symbols
 symConstantFold :: SymVal -> SymVal
@@ -900,7 +901,7 @@ phiGetSymbolic (Phi _ id (bbidl, idl) (bbidr, idr)) env =
   let
     ml = exprGetSymbolic id (EId idl) env
     mr = exprGetSymbolic id (EId idr) env
-    mphi = (liftA2 SymValPhi ml mr)
+    mphi = liftA2 (\ml mr -> SymValPhi idl ml idr mr) ml mr
  in case mphi of
       Just sym -> M.insert id sym env
       Nothing -> M.insert id (symValId id) env
@@ -1003,8 +1004,11 @@ symValToPwaff ctx id2sym (SymValBinop bop l r) = do
     Add -> pwaffAdd pwl pwr
     Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
 
-symValToPwaff ctx id2sym (SymValPhi l r) = do
-  symValToPwaff ctx id2sym l
+symValToPwaff ctx id2sym (SymValPhi idl syml idr symr) = do
+    pwl <- symValToPwaff ctx id2sym syml
+    pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
+    pwaffAdd pwl pwr
+
 
 {-
   do
