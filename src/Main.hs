@@ -50,11 +50,6 @@ instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
        then pretty "emptymap" 
        else (indent 1 (vcat $ [pretty "(" <> pretty k <+> pretty "->" <+> (pretty v) <> pretty ")" | (k, v) <- M.toList m]))
 
--- ISL Pretty hacks
--- ================
-
-instance Pretty (Ptr Pwaff) where
-  pretty pwaff = pretty . Unsafe.unsafePerformIO $ pwaffToStr pwaff
 -- Lattice theory
 -- ==============
 -- top = join of all elements
@@ -1070,7 +1065,8 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
-  pwbackedge <- symValToPwaff ctx id2islid id2sym (symValId idphi) 
+  pwbackedge <- symValToPwaff ctx id2islid id2sym (symValId idphi)
+
   return pwbackedge
 
 
@@ -1364,7 +1360,7 @@ main = do
     id2islid <- M.fromList <$> sequenceA (map (\id@(Id idstr) -> (id,) <$>  idAlloc islctx idstr) (M.keys id2sym))
     id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2islid id2sym) id2sym
 
-    putDocW 80 (pretty id2pwaff)
+    traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty 
 
     -- let idsToLookup = ["x", "x_lt_5", "y", "z"]
     -- let idsToLookup = ["x_lt_5", "x_lt_5_next", "x", "x_next", "z"]
