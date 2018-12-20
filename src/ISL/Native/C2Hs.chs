@@ -93,6 +93,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , alloca- `CInt' peek*
   } -> `Ptr Map' id #}
 
+
 {#fun isl_map_add_dims as mapAddDims
   { id `Ptr Map'
   , fromDimType `DimType'
@@ -178,7 +179,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 
 {#fun isl_map_get_dim_id as mapGetDimId
-  { id `Ptr Map', fromDimType `DimType', `CUInt' id} -> `Ptr Id' id #}
+  { id `Ptr Map', fromDimType `DimType', id `CUInt'} -> `Ptr Id' id #}
 
 {#fun isl_map_domain_product as mapDomainProduct
   { id `Ptr Map', id `Ptr Map'} -> `Ptr Map' id #}
@@ -199,10 +200,20 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_range_map as mapReverse
   { id `Ptr Map' } -> `Ptr Map' id #}
 
+
+{#fun isl_map_wrap as mapWrap 
+  { id `Ptr Map'  } -> `Ptr Set' id #}
+
+{#fun isl_map_from_domain_and_range as mapFromDomainAndRange
+  { id `Ptr Set', id `Ptr Set' } -> `Ptr Map' id #}
+
+{#fun isl_map_apply_range as mapApplyRange
+  { id `Ptr Map', 
+    id `Ptr Map' } -> `Ptr Map' id #}
+
 -- __isl_give isl_map *isl_map_move_dims(__isl_take isl_map *map,
 -- 	enum isl_dim_type dst_type, unsigned dst_pos,
 -- 	enum isl_dim_type src_type, unsigned src_pos, unsigned n);
-
 
 {#fun isl_map_move_dims as mapMoveDims
   { id `Ptr Map', 

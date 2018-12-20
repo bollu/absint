@@ -26,6 +26,7 @@ import qualified ISL.Native.Types as ISLTy (Id)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
 import Control.Monad (foldM)
+import qualified Control.Monad (join)
 import qualified System.IO.Unsafe as Unsafe (unsafePerformIO)
 
 
@@ -999,7 +1000,7 @@ pwaffFromMap m = do
 mapGetIxOfId :: Ptr Map -> DimType -> Ptr ISLTy.Id  -> IO (Maybe Int)
 mapGetIxOfId m dt islid = do
   ndim <- mapDim m dt
-  id2ix <- M.fromList <$> traverse (\ix -> (\(id, _) -> (id, ix)) <$> (mapGetDimId m dt ix)) [0..ndim-1]
+  id2ix <- M.fromList <$> traverse (\ix ->  (,ix) <$> (mapGetDimId m dt ix)) [0..ndim-1]
   return $ fromIntegral <$> (id2ix M.!? islid)
 
 
@@ -1017,12 +1018,18 @@ mapConditionallyMoveDims m idfilter din dout =
         if fromIntegral ixin >= nin
            then return m
            else do
-                 (idin, _) <- mapGetDimId m din (fromIntegral ixin)
+                 idin <- mapGetDimId m din (fromIntegral ixin)
                  let shouldmove = idfilter idin
+                 mapToStr m >>= 
+                   (\s -> putStrLn $ "nin: " ++ show nin ++ 
+                            "|ixin: " ++ show ixin ++ 
+                            "|shouldmove: " ++ show shouldmove ++ 
+                            "|nout: " ++ show nout ++ 
+                            " " ++ s)
                  if shouldmove
                     then do
-                        m <- mapMoveDims m din (fromIntegral ixin) dout nout (fromIntegral 1)
-                        move m (ixin + 1)
+                        m <- mapMoveDims m dout nout din (fromIntegral ixin) (fromIntegral 1)
+                        move m ixin
                     else move m (ixin + 1)
   in move m 0 
 
@@ -1037,7 +1044,7 @@ mapMoveOtherInputsParam idkeep m = do
               if nin == 1 
                  then return (m, ixin, ixp)
                  else do
-                   (idin, _) <- mapGetDimId m IslDimIn ixin
+                   idin <- mapGetDimId m IslDimIn ixin
                    if idin == idkeep
                       then return (m, ixin +1, ixp)
                       else do
@@ -1065,9 +1072,31 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
-  pwbackedge <- symValToPwaff ctx id2islid id2sym (symValId idphi)
+  -- [x_loop] -> { [] -> [xloop] }
+  pwdomain <- symValToPwaff ctx id2islid id2sym (symValId idphi)
+  mapid <- pwaffCopy pwdomain >>= mapFromPwaff
+  mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam 
+  mapToStr mapid >>= \s -> putStrLn $ "mapid: " ++ s
 
-  return pwbackedge
+  -- [x_loop] -> { [] -> [xloop + delta (backedge] }
+  mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr) >>= mapFromPwaff
+  mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam 
+  mapToStr mapbackedge >>= \s -> putStrLn $ "mapbackedge: " ++ s
+
+  -- [x_loop] -> { [[] -> [xloop]] -> [[] -> [xloop + delta]] }
+  mapbackedgeff <- Control.Monad.join $ liftA2 mapFromDomainAndRange (mapWrap mapid) (mapWrap mapbackedge)
+
+  mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedge eff: " ++ s
+
+  eff' <- mapCopy mapbackedgeff
+  eff2 <- Control.Monad.join $ liftA2 mapApplyRange (mapCopy eff') (mapCopy eff')
+  mapToStr eff2 >>= \s -> putStrLn $ "###eff2: " ++ s
+
+  (pow, _) <- mapPower mapbackedgeff
+
+  mapToStr pow >>= \s -> putStrLn $ "###power: " ++ s
+
+  return pwdomain
 
 
 {-
@@ -1081,7 +1110,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     mapl <- mapFromPwaff pwl
     mapl <- mapAddDims  mapl IslDimSet 1 >>= (\m -> mapSetDimId m IslDimSet 0 idaccell)
 
-    leq0set <- mapCopy mapl >>= mapDomain
+    leq0set <- mapCopy mapl >>= mapid
     leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
     leq0 <- constraintSetCoefficientSi leq0 IslDimSet 0 1
     leq0set <- setAddConstraint leq0set leq0
@@ -1101,7 +1130,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     mapr <- mapAddDims  mapr IslDimSet 1
     mapr <- mapSetDimId mapr IslDimSet 0 idaccelr
     
-    rgt0set <- (mapCopy mapr) >>= mapDomain
+    rgt0set <- (mapCopy mapr) >>= mapid
     rgt0 <- setGetSpace rgt0set >>= localSpaceFromSpace >>= constraintAllocInequality
     rgt0 <- constraintSetConstantSi rgt0 (-1)
     rgt0 <- constraintSetCoefficientSi rgt0 IslDimSet 0 1
