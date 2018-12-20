@@ -180,6 +180,12 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_get_dim_id as mapGetDimId
   { id `Ptr Map', fromDimType `DimType', `CUInt' id} -> `Ptr Id' id #}
 
+{#fun isl_map_domain_product as mapDomainProduct
+  { id `Ptr Map', id `Ptr Map'} -> `Ptr Map' id #}
+
+
+{#fun isl_map_range_product as mapRangeProduct
+  { id `Ptr Map', id `Ptr Map'} -> `Ptr Map' id #}
 
 
 {#fun isl_map_domain_map as mapDomainMap

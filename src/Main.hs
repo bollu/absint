@@ -985,10 +985,13 @@ symaffToPwaff ctx id2islid id2sym(Symaff (c, terms)) = do
          foldM pwaffAdd pwconst pwterms 
 
 -- add a new dimension to the map and return its index
-mapAddDim :: Ptr Map -> DimType -> IO (Ptr Map, Int)
-mapAddDim m dt = do
+mapAddDim :: Ptr Map -> DimType -> Maybe (Ptr ISLTy.Id) -> IO (Ptr Map, Int)
+mapAddDim m dt mislid = do
     ndim <- mapDim m dt
     m <- mapAddDims m dt 1
+    m <- case mislid of 
+          Nothing -> return m
+          Just islid -> mapSetDimId m dt ndim islid
     return (m, fromIntegral ndim)
       
 pwaffFromMap :: Ptr Map -> IO (Ptr Pwaff)
@@ -1041,32 +1044,40 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
     pwl <- symValToPwaff ctx id2islid id2sym syml
 
-    mapl <- pwaffCopy pwl >>= mapFromPwaff
-    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+    -- viv2entry: [viv -> entry]
+    viv2entry <- pwaffCopy pwl >>= mapFromPwaff
+    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
 
-    (mapl, mapl_viv_pos) <- mapAddDim mapl IslDimIn
-    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+    (viv2entry, _) <- mapAddDim viv2entry IslDimIn (Just islidviv)
+    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
+    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
 
-    mapl <- mapSetDimId mapl IslDimIn (fromIntegral mapl_viv_pos) islidviv
-    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
-
-    mapl <- mapMoveOtherInputsParam islidviv mapl
-    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+    viv2entry <- mapMoveOtherInputsParam islidviv viv2entry
+    --mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
 
 
+    -- VIV -> LOOP
+    viv2loop <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
+    (viv2loop, _) <- mapAddDim viv2loop IslDimIn (Just islidviv)
+    viv2loop <- mapMoveOtherInputsParam islidviv viv2loop
+    mapToStr viv2loop >>= \s -> print $ "viv2loop: " ++ s
+
+    -- VIV -> [LOOP -> ENTRY]
+    viv2loop2entry <- mapCopy viv2loop >>= \m1 -> mapCopy viv2entry >>= \m2 -> mapRangeProduct m1 m2
+    mapToStr viv2loop2entry >>= \s -> print $ "### viv2loop2entry: " ++ s
       
     -- [k -> val]
     -- [loopid -> val] -> [[loopid -> val] -> loopid]
-    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
-    mapl <- mapReverse mapl
-    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
-    -- leq0set <- mapCopy mapl >>= mapDomain
+    mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
+    viv2entry <- mapReverse viv2entry
+    mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
+    -- leq0set <- mapCopy viv2entry >>= mapDomain
     -- leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
     -- leq0 <- constraintSetCoefficientSi leq0 IslDimSet 0 1
     -- leq0set <- setAddConstraint leq0set leq0
 
-    -- mapl <- mapIntersectDomain mapl leq0set
-    -- mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+    -- viv2entry <- mapIntersectDomain viv2entry leq0set
+    -- mapToStr viv2entry >>= \s -> print $ "viv2entry: " ++ s
 
     -- right side (acceledrated side)
     pwr <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
