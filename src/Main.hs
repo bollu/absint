@@ -21,7 +21,7 @@ import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
-import ISL.Native.Types (DimType(..), Pwaff, Ctx, Space, LocalSpace)
+import ISL.Native.Types (DimType(..), Pwaff, Ctx, Space, LocalSpace, Map, Set)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
 import Control.Monad (foldM)
@@ -943,8 +943,8 @@ programGetSymbolic (Program bbs) =
 -- pwaff comprising of IDs with parametric dimensions
 localSpaceIds :: Ptr Ctx -> [Id] -> IO (Ptr LocalSpace)
 localSpaceIds ctx ids = do
-  ls <- localSpaceSetAlloc ctx (length ids) 0
-  foldM (\ls ((Id id), ix) -> localSpaceSetDimName ls IslDimParam (fromIntegral ix) id) ls (zip ids [0, 1..])
+  ls <- localSpaceSetAlloc ctx 0 (length ids)
+  ls <- foldM (\ls ((Id id), ix) -> localSpaceSetDimName ls IslDimSet (fromIntegral ix) id) ls (zip ids [0, 1..])
   return ls
 
 
@@ -955,7 +955,12 @@ termToPwaff ctx id2sym id coeff = do
 
   ls <- localSpaceIds ctx (M.keys id2sym)
   ls' <- localSpaceCopy ls
-  var <- affVarOnDomain ls IslDimParam (id2key M.! id)
+  print "affVarOnDomain being called"
+
+  var <- affVarOnDomain ls IslDimSet (id2key M.! id)
+
+  affToStr var >>= \s -> print $ "var:"  ++ s
+
   coeff <- affInt ctx ls coeff
 
   term <- affMul var coeff
@@ -972,7 +977,18 @@ symaffToPwaff ctx id2sym(Symaff (c, terms)) = do
          pwterms <- traverse (\(id, coeff) -> termToPwaff ctx id2sym id coeff) (M.toList terms)
          foldM pwaffAdd pwconst pwterms 
 
-
+-- add a new dimension to the map and return its index
+mapAddDim :: Ptr Map -> DimType -> IO (Ptr Map, Int)
+mapAddDim m dt = do
+    ndim <- mapDim m dt
+    m <- mapAddDims m dt 1
+    return (m, fromIntegral ndim)
+      
+pwaffFromMap :: Ptr Map -> IO (Ptr Pwaff)
+pwaffFromMap m = do
+    pwma <- (pwmultiaffFromMap m)
+    pwa <- pwmultiaffGetPwaff pwma 0
+    return pwa
 
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
@@ -986,15 +1002,20 @@ symValToPwaff ctx id2sym (SymValBinop bop l r) = do
   case bop of
     Add -> pwaffAdd pwl pwr
     Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
-      
-symValToPwaff ctx id2sym (SymValPhi l r) = 
+
+symValToPwaff ctx id2sym (SymValPhi l r) = do
+  symValToPwaff ctx id2sym l
+
+{-
   do
     idaccell <- idAlloc ctx "viv"
     idaccelr <- idCopy idaccell
 
     pwl <- symValToPwaff ctx id2sym l
+
+
     mapl <- mapFromPwaff pwl
-    mapl <- mapAddDims  mapl IslDimIn 1 >>= (\m -> mapSetDimId m IslDimIn 0 idaccell)
+    mapl <- mapAddDims  mapl IslDimSet 1 >>= (\m -> mapSetDimId m IslDimSet 0 idaccell)
 
     leq0set <- mapCopy mapl >>= mapDomain
     leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
@@ -1013,8 +1034,8 @@ symValToPwaff ctx id2sym (SymValPhi l r) =
     let idr = fromJust (symAffExtractId symaffr)
     pwr <- symValToPwaff ctx id2sym (id2sym M.! idr)
     mapr <- mapFromPwaff pwr
-    mapr <- mapAddDims  mapr IslDimIn 1
-    mapr <- mapSetDimId mapr IslDimIn 0 idaccelr
+    mapr <- mapAddDims  mapr IslDimSet 1
+    mapr <- mapSetDimId mapr IslDimSet 0 idaccelr
     
     rgt0set <- (mapCopy mapr) >>= mapDomain
     rgt0 <- setGetSpace rgt0set >>= localSpaceFromSpace >>= constraintAllocInequality
@@ -1031,12 +1052,8 @@ symValToPwaff ctx id2sym (SymValPhi l r) =
     (mapfull, _) <- mapPower mapfull
     mapToStr mapfull >>= (\s -> putStrLn $ "total map power: " ++ s)
 
-    -- TODO: understand why map is not single valued?
-    pwma <- (pwmultiaffFromMap mapfull) --  >>= (\pwma -> pwmultiaffGetPwaff pwma 0)
-    -- pwmultiaffToStr pwma >>= (\s -> putStrLn $  "pwma: " ++ s)
-    pwa <- pwmultiaffGetPwaff pwma 0
-    -- pwaffToStr pwa >>= (\s -> putStrLn $ "pwa: " ++ s)
-    return pwa
+    pwaffFromMap mapfull
+  -}
 
 
 -- Abstract interpretation

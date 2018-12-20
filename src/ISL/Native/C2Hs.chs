@@ -169,6 +169,8 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_get_space as mapGetSpace
   { id `Ptr Map' } -> `Ptr Space' id #}
 
+{#fun isl_map_dim as mapDim
+  { id `Ptr Map', fromDimType `DimType' } -> `CUInt' id #}
 
 -- set
 
@@ -237,13 +239,6 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Space'
   } -> `Ptr BasicSet' id #}
 
-{#fun isl_local_space_from_space as localSpaceFromSpace
-  { id `Ptr Space'
-  } -> `Ptr LocalSpace' id #}
-
-{#fun isl_local_space_copy as localSpaceCopy
-  { id `Ptr LocalSpace'
-  } -> `Ptr LocalSpace' id #}
 
 -- space
 {#fun isl_space_copy as spaceCopy
@@ -255,6 +250,23 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   } -> `Ptr Space' id #}
 
 -- local space
+
+{#fun isl_local_space_dump as localSpaceDump
+  { id `Ptr LocalSpace'
+  } -> `()' #}
+
+-- {#fun isl_local_space_to_str as localSpaceToStr
+--   { id `Ptr LocalSpace'
+--   } -> `String' #}
+
+{#fun isl_local_space_from_space as localSpaceFromSpace
+  { id `Ptr Space'
+  } -> `Ptr LocalSpace' id #}
+
+{#fun isl_local_space_copy as localSpaceCopy
+  { id `Ptr LocalSpace'
+  } -> `Ptr LocalSpace' id #}
+
 {#fun isl_local_space_set_dim_name as localSpaceSetDimName
   { id `Ptr LocalSpace'
   , fromDimType `DimType'
@@ -300,6 +312,8 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_aff_var_on_domain as affVarOnDomain
     {id `Ptr LocalSpace',  fromDimType `DimType', id `CUInt' } -> `Ptr Aff' id #}
 
+{# fun isl_aff_to_str as affToStr
+    {id `Ptr Aff' } -> `String'  #}
 -- Pwaff
 {# fun isl_pw_aff_from_aff as pwaffFromAff
     {id `Ptr Aff' } -> `Ptr Pwaff' id #}
