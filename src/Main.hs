@@ -998,15 +998,24 @@ pwaffFromMap m = do
     return pwa
 
 -- move all other dimensions other than the given dimensions from input to parameter dimensions
-mapMoveOtherDimsParam :: M.Map Id (Ptr ISLTy.Id) -> Id -> Ptr Map -> IO (Ptr Map)
-mapMoveOtherDimsParam id2islid idkeep m = do
-  let f = (\(m, ix') ((id, islid), ix) -> 
-              if id == idkeep
-                then return (m, ix')
-                else do
-                      m <- mapMoveDims m IslDimParam ix' IslDimIn (ix - ix') 1
-                      return (m, ix'+1))
-  (m, _) <- foldM f (m, 0) (zip (M.toList id2islid) [0, 1..])
+mapMoveOtherInputsParam ::  Ptr ISLTy.Id -> Ptr Map -> IO (Ptr Map)
+mapMoveOtherInputsParam idkeep m = do
+  nin <- mapDim m IslDimIn
+  nparam <- mapDim m IslDimParam
+  let f = (\(m, ixin, ixp) _ -> do
+              nin <- mapDim m IslDimIn
+              if nin == 1 
+                 then return (m, ixin, ixp)
+                 else do
+                   (idin, _) <- mapGetDimId m IslDimIn ixin
+                   if idin == idkeep
+                      then return (m, ixin +1, ixp)
+                      else do
+                        m <- mapMoveDims m IslDimParam ixp IslDimIn ixin (fromIntegral 1)
+                        return (m, ixin, ixp+1)
+                        )
+
+  (m, _, _) <- foldM f (m, 0, nparam) [0..nin]
   return m
 
 -- Given the symbolic representation of all other expressions, maximal
@@ -1024,12 +1033,40 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
     Add -> pwaffAdd pwl pwr
     Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
 
+-- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
+    let vivname = let (Id phistr) = idphi in "viv_" ++ phistr
+    islidviv <- idAlloc ctx vivname  
+    ---let id2sym = M.insert (Id vivname) idviv id2sym
+
     pwl <- symValToPwaff ctx id2islid id2sym syml
+
     mapl <- pwaffCopy pwl >>= mapFromPwaff
-    mapl <- mapMoveOtherDimsParam id2islid idphi mapl
     mapToStr mapl >>= \s -> print $ "mapl: " ++ s
 
+    (mapl, mapl_viv_pos) <- mapAddDim mapl IslDimIn
+    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+
+    mapl <- mapSetDimId mapl IslDimIn (fromIntegral mapl_viv_pos) islidviv
+    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+
+    mapl <- mapMoveOtherInputsParam islidviv mapl
+    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+
+
+      
+    -- [k -> val]
+    -- [loopid -> val] -> [[loopid -> val] -> loopid]
+    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+    mapl <- mapReverse mapl
+    mapToStr mapl >>= \s -> print $ "mapl: " ++ s
+    -- leq0set <- mapCopy mapl >>= mapDomain
+    -- leq0 <- setGetSpace leq0set >>= localSpaceFromSpace >>= constraintAllocEquality
+    -- leq0 <- constraintSetCoefficientSi leq0 IslDimSet 0 1
+    -- leq0set <- setAddConstraint leq0set leq0
+
+    -- mapl <- mapIntersectDomain mapl leq0set
+    -- mapToStr mapl >>= \s -> print $ "mapl: " ++ s
 
     -- right side (acceledrated side)
     pwr <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
@@ -1039,7 +1076,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
     mapr <- pwaffCopy pwr >>= mapFromPwaff
     -- mapr <- mapMoveDims mapr IslDimParam 0 IslDimIn 0 1
     -- mapToStr mapr >>= \s -> print $ "mapr: " ++ s
-    mapr <- mapMoveOtherDimsParam id2islid idphi mapr
+    mapr <- mapMoveOtherInputsParam (id2islid M.! idphi) mapr
     mapToStr mapr >>= \s -> print $ "mapr: " ++ s
 
 --     (mapr, _) <- foldM (\(mapr, ix') ((id, islid), ix) -> 
@@ -1050,6 +1087,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 --                               return (mapr, ix'+1)) (mapr, 0) (zip (M.toList id2islid) [0, 1..])
 -- 
     (power, _) <- mapPower mapr
+    power <- mapSetDimId power IslDimIn 0 islidviv
     mapToStr power >>= \s -> print $ "power: " ++ s
 
     pwaffAdd pwl pwr

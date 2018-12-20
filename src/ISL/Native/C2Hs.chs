@@ -161,6 +161,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   } -> `Ptr Map' id #}
 
 
+
 {#fun isl_map_set_dim_id as mapSetDimId
   { id `Ptr Map'
   , fromDimType `DimType'
@@ -175,6 +176,22 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_dim as mapDim
   { id `Ptr Map', fromDimType `DimType' } -> `CUInt' id #}
 
+
+{#fun isl_map_get_dim_id as mapGetDimId
+  { id `Ptr Map', fromDimType `DimType', `CUInt' id} -> `Ptr Id' id #}
+
+
+
+{#fun isl_map_domain_map as mapDomainMap
+  { id `Ptr Map' } -> `Ptr Map' id #}
+
+
+{#fun isl_map_range_map as mapRangeMap
+  { id `Ptr Map' } -> `Ptr Map' id #}
+
+
+{#fun isl_map_range_map as mapReverse
+  { id `Ptr Map' } -> `Ptr Map' id #}
 
 -- __isl_give isl_map *isl_map_move_dims(__isl_take isl_map *map,
 -- 	enum isl_dim_type dst_type, unsigned dst_pos,
