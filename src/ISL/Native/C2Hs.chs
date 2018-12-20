@@ -121,6 +121,11 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Map'
   } -> `Ptr Set' id #}
 
+
+{#fun isl_map_range as mapRange
+  { id `Ptr Map'
+  } -> `Ptr Set' id #}
+
 {#fun isl_map_intersect_domain as mapIntersectDomain
   { id `Ptr Map'
   , id `Ptr Set'
@@ -296,6 +301,14 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 {#fun isl_space_alloc as spaceAlloc_
   { id `Ptr Ctx', `CUInt', `CUInt', `CUInt'
+  } -> `Ptr Space' id #}
+
+
+{#fun isl_space_set_dim_id as spaceSetDimId
+  { id `Ptr Space'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , id `Ptr Id'
   } -> `Ptr Space' id #}
 
 -- local space

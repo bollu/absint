@@ -65,7 +65,7 @@ data Aff
 data Pwaff
 data Pwmultiaff
 
-{#enum isl_dim_type as DimType {underscoreToCase} #}
+{#enum isl_dim_type as DimType {underscoreToCase} deriving(Eq, Show) #}
 
 fromDimType :: DimType -> CInt
 fromDimType = fromIntegral . fromEnum

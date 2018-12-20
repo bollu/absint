@@ -938,7 +938,6 @@ programGetSymbolic (Program bbs) =
 
 -- Symbolic expression to Pwaff
 -- ============================
--- pwaff comprising of IDs with parametric dimensions
 localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
 localSpaceIds ctx id2islid = do
   ls <- localSpaceSetAlloc ctx 0 (length id2islid)
@@ -948,6 +947,19 @@ localSpaceIds ctx id2islid = do
   ls <- foldM 
           (\ls (islid, ix) -> 
               localSpaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls
+                islidcounters
+  return ls
+
+
+spaceFromIds :: Ptr Ctx -> [Ptr ISLTy.Id] -> IO (Ptr Space)
+spaceFromIds ctx islids = do
+  ls <- spaceSetAlloc ctx 0 (length islids)
+  let islidcounters = zip islids [0, 1..]
+  islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
+
+  ls <- foldM 
+          (\ls (islid, ix) -> 
+              spaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls
                 islidcounters
   return ls
 
@@ -1055,6 +1067,36 @@ mapMoveOtherInputsParam idkeep m = do
   (m, _, _) <- foldM f (m, 0, nparam) [0..nin]
   return m
 
+mapReplaceDim :: Ptr Map 
+              -> DimType -- dimension to replace type
+              -> Int -- dimension to replacelocation 
+              -> DimType --dimension to add type
+              -> Ptr ISLTy.Id -- id of new dimension to be added
+              -> IO (Ptr Map)
+mapReplaceDim m indim inix outdim outid = do
+  (m, outix) <- mapAddDim m outdim (Just outid)
+
+  -- if the dimension we are interested in is the input domain, then take 
+  -- the domain. If it is range / parameter, then take range
+  eqset <- if outdim == IslDimIn 
+              then mapDomain m
+              else mapRange m
+  -- cosntraint such that in eq out
+  ineqout_cons <- setGetSpace eqset >>= localSpaceFromSpace >>= constraintAllocEquality
+  ineqout_cons <- constraintSetCoefficientSi ineqout_cons indim (fromIntegral inix) 1
+  ineqout_cons <- constraintSetCoefficientSi ineqout_cons outdim (fromIntegral outix) 1
+
+  -- add the constraint that in = out in the set
+  eqset <- setAddConstraint eqset ineqout_cons
+
+  m <- if outdim == IslDimIn 
+          then mapIntersectDomain m eqset
+          else mapIntersectRange m eqset
+
+  -- project out the dimension
+  mapProjectOut m indim (fromIntegral inix) 1
+
+
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
 symValToPwaff :: Ptr Ctx 
@@ -1072,13 +1114,15 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
-  -- [x_loop] -> { [] -> [xloop] }
-  pwdomain <- symValToPwaff ctx id2islid id2sym (symValId idphi)
-  mapid <- pwaffCopy pwdomain >>= mapFromPwaff
-  mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam 
+  newid <- idAlloc ctx "newid"
+
+  -- [] -> { [] -> [newid] }
+  mapiddom <- spaceFromIds ctx [] >>= setUniverse 
+  mapidrange <- spaceFromIds ctx [newid] >>= setUniverse
+  mapid <- mapFromDomainAndRange mapiddom mapidrange
   mapToStr mapid >>= \s -> putStrLn $ "mapid: " ++ s
 
-  -- [x_loop] -> { [] -> [xloop + delta (backedge] }
+  -- this should be [] -> { [] -> f (backedge) / backedge replaced with "newid" }
   mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr) >>= mapFromPwaff
   mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam 
   mapToStr mapbackedge >>= \s -> putStrLn $ "mapbackedge: " ++ s
@@ -1095,8 +1139,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   (pow, _) <- mapPower mapbackedgeff
 
   mapToStr pow >>= \s -> putStrLn $ "###power: " ++ s
-
-  return pwdomain
+  symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
 
 
 {-
