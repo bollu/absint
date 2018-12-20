@@ -1107,9 +1107,10 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
   -- [x_loop] -> { [[] -> [xloop]] -> [[] -> [xloop + delta]] }
   mapbackedgeff <- mapFromDomainAndRange setid setbackedge
-
-
   mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff: " ++ s
+  (Just phiix)  <- mapGetIxOfId mapbackedgeff IslDimParam (id2islid M.! idphi) 
+  mapbackedgeff <- mapProjectOut mapbackedgeff IslDimParam (fromIntegral phiix) 1
+  mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff (after project): " ++ s
 
   (pow, _) <- mapPower mapbackedgeff
 
