@@ -1105,6 +1105,8 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
   -- [params] -> { [k] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
   (pow, _) <- mapPower mapbackedgeff
+  idviv <- idAlloc ctx "viv"
+  pow <- mapSetDimId pow IslDimIn 0 idviv
   mapToStr pow >>= \s -> putStrLn $ "###power: " ++ s
 
   -- [params, k] -> { [] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
@@ -1112,8 +1114,6 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   -- [params, k] -> { [[] -> [o0]] -> [[] -> [k + o0]] : k > 0 }
   pow <- mapRange pow >>= setUnwrap
   mapToStr pow >>= \s -> putStrLn $ "###powset: " ++ s
-  
-
 
   -- { [params] -> [entryval] }
   entry <- symValToPwaff ctx id2islid id2sym (symValId idl) >>= mapFromPwaff
@@ -1123,6 +1123,17 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
   -- [params] -> { [[] -> [entryval]] }
   entryset <- mapWrap entry
+
+  -- [params, k] -> { [] -> [k+ o0] }
+  final <- setApply entryset pow >>= setUnwrap
+  mapToStr final >>= \s -> putStrLn  $ "###final: " ++ s
+
+
+  -- [params] -> { [k] -> [k+ o0] }
+  -- TODO: we need to create an id for the viv
+  final <- mapConditionallyMoveDims  final (== idviv) IslDimParam IslDimIn
+  mapToStr final >>= \s -> putStrLn  $ "###final: " ++ s
+
 
   symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
 

@@ -377,6 +377,10 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
     {id `Ptr Space'} -> `Ptr Set' id #}
 {# fun isl_set_indicator_function as setIndicatorFunction
     {id `Ptr Set'} -> `Ptr Pwaff' id #}
+
+
+{# fun isl_set_apply as setApply
+    {id `Ptr Set', id `Ptr Map'} -> `Ptr Set' id #}
 -- aff
 
 {#fun isl_aff_copy as affCopy
