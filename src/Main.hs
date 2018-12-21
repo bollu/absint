@@ -1286,69 +1286,10 @@ pLoop = runProgramBuilder $ do
 -- -- ========================
 pcur :: Program
 pcur = pLoop
--- 
--- curToOpaqify :: OpaqueVals
--- curToOpaqify = snd pLoop
--- 
--- -- Derived properties of the chosen program
--- -- ========================================
--- 
--- curCSemInt :: CSem (LiftedLattice Int)
--- curCSemInt = stmtCollectFix concreteCSem (Loc (-1)) pcur (initCollectingSem pcur)
--- 
--- 
--- curCSemSym :: CSem (LiftedLattice SymVal)
--- curCSemSym = stmtCollectFix (symbolCSem curToOpaqify) (Loc (-1)) pcur (initCollectingSem pcur)
--- 
--- curCSemIntSym :: CSem (LiftedLattice Int, LiftedLattice SymVal)
--- curCSemIntSym = stmtCollectFix (concreteSymbolicCSem curToOpaqify) (Loc (-1)) pcur (initCollectingSem pcur)
--- 
--- -- map identifiers to a function of loop iterations to values
--- curAbs :: Id2CollectedVal (LiftedLattice Int, LiftedLattice SymVal)
--- curAbs = alphacsem curCSemIntSym pcur
--- 
--- lookupAbsAtVals :: Id  --- value to lookup
---   -> [(Id, Int)] --- value of identifiers expected at the definition of value
---   -> (LiftedLattice Int, LiftedLattice SymVal) -- value of identifier discovered
--- lookupAbsAtVals needle idvals = 
---   let
---   -- Extract out the concrete int value
---   extractConcrete :: Maybe (LiftedLattice Int, LiftedLattice SymVal) -> Maybe Int
---   extractConcrete (Just (LL i, _)) = Just i
---   extractConcrete _ = Nothing
--- 
---   -- check if the pair of (Id, Int) is in env
---   envContains :: CSemEnv (LiftedLattice Int, LiftedLattice SymVal) -> (Id, Int) -> Bool
---   envContains env (id, i) = extractConcrete (env !!#? id) == Just i
--- 
---   in
---   curAbs needle (\env -> all (envContains env) idvals)
--- 
 
-example1 :: String
-example1 = unlines
-  [ "[n] -> { [i,j] -> [i2,j2] : i2 = i + 1 and j2 = j + 1 and "
-  , "1 <= i and i < n and 1 <= j and j < n or "
-  , "i2 = i + 1 and j2 = j - 1 and "
-  , "1 <= i and i < n and 2 <= j and j <= n }"
-  ]
-testisl :: IO ()
-testisl = do
-  ctx <- ctxAlloc
-
-
-  -- test 1
-  m <- mapReadFromStr ctx example1
-  (m, exact) <- mapPower m
-  s <- mapToStr m
-  print exact
-  print s
-  mapFree m
 
 main :: IO ()
 main = do
-  -- putStrLn "***ISL test***"
-  --   testisl
     islctx <- ctxAlloc
 
 
@@ -1380,12 +1321,3 @@ main = do
     id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2islid id2sym) id2sym
 
     traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty 
-
-    -- let idsToLookup = ["x", "x_lt_5", "y", "z"]
-    -- let idsToLookup = ["x_lt_5", "x_lt_5_next", "x", "x_next", "z"]
-    -- forM_ idsToLookup 
-    --   (\id -> (putDocW 80 $ 
-    --             pretty id <+> 
-    --             pretty "=" <+> 
-    --             pretty (lookupAbsAtVals (Id id) [])) >> putStrLn "")
-
