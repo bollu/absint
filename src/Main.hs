@@ -942,28 +942,16 @@ programGetSymbolic (Program bbs) =
 -- ============================
 localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
 localSpaceIds ctx id2islid = do
-  ls <- localSpaceSetAlloc ctx 0 (length id2islid)
+  ls <- localSpaceSetAlloc ctx (length id2islid) 0
   let islidcounters = zip (M.elems id2islid) [0, 1..]
   islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
 
   ls <- foldM 
           (\ls (islid, ix) -> 
-              localSpaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls
+              localSpaceSetDimId ls IslDimParam (fromIntegral ix) islid) ls
                 islidcounters
   return ls
 
-
-spaceFromIds :: Ptr Ctx -> [Ptr ISLTy.Id] -> IO (Ptr Space)
-spaceFromIds ctx islids = do
-  ls <- spaceSetAlloc ctx 0 (length islids)
-  let islidcounters = zip islids [0, 1..]
-  islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
-
-  ls <- foldM 
-          (\ls (islid, ix) -> 
-              spaceSetDimId ls IslDimSet (fromIntegral ix) islid) ls
-                islidcounters
-  return ls
 
 
 termToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Id -> Int -> IO (Ptr Pwaff)
@@ -971,17 +959,24 @@ termToPwaff ctx id2islid id2sym id coeff = do
   -- TODO: refactor this
   let id2key = M.fromList $ zip (M.keys id2sym) [0, 1..]
   ls <- localSpaceIds ctx id2islid
-  var <- localSpaceCopy ls >>= \ls -> affVarOnDomain ls IslDimSet (id2key M.! id)
+  var <- localSpaceCopy ls >>= \ls -> affVarOnDomain ls IslDimParam (id2key M.! id)
 
   coeff <- affInt ctx ls coeff
   term <- affMul var coeff
-  pwaffFromAff term
+  pw <- pwaffFromAff term
+
+  pwaffToStr pw >>= \s -> putStrLn $ "termToPwaff: " ++ s
+  return pw
+
+
   
 
 symaffToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
 symaffToPwaff ctx id2islid id2sym(Symaff (c, terms)) = do
+    print "symafftoPwaff"
     ls <- localSpaceIds ctx id2islid 
     pwconst <- pwaffInt ctx ls c
+    pwaffToStr pwconst >>= \s -> putStrLn $ "pwconst:" ++ s
     if M.null terms
        then return pwconst
        else do
@@ -1139,12 +1134,12 @@ symValToPwaff ctx id2islid id2sym (SymValAff aff) =
 symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
   pwl <- symValToPwaff ctx id2islid id2sym l
   pwr <- symValToPwaff ctx id2islid id2sym r
-  pwl <- alignParams pwl pwr
-  pwr <- alignParams pwr pwl
+  pwl <- pwaffAlignLoopViv pwl pwr
+  pwr <- pwaffAlignLoopViv pwr pwl
 
   case bop of
     Add -> pwaffAdd pwl pwr
-    Lt -> return pwl -- pwaffLtSet pwl pwr >>= setIndicatorFunction 
+    Lt ->  pwaffLtSet pwl pwr >>= setIndicatorFunction 
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
