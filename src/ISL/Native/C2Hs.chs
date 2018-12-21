@@ -60,6 +60,7 @@ type PtrConstraint = Ptr Constraint
 type PtrId = Ptr Id
 {#pointer *isl_id as PtrId -> Id nocode #}
 
+-- =================
 -- ID
 
 {#fun isl_id_alloc as idAlloc_ { id `Ptr Ctx', `String', `Ptr ()' } -> `Ptr Id'  id #}
@@ -74,6 +75,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Ctx'
   , `String'
   } -> `Ptr Set' id #}
+-- =================
 -- map
 {#fun isl_map_gist as mapGist
   { id `Ptr Map', id `Ptr Map'} -> `Ptr Map' id #}
@@ -226,6 +228,13 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   fromDimType `DimType', id `CUInt',
   id `CUInt' } -> `Ptr Map' id #}
 
+{#fun isl_map_add_constraint as mapAddConstraint
+  { id `Ptr Map'
+  , id `Ptr Constraint'
+  } -> `Ptr Map' id #}
+
+
+-- =================
 -- set
 
 {#fun isl_set_project_out as setProjectOut
@@ -258,6 +267,20 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_set_unwrap as setUnwrap 
   { id `Ptr Set' } -> `Ptr Map' id #}
 
+
+{#fun isl_set_add_dims as setAddDims
+  { id `Ptr Set'
+  , fromDimType `DimType'
+  , id `CUInt'
+  } -> `Ptr Set' id #}
+
+{#fun isl_set_set_dim_id as setSetDimId
+  { id `Ptr Set'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , id `Ptr Id'
+  } -> `Ptr Set' id #}
+-- =================
 -- constraint
 
 {#fun isl_constraint_alloc_equality as constraintAllocEquality
@@ -304,6 +327,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   } -> `Ptr BasicSet' id #}
 
 
+-- =================
 -- space
 {#fun isl_space_copy as spaceCopy
   { id `Ptr Space'
@@ -321,6 +345,23 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , id `Ptr Id'
   } -> `Ptr Space' id #}
 
+
+{#fun isl_space_dim as spaceDim_
+  { id `Ptr Space', fromDimType `DimType' } -> `CUInt' id #}
+
+spaceDim :: Ptr Space -> DimType -> IO Int
+spaceDim sp dt = fromIntegral <$> spaceDim_ sp dt 
+
+
+
+{#fun isl_space_get_dim_id as spaceGetDimId_
+  { id `Ptr Space', fromDimType `DimType', fromIntegral `CUInt'} -> `Ptr Id' id #}
+
+spaceGetDimId :: Ptr Space -> DimType -> Int -> IO (Ptr Id)
+spaceGetDimId space dt ix = spaceGetDimId_ space dt (fromIntegral ix)
+
+
+-- =================
 -- local space
 
 {#fun isl_local_space_dump as localSpaceDump
@@ -354,6 +395,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , id `Ptr Id'
   } -> `Ptr LocalSpace' id #}
 
+-- =================
 -- basic set
 {#fun isl_basic_set_project_out as basicSetProjectOut
   { id `Ptr BasicSet'
@@ -371,6 +413,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr BasicSet'
   } -> `String' #}
 
+-- =================
 -- set
 
 {# fun isl_set_universe as setUniverse
@@ -381,6 +424,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 {# fun isl_set_apply as setApply
     {id `Ptr Set', id `Ptr Map'} -> `Ptr Set' id #}
+-- =================
 -- aff
 
 {#fun isl_aff_copy as affCopy
@@ -398,6 +442,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 {# fun isl_aff_to_str as affToStr
     {id `Ptr Aff' } -> `String'  #}
+-- =================
 -- Pwaff
 {#fun isl_pw_aff_copy as pwaffCopy
   { id `Ptr Pwaff'
@@ -422,6 +467,20 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {# fun isl_pw_aff_get_space as pwaffGetSpace
     {id `Ptr Pwaff' } -> `Ptr Space' id #}
 
+{#fun isl_pw_aff_add_dims as pwaffAddDims
+  { id `Ptr Pwaff'
+  , fromDimType `DimType'
+  , id `CUInt'
+  } -> `Ptr Pwaff' id #}
+
+{#fun isl_pw_aff_set_dim_id as pwaffSetDimId
+  { id `Ptr Pwaff'
+  , fromDimType `DimType'
+  , id `CUInt'
+  , id `Ptr Id'
+  } -> `Ptr Pwaff' id #}
+
+-- =================
 -- pw multi aff
 {# fun isl_pw_multi_aff_from_map as pwmultiaffFromMap
     {id `Ptr Map' } -> `Ptr Pwmultiaff' id #}
@@ -434,6 +493,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
     {id `Ptr Pwmultiaff', id `CInt' } -> `Ptr Pwaff' id #}
 
 -- val
+-- =================
 {#fun isl_val_int_from_si as valIntFromSI
     {id  `Ptr Ctx', id `CLong'} -> `Ptr Val' id #}
 

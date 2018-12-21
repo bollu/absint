@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -21,7 +22,8 @@ import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
-import ISL.Native.Types (DimType(..), Pwaff, Ctx, Space, LocalSpace, Map, Set)
+import ISL.Native.Types (DimType(..), 
+  Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
 import qualified ISL.Native.Types as ISLTy (Id)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
@@ -987,8 +989,8 @@ symaffToPwaff ctx id2islid id2sym(Symaff (c, terms)) = do
          foldM pwaffAdd pwconst pwterms 
 
 -- add a new dimension to the map and return its index
-mapAddDim :: Ptr Map -> DimType -> Maybe (Ptr ISLTy.Id) -> IO (Ptr Map, Int)
-mapAddDim m dt mislid = do
+mapAddUnnamedDim :: Ptr Map -> DimType -> Maybe (Ptr ISLTy.Id) -> IO (Ptr Map, Int)
+mapAddUnnamedDim m dt mislid = do
     ndim <- mapDim m dt
     m <- mapAddDims m dt 1
     m <- case mislid of 
@@ -1040,26 +1042,91 @@ mapConditionallyMoveDims m idfilter din dout =
   in move m 0 
 
 
--- move all other dimensions other than the given dimensions from input to parameter dimensions
-mapMoveOtherInputsParam ::  Ptr ISLTy.Id -> Ptr Map -> IO (Ptr Map)
-mapMoveOtherInputsParam idkeep m = do
-  nin <- mapDim m IslDimIn
-  nparam <- mapDim m IslDimParam
-  let f = (\(m, ixin, ixp) _ -> do
-              nin <- mapDim m IslDimIn
-              if nin == 1 
-                 then return (m, ixin, ixp)
-                 else do
-                   idin <- mapGetDimId m IslDimIn ixin
-                   if idin == idkeep
-                      then return (m, ixin +1, ixp)
-                      else do
-                        m <- mapMoveDims m IslDimParam ixp IslDimIn ixin (fromIntegral 1)
-                        return (m, ixin, ixp+1)
-                        )
+class Spaced a where
+  getSpace :: a -> IO (Ptr Space)
+  -- get the number of dimensions for the given dimtype
+  ndim :: a -> DimType -> IO Int
+  ndim a dt = getSpace a >>= \s -> spaceDim s dt 
 
-  (m, _, _) <- foldM f (m, 0, nparam) [0..nin]
-  return m
+  -- get the dimension ID
+  getDimId :: a -> DimType -> Int -> IO (Ptr ISLTy.Id)
+  getDimId a dt ix = getSpace a >>= \s -> spaceGetDimId s dt ix
+
+  -- set the dimension ID
+  setDimId :: a -> DimType -> Int -> Ptr ISLTy.Id ->  IO a
+
+  -- add dimensions
+  addDims :: a -> DimType -> Int -> IO a
+
+-- add dimensions with the given IDs. 
+-- NOTE, TODO: I am abusing "name" to mean "id'd". Hopefully, this will
+-- not get confusing.
+addNamedDims :: Spaced a => a -> DimType -> [Ptr ISLTy.Id] -> IO a
+addNamedDims x dt ids = do
+  n <- ndim x dt
+  -- tuples of new IDs and their locations
+  let newidixs = zip ids [n..]
+  x <- addDims x dt (length ids)
+  foldM (\x (id, ix) -> setDimId x dt ix id) x newidixs
+
+instance Spaced (Ptr Set) where
+  getSpace = setGetSpace
+  setDimId x dt i id = setSetDimId x dt (fromIntegral i) id
+  addDims x dt i = setAddDims x dt (fromIntegral i)
+
+instance Spaced (Ptr Map) where
+  getSpace = mapGetSpace
+  setDimId x dt i id = mapSetDimId x dt (fromIntegral i) id
+  addDims x dt i = mapAddDims x dt (fromIntegral i)
+
+instance Spaced (Ptr Pwaff) where
+  getSpace = pwaffGetSpace
+  setDimId x dt i id = pwaffSetDimId x dt (fromIntegral i) id
+  addDims x dt i = pwaffAddDims x dt (fromIntegral i)
+
+-- align a to b's space
+class Spaced b => Alignable a b where
+  alignParams :: a -> b -> IO a
+
+instance Spaced b => Alignable (Ptr Pwaff) b where
+  alignParams pwaff b = getSpace b >>= \s -> pwaffAlignParams pwaff s
+
+
+
+constraintEqualityForSpaced :: Spaced  a => a -> IO (Ptr Constraint)
+constraintEqualityForSpaced set = do
+  getSpace set >>= localSpaceFromSpace >>= constraintAllocEquality
+
+
+-- assume two pwaffs:
+-- pw1: [x_entry, params] -> { [viv] -> [x_entry + viv] : viv >= 0 }
+-- pw2: [params] -> { [1] }
+-- We would like to add the inputs of pw1 to pw2, and lift it to the constant function
+-- In general, we want to check that the dimensions match till where they match,
+-- and align the rest
+-- aligns the *first* parameter *to* second param
+-- if first has more dimensions, returns the second unchanged
+pwaffAlignLoopViv :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
+pwaffAlignLoopViv pw pw' = do
+    ninpw <- ndim pw IslDimIn
+    ninpw' <- ndim pw' IslDimIn
+
+    if ninpw > ninpw' 
+       then return pw
+       else do 
+          -- indeces to check are equal
+          let tocheck = [0..ninpw-1]
+          forM_ tocheck (\ix -> do
+            id <- getDimId pw IslDimIn ix
+            id' <- getDimId pw' IslDimIn ix
+            return $ assert  (id == id') ())
+
+          -- indeces to be aligned
+          let tofix = [ninpw..ninpw'-1]
+          newids <- traverse (getDimId pw' IslDimIn) tofix
+          pw <- addNamedDims pw IslDimIn newids
+          return pw
+
 
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
@@ -1072,9 +1139,12 @@ symValToPwaff ctx id2islid id2sym (SymValAff aff) =
 symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
   pwl <- symValToPwaff ctx id2islid id2sym l
   pwr <- symValToPwaff ctx id2islid id2sym r
+  pwl <- alignParams pwl pwr
+  pwr <- alignParams pwr pwl
+
   case bop of
     Add -> pwaffAdd pwl pwr
-    Lt -> pwaffLtSet pwl pwr >>= setIndicatorFunction 
+    Lt -> return pwl -- pwaffLtSet pwl pwr >>= setIndicatorFunction 
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
@@ -1122,7 +1192,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   mapToStr entry >>= \s -> putStrLn  $ "entry: " ++ s
 
   -- [params] -> { [[] -> [entryval]] }
-  entryset <- mapWrap entry
+  entryset <- mapCopy entry >>= mapWrap
 
   -- [params, k] -> { [] -> [k+ o0] }
   final <- setApply entryset pow >>= setUnwrap
@@ -1134,9 +1204,27 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   final <- mapConditionallyMoveDims  final (== idviv) IslDimParam IslDimIn
   mapToStr final >>= \s -> putStrLn  $ "###final: " ++ s
 
+  -- Now, align final with the entry data
+  -- final: [params] -> { [k] -> [k + o0] }
+  -- entry: [params] -> { [o0] }
+  -- need to make entry:
+  -- entry: [params] -> { [k] -> [o0] : k = 0 }
+  (final_iter_0, _) <- mapCopy entry >>= \entry -> mapAddUnnamedDim entry IslDimIn  (Just idviv)
 
-  symValToPwaff ctx id2islid id2sym (id2sym M.! idr)
+  k0 <- constraintEqualityForSpaced final_iter_0
+  -- TODO: verify that dim 0 is `idviv`
+  let idvivix = 0
+  k0 <- constraintSetCoefficientSi k0 IslDimIn idvivix (-1)
+  final_iter_0 <- mapAddConstraint final_iter_0 k0
 
+  final <- mapUnion final final_iter_0
+  mapToStr final >>= \s -> putStrLn $ "final map with entry: " ++ s
+
+
+  putStrLn "#####"
+  pwaff <- pwaffFromMap final
+  pwaffToStr pwaff >>= \s -> putStrLn $ "final pwaff:" ++ s
+  return pwaff
 
 
 -- Abstract interpretation
@@ -1150,9 +1238,8 @@ gamma = undefined
 
 
 
--- Example
--- =======
-
+-- Program builder
+-- ===============
 
 class ToExpr a where
   toexpr :: a -> Expr
@@ -1243,7 +1330,6 @@ done = do
   loc <- builderLocIncr
   setTerm (Done loc)
 
-
 phi :: String -> (BBId, String) -> (BBId, String) -> ST.State ProgramBuilder ()
 phi id (bbidl, idl) (bbidr, idr) = do
   loc <- builderLocIncr
@@ -1259,6 +1345,9 @@ br :: BBId -> ST.State ProgramBuilder ()
 br bbid = do
   loc <- builderLocIncr
   setTerm (Br loc bbid)
+
+-- Example programs
+-- ================
 
 pLoop :: Program
 pLoop = runProgramBuilder $ do
