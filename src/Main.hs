@@ -23,7 +23,7 @@ import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..), 
-  Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
+  Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
 import qualified ISL.Native.Types as ISLTy (Id)
 import PrettyUtils (prettyableToString, docToString)
 import Foreign.Ptr
@@ -953,27 +953,35 @@ localSpaceIds ctx id2islid = do
   return ls
 
 
+idToAff :: Ptr Ctx
+  -> M.Map Id (Ptr ISLTy.Id)
+  -> Id
+  -> IO (Ptr Aff)
+idToAff ctx id2islid curid = do
+  ls <- localSpaceIds ctx id2islid
+  -- TODO: we are assuming that IDs are found in the parameter dimension
+  (Just varix) <- findDimById ls IslDimParam (id2islid M.! curid)
+  var <- affVarOnDomain ls IslDimParam varix
+  return var
 
-termToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Id -> Int -> IO (Ptr Pwaff)
+termToPwaff :: Ptr Ctx 
+            -> M.Map Id (Ptr ISLTy.Id) 
+            -> M.Map Id SymVal 
+            -> Id 
+            -> Int 
+            -> IO (Ptr Pwaff)
 termToPwaff ctx id2islid id2sym id coeff = do
   -- TODO: refactor this
-  let id2key = M.fromList $ zip (M.keys id2sym) [0, 1..]
-  ls <- localSpaceIds ctx id2islid
-  var <- localSpaceCopy ls >>= \ls -> affVarOnDomain ls IslDimParam (id2key M.! id)
-
-  coeff <- affInt ctx ls coeff
-  term <- affMul var coeff
-  pw <- pwaffFromAff term
-
-  pwaffToStr pw >>= \s -> putStrLn $ "termToPwaff: " ++ s
-  return pw
+  var <- idToAff ctx id2islid id
+  coeff <- localSpaceIds ctx id2islid >>= \ls -> affInt ctx ls coeff
+  term <- affMul var coeff >>= pwaffFromAff
+  return term
 
 
   
 
 symaffToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
 symaffToPwaff ctx id2islid id2sym(Symaff (c, terms)) = do
-    print "symafftoPwaff"
     ls <- localSpaceIds ctx id2islid 
     pwconst <- pwaffInt ctx ls c
     pwaffToStr pwconst >>= \s -> putStrLn $ "pwconst:" ++ s
@@ -1053,6 +1061,17 @@ class Spaced a where
   -- add dimensions
   addDims :: a -> DimType -> Int -> IO a
 
+  findDimById :: a -> DimType -> Ptr ISLTy.Id -> IO (Maybe Int)
+  findDimById a dt id = 
+    getSpace a >>= \s -> do
+      n <- ndim s dt
+      mixs <- traverse (\ix -> do 
+        ixid <- spaceGetDimId s dt ix
+        if ixid == id 
+           then return (Just ix)
+           else return Nothing) [0..(n-1)]
+      return $ foldl (<|>) Nothing mixs
+
 -- add dimensions with the given IDs. 
 -- NOTE, TODO: I am abusing "name" to mean "id'd". Hopefully, this will
 -- not get confusing.
@@ -1063,6 +1082,18 @@ addNamedDims x dt ids = do
   let newidixs = zip ids [n..]
   x <- addDims x dt (length ids)
   foldM (\x (id, ix) -> setDimId x dt ix id) x newidixs
+
+instance Spaced (Ptr Space) where
+  getSpace = return
+  setDimId x dt i id = spaceSetDimId x dt (fromIntegral i) id
+  addDims x dt i = spaceAddDims x dt (fromIntegral i)
+
+
+instance Spaced (Ptr LocalSpace) where
+  getSpace = localSpaceGetSpace
+  setDimId x dt i id = localSpaceSetDimId x dt (fromIntegral i) id
+  addDims x dt i = localSpaceAddDims x dt (fromIntegral i)
+
 
 instance Spaced (Ptr Set) where
   getSpace = setGetSpace
@@ -1135,7 +1166,6 @@ pwaffMkVivNonNegative pwaff = do
   map <- mapFromPwaff pwaff
   nin <- ndim map IslDimIn
 
-  mapToStr map >>= \s -> putStrLn $ "map: " ++ s
   map <- foldM (\map ix -> do
           idgt0 <- getSpace map >>= localSpaceFromSpace >>= constraintAllocInequality
           idgt0 <- constraintSetCoefficientSi idgt0 IslDimIn ix (1)
@@ -1143,7 +1173,9 @@ pwaffMkVivNonNegative pwaff = do
           return map
         ) map [0..(fromIntegral nin-1)]
 
+
   pwaffFromMap map >>= pwaffCoalesce
+
 
 
 -- Given the symbolic representation of all other expressions, maximal
@@ -1151,7 +1183,8 @@ pwaffMkVivNonNegative pwaff = do
 symValToPwaff :: Ptr Ctx 
               -> M.Map Id (Ptr ISLTy.Id) -- id to ISL ids of that variable
               -> M.Map Id SymVal  -- values of each ID
-              -> SymVal -> IO (Ptr Pwaff)
+              -> SymVal  -- symval to convert
+              -> IO (Ptr Pwaff)
 symValToPwaff ctx id2islid id2sym (SymValAff aff) = 
   symaffToPwaff ctx id2islid id2sym aff
 symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
@@ -1164,7 +1197,6 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
     Add -> pwaffAdd pwl pwr
     Lt ->  do
             ltset <- pwaffLtSet pwl pwr 
-            setToStr ltset >>= \s -> putStrLn $ "-----> pwlt: " ++ s
             pwlt <- return ltset >>= setIndicatorFunction >>= pwaffCoalesce 
             return pwlt >>= pwaffMkVivNonNegative
 
@@ -1174,9 +1206,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   -- [id] -> { [] -> [id] }
   mapid <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
   mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam
-  mapToStr mapid >>= \s -> putStrLn $ "mapid: " ++ s
   setid <- mapWrap mapid
-  setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
 
   -- [id] -> { [] -> [id + delta] }
   mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr) >>= mapFromPwaff
@@ -1199,13 +1229,12 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   (pow, _) <- mapPower mapbackedgeff
   idviv <- idAlloc ctx "viv"
   pow <- mapSetDimId pow IslDimIn 0 idviv
-  mapToStr pow >>= \s -> putStrLn $ "###power: " ++ s
+  mapToStr pow >>= \s -> putStrLn $ "power: " ++ s
 
   -- [params, k] -> { [] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
   pow <- mapConditionallyMoveDims pow (const True) IslDimIn IslDimParam
   -- [params, k] -> { [[] -> [o0]] -> [[] -> [k + o0]] : k > 0 }
   pow <- mapRange pow >>= setUnwrap
-  mapToStr pow >>= \s -> putStrLn $ "###powset: " ++ s
 
   -- { [params] -> [entryval] }
   entry <- symValToPwaff ctx id2islid id2sym (symValId idl) >>= mapFromPwaff
@@ -1218,13 +1247,11 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
   -- [params, k] -> { [] -> [k+ o0] }
   final <- setApply entryset pow >>= setUnwrap
-  mapToStr final >>= \s -> putStrLn  $ "###final: " ++ s
 
 
   -- [params] -> { [k] -> [k+ o0] }
-  -- TODO: we need to create an id for the viv
   final <- mapConditionallyMoveDims  final (== idviv) IslDimParam IslDimIn
-  mapToStr final >>= \s -> putStrLn  $ "###final: " ++ s
+  mapToStr final >>= \s -> putStrLn  $ "final: " ++ s
 
   -- Now, align final with the entry data
   -- final: [params] -> { [k] -> [k + o0] }
@@ -1243,11 +1270,18 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   mapToStr final >>= \s -> putStrLn $ "final map with entry: " ++ s
 
 
-  putStrLn "#####"
   pwaff <- pwaffFromMap final >>= pwaffCoalesce
   pwaffToStr pwaff >>= \s -> putStrLn $ "final pwaff:" ++ s
   return pwaff
 
+
+initId2Pwaff :: Ptr Ctx 
+             -> M.Map Id (Ptr ISLTy.Id) -- ID to the ISL id of the variable
+             -> [Id] 
+             -> IO (M.Map Id (Ptr Pwaff)) 
+initId2Pwaff ctx id2islids ids = 
+  M.fromList <$> traverse 
+    (\id -> (id,) <$>  (idToAff ctx id2islids id >>= pwaffFromAff)) ids
 
 -- Abstract interpretation
 -- =======================

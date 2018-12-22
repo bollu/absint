@@ -367,8 +367,30 @@ spaceGetDimId :: Ptr Space -> DimType -> Int -> IO (Ptr Id)
 spaceGetDimId space dt ix = spaceGetDimId_ space dt (fromIntegral ix)
 
 
+{#fun isl_space_find_dim_by_id as spaceFindDimById_
+  { id `Ptr Space', fromDimType `DimType', id `Ptr Id'} -> `CInt' id #}
+
+spaceFindDimById :: Ptr Space -> DimType -> Ptr Id -> IO Int
+spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
+
+
+{#fun isl_space_add_dims as spaceAddDims
+  { id `Ptr Space'
+  , fromDimType `DimType'
+  , id `CUInt'
+  } -> `Ptr Space' id #}
+
 -- =================
 -- local space
+{#fun isl_local_space_add_dims as localSpaceAddDims
+  { id `Ptr LocalSpace'
+  , fromDimType `DimType'
+  , id `CUInt'
+  } -> `Ptr LocalSpace' id #}
+
+{#fun isl_local_space_get_space as localSpaceGetSpace
+  { id `Ptr LocalSpace'
+  } -> `Ptr Space' id #}
 
 {#fun isl_local_space_dump as localSpaceDump
   { id `Ptr LocalSpace'
@@ -444,7 +466,7 @@ spaceGetDimId space dt ix = spaceGetDimId_ space dt (fromIntegral ix)
     {id `Ptr Aff', id `Ptr Aff'} -> `Ptr Aff' id #}
 
 {#fun isl_aff_var_on_domain as affVarOnDomain
-    {id `Ptr LocalSpace',  fromDimType `DimType', id `CUInt' } -> `Ptr Aff' id #}
+    {id `Ptr LocalSpace',  fromDimType `DimType', fromIntegral `Int' } -> `Ptr Aff' id #}
 
 {# fun isl_aff_to_str as affToStr
     {id `Ptr Aff' } -> `String'  #}

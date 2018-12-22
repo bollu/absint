@@ -66,6 +66,16 @@ data Pwaff
 data Pwmultiaff
 
 {#enum isl_dim_type as DimType {underscoreToCase} deriving(Eq, Show) #}
+{#enum isl_bool as IslBool {underscoreToCase} deriving(Eq, Show) #}
 
 fromDimType :: DimType -> CInt
 fromDimType = fromIntegral . fromEnum
+
+fromRawIslBool :: CInt -> Maybe Bool
+fromRawIslBool i = 
+    case (fromIntegral i) of
+        -1 -> Nothing
+        0 -> Just False
+        1 -> Just True
+
+
