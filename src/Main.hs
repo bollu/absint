@@ -1481,7 +1481,7 @@ main = do
     putStrLn ""
     putStrLn "***pwaff values***"
     id2islid <- traverseMap (\(Id idstr) _ -> idAlloc islctx idstr) id2sym
-    id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2islid id2sym) id2sym
+    id2pwaff  <- traverse (symValToPwaff islctx id2islid id2sym) id2sym
 
 
     id2pwaff <- iteratePwaffRepresentation  islctx id2sym id2islid id2pwaff
