@@ -230,6 +230,17 @@ repeatTillFixDebugTrace 0 f a = [a]
 repeatTillFixDebugTrace n f a = 
   let a' = f a in if a' == a then [a] else a:repeatTillFixDebugTrace (n - 1) f a'
 
+repeatTillFixDebugTraceM :: (Eq a, Monad m) => Int -> (a -> m a) -> a -> m [a]
+repeatTillFixDebugTraceM 0 f a = return [a]
+repeatTillFixDebugTraceM n f a = do
+  a' <- f a
+  if a == a' 
+  then return [a]
+  else do
+    as <- repeatTillFixDebugTraceM (n - 1) f a'
+    return (a' : as)
+
+
 -- Program syntax
 -- ==============
 
@@ -1482,8 +1493,14 @@ main = do
     putStrLn "***pwaff values***"
     id2islid <- traverseMap (\(Id idstr) _ -> idAlloc islctx idstr) id2sym
     id2pwaff  <- traverse (symValToPwaff islctx id2islid id2sym) id2sym
-
-
-    id2pwaff <- iteratePwaffRepresentation  islctx id2sym id2islid id2pwaff
-
     traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty 
+
+
+    putStrLn ""
+    putStrLn "***iterated pwaff values***"
+    id2pwaffs <- repeatTillFixDebugTraceM 5 (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
+
+    forM_ id2pwaffs (\id2pwaff -> do
+      putStrLn "" 
+      traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty)
+
