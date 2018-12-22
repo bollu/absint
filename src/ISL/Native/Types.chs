@@ -60,10 +60,14 @@ data Constraint
 -- and printed using the following functions.
 data Id
 
+-- an ISL List of a's
+data List a
+
 data Val
 data Aff
 data Pwaff
 data Pwmultiaff
+data Multipwaff
 
 {#enum isl_dim_type as DimType {underscoreToCase} deriving(Eq, Show) #}
 {#enum isl_bool as IslBool {underscoreToCase} deriving(Eq, Show) #}

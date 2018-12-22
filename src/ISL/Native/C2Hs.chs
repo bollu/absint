@@ -11,6 +11,8 @@ module ISL.Native.C2Hs where
 #include <isl/map.h>
 #include <isl/set.h>
 #include <isl/space.h>
+#include <isl/list.h>
+#include <isl/multi.h>
 
 import Foreign.Ptr
 import Foreign.Marshal.Alloc
@@ -18,6 +20,7 @@ import Foreign.Storable
 import Foreign.C
 
 import ISL.Native.Types
+import Control.Monad (foldM)
 
 type PtrCtx = Ptr Ctx
 {#pointer *isl_ctx as PtrCtx -> Ctx nocode #}
@@ -47,6 +50,9 @@ type PtrPwAff = Ptr Pwaff
 type PtrPwmultiaff = Ptr Pwmultiaff
 {#pointer *isl_pw_multi_aff as PtrPwmultiaff -> Pwmultiaff nocode #}
 
+type PtrMultipwaff = Ptr Multipwaff
+{#pointer *isl_multi_pw_aff as PtrMultipwaff -> Multipwaff nocode #}
+
 
 type PtrVal = Ptr Val
 {#pointer *isl_val as PtrVal -> Val nocode #}
@@ -59,6 +65,12 @@ type PtrConstraint = Ptr Constraint
 
 type PtrId = Ptr Id
 {#pointer *isl_id as PtrId -> Id nocode #}
+
+
+-- type PtrListPwaff = Ptr (ListPwaff)
+-- {#pointer *isl_pw_aff_list as PtrListPwaff -> ListPwaff nocode #}
+type PtrListPwaff = Ptr (List Pwaff)
+{#pointer *isl_pw_aff_list as PtrListPwaff -> List Pwaff nocode #}
 
 -- =================
 -- ID
@@ -380,6 +392,16 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
   , id `CUInt'
   } -> `Ptr Space' id #}
 
+{#fun isl_space_map_from_domain_and_range as spaceMapFromDomainAndRange
+  { id `Ptr Space'
+  , id `Ptr Space'
+  } -> `Ptr Space' id #}
+
+
+{#fun isl_space_align_params as spaceAlignParams
+  { id `Ptr Space', id `Ptr Space' } -> `Ptr Space' id #}
+
+
 -- =================
 -- local space
 {#fun isl_local_space_add_dims as localSpaceAddDims
@@ -419,7 +441,7 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
 {#fun isl_local_space_set_dim_id as localSpaceSetDimId
   { id `Ptr LocalSpace'
   , fromDimType `DimType'
-  , id `CUInt'
+  , fromIntegral `Int'
   , id `Ptr Id'
   } -> `Ptr LocalSpace' id #}
 
@@ -495,6 +517,10 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
 {# fun isl_pw_aff_get_space as pwaffGetSpace
     {id `Ptr Pwaff' } -> `Ptr Space' id #}
 
+
+{# fun isl_pw_aff_get_domain_space as pwaffGetDomainSpace
+    {id `Ptr Pwaff' } -> `Ptr Space' id #}
+
 {#fun isl_pw_aff_add_dims as pwaffAddDims
   { id `Ptr Pwaff'
   , fromDimType `DimType'
@@ -518,6 +544,32 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
   { id `Ptr Pwaff'
   , id `Ptr Set'
   } -> `Ptr Pwaff' id #}
+
+
+{#fun isl_pw_aff_pullback_multi_pw_aff as pwaffPullbackMultiPwaff
+  { id `Ptr Pwaff'
+  , id `Ptr Multipwaff'
+  } -> `Ptr Pwaff' id #}
+
+-- =================
+-- pwaff list 
+
+
+{#fun isl_pw_aff_list_alloc as pwaffListAlloc
+  { id `Ptr Ctx', fromIntegral `Int' } -> `Ptr (List Pwaff)' id #}
+
+{#fun isl_pw_aff_list_insert as pwaffListInsert
+    {id `Ptr (List Pwaff)', fromIntegral `Int', id `Ptr Pwaff' } -> `Ptr (List Pwaff)' id #}
+
+{#fun isl_pw_aff_list_add as pwaffListAdd
+    {id `Ptr (List Pwaff)', id `Ptr Pwaff' } -> `Ptr (List Pwaff)' id #}
+
+toListPwaff :: Ptr Ctx -> [Ptr Pwaff] -> IO (Ptr (List Pwaff))
+toListPwaff ctx pws = do
+    l <- pwaffListAlloc ctx 0
+    foldM (\l pw -> pwaffListAdd l pw) l pws
+
+{#fun isl_multi_pw_aff_from_pw_aff_list as multipwaffFromPwaffList { id `Ptr Space', id `Ptr (List Pwaff)' } -> `Ptr Multipwaff' id #}
 
 -- =================
 -- pw multi aff

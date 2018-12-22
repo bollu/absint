@@ -953,14 +953,18 @@ programGetSymbolic (Program bbs) =
 -- ============================
 localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
 localSpaceIds ctx id2islid = do
-  ls <- localSpaceSetAlloc ctx (length id2islid) 0
+  ls <- localSpaceSetAlloc ctx 0 (length id2islid)
+  putStrLn "local space created."
   let islidcounters = zip (M.elems id2islid) [0, 1..]
   islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
 
+  putStrLn "local space adding dimensions."
   ls <- foldM 
           (\ls (islid, ix) -> 
-              localSpaceSetDimId ls IslDimParam (fromIntegral ix) islid) ls
+              localSpaceSetDimId ls IslDimSet ix islid) ls
                 islidcounters
+  putStrLn "local space added dimensions"
+  localSpaceDump ls
   return ls
 
 
@@ -971,8 +975,8 @@ idToAff :: Ptr Ctx
 idToAff ctx id2islid curid = do
   ls <- localSpaceIds ctx id2islid
   -- TODO: we are assuming that IDs are found in the parameter dimension
-  (Just varix) <- findDimById ls IslDimParam (id2islid M.! curid)
-  var <- affVarOnDomain ls IslDimParam varix
+  (Just varix) <- findDimById ls IslDimSet (id2islid M.! curid)
+  var <- affVarOnDomain ls IslDimSet varix
   return var
 
 termToPwaff :: Ptr Ctx 
@@ -1102,7 +1106,7 @@ instance Spaced (Ptr Space) where
 
 instance Spaced (Ptr LocalSpace) where
   getSpace = localSpaceGetSpace
-  setDimId x dt i id = localSpaceSetDimId x dt (fromIntegral i) id
+  setDimId x dt i id = localSpaceSetDimId x dt i id
   addDims x dt i = localSpaceAddDims x dt (fromIntegral i)
 
 
@@ -1189,6 +1193,7 @@ pwaffMkVivNonNegative pwaff = do
 
 
 
+
 -- Given the symbolic representation of all other expressions, maximal
 -- upto occurs check, create the symbolic value for this expression
 symValToPwaff :: Ptr Ctx 
@@ -1211,16 +1216,20 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
             pwlt <- return ltset >>= setIndicatorFunction >>= pwaffCoalesce 
             return pwlt >>= pwaffMkVivNonNegative
 
+-- symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = idToAff ctx id2islid idphi >>= pwaffFromAff
 -- TODO: actually attach the loop header name here
-symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
-  -- [id] -> { [] -> [id] }
+symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
+  -- { [x_loop, rest] -> [x_loop] }
   mapid <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
+  -- [x_loop] -> { [rest] -> [x_loop] }
   mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam
   setid <- mapWrap mapid
+  setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
 
-  -- [id] -> { [] -> [id + delta] }
+  --  { [x_loop, rest] -> [xloop + delta] }
   mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr) >>= mapFromPwaff
+  --  [x_loop] -> { [rest] -> [xloop + delta] }
   mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam
   mapToStr mapbackedge >>= \s -> putStrLn $ "mapbackedge: " ++ s
   setbackedge <- mapWrap mapbackedge
@@ -1277,8 +1286,12 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   k0 <- constraintSetCoefficientSi k0 IslDimIn idvivix (-1)
   final_iter_0 <- mapAddConstraint final_iter_0 k0
 
+  -- final: [params] -> { [k] -> [k + o0] : k > 0 and [0] -> [entry] }
   final <- mapUnion final final_iter_0
   mapToStr final >>= \s -> putStrLn $ "final map with entry: " ++ s
+
+  -- final, move parameters in:
+  ifnal <- mapConditionallyMoveDims final (const True) IslDimParam IslDimIn
 
 
   pwaff <- pwaffFromMap final >>= pwaffCoalesce
@@ -1291,6 +1304,8 @@ traverseMap :: (Ord k, Monad m) => (k -> v -> m o)
 traverseMap f k2v = 
   M.fromList <$> traverse (\(k, v) -> (k,) <$> f k v) (M.toList k2v)
 
+-- { [a] -> [b] }
+-- { [c] -> [a] }
 -- iterate the representation of values as pwaffs
 iteratePwaffRepresentation :: Ptr Ctx
             -> M.Map Id SymVal
@@ -1299,10 +1314,47 @@ iteratePwaffRepresentation :: Ptr Ctx
             -> IO (M.Map Id (Ptr Pwaff))
 iteratePwaffRepresentation ctx id2sym id2islid id2pwaff = 
   let helper :: Id -> Ptr Pwaff -> IO (Ptr Pwaff)
-      helper id pwaff = return $ id2pwaff M.! id
+      helper curid curpwaff = do
+        let cursym = id2sym M.! curid
+        let curislid = id2islid M.! curid 
+        let islid2pwaff = M.fromList [(islid, id2pwaff M.! id) | (id, islid) <- (M.toList id2islid)]
+
+        -- ids to replace this pwaff's representation with
+        -- pwaffs to pullback with
+        nin <- ndim curpwaff IslDimIn
+        islidstopullback <- traverse (getDimId curpwaff IslDimIn) [0..(nin-1)]
+        -- if we have the ID, then pullback. If not, produce the function
+        -- that evaluates to the given value
+        pwaffstopullback <- traverse 
+          (\islid ->
+            case islid2pwaff M.!? islid of 
+              Just pwaff -> return pwaff
+              Nothing -> do
+                space <- pwaffGetDomainSpace curpwaff >>= localSpaceFromSpace
+                -- find the given ISL id in the space
+                Just ix <- findDimById space IslDimSet islid
+                pw <- affVarOnDomain space IslDimSet ix >>= pwaffFromAff
+                pwaffGetSpace curpwaff >>= pwaffAlignParams pw 
+              ) islidstopullback
+
+        pwaffToStr curpwaff >>= \s -> putStrLn $ "bundle for: " ++ s
+        traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "  --" ++ s ) pwaffstopullback
+
+        domain <-pwaffGetDomainSpace curpwaff
+        domain' <- pwaffGetDomainSpace curpwaff
+
+        multipwspace <- spaceMapFromDomainAndRange domain domain'
+        multipwspace <- pwaffGetSpace curpwaff >>= \s -> 
+          spaceAlignParams multipwspace s
+
+        putStrLn "2"
+        listpws <- toListPwaff ctx pwaffstopullback 
+        putStrLn "3"
+        multipw <-  multipwaffFromPwaffList multipwspace listpws
+        putStrLn "4"
+
+        return curpwaff
    in traverseMap helper id2pwaff
-
-
 
 initId2Pwaff :: Ptr Ctx 
              -> M.Map Id (Ptr ISLTy.Id) -- ID to the ISL id of the variable
