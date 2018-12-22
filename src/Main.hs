@@ -1480,7 +1480,7 @@ main = do
 
     putStrLn ""
     putStrLn "***pwaff values***"
-    id2islid <- M.fromList <$> sequenceA (map (\id@(Id idstr) -> (id,) <$>  idAlloc islctx idstr) (M.keys id2sym))
+    id2islid <- traverseMap (\(Id idstr) _ -> idAlloc islctx idstr) id2sym
     id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2islid id2sym) id2sym
 
 
