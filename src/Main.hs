@@ -1274,6 +1274,24 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
   pwaffToStr pwaff >>= \s -> putStrLn $ "final pwaff:" ++ s
   return pwaff
 
+traverseMap :: (Ord k, Monad m) => (k -> v -> m o) 
+            -> M.Map k v 
+            -> m (M.Map k o)
+traverseMap f k2v = 
+  M.fromList <$> traverse (\(k, v) -> (k,) <$> f k v) (M.toList k2v)
+
+-- iterate the representation of values as pwaffs
+iteratePwaffRepresentation :: Ptr Ctx
+            -> M.Map Id SymVal
+            -> M.Map Id (Ptr ISLTy.Id) -- id to ISL ids of that variable
+            -> M.Map Id (Ptr Pwaff)
+            -> IO (M.Map Id (Ptr Pwaff))
+iteratePwaffRepresentation ctx id2sym id2islid id2pwaff = 
+  let helper :: Id -> Ptr Pwaff -> IO (Ptr Pwaff)
+      helper id pwaff = return $ id2pwaff M.! id
+   in traverseMap helper id2pwaff
+
+
 
 initId2Pwaff :: Ptr Ctx 
              -> M.Map Id (Ptr ISLTy.Id) -- ID to the ISL id of the variable
@@ -1464,5 +1482,8 @@ main = do
     putStrLn "***pwaff values***"
     id2islid <- M.fromList <$> sequenceA (map (\id@(Id idstr) -> (id,) <$>  idAlloc islctx idstr) (M.keys id2sym))
     id2pwaff  <- sequenceA $ fmap (symValToPwaff islctx id2islid id2sym) id2sym
+
+
+    id2pwaff <- iteratePwaffRepresentation  islctx id2sym id2islid id2pwaff
 
     traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty 
