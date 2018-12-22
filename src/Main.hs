@@ -1179,14 +1179,14 @@ pwaffAlignLoopViv pw pw' = do
 pwaffMkVivNonNegative :: Ptr Pwaff -> IO (Ptr Pwaff)
 pwaffMkVivNonNegative pwaff = do
   map <- mapFromPwaff pwaff
-  nin <- ndim map IslDimIn
+  n <- ndim map IslDimParam
 
   map <- foldM (\map ix -> do
           idgt0 <- getSpace map >>= localSpaceFromSpace >>= constraintAllocInequality
-          idgt0 <- constraintSetCoefficientSi idgt0 IslDimIn ix (1)
+          idgt0 <- constraintSetCoefficientSi idgt0 IslDimParam ix (1)
           map <- mapAddConstraint map idgt0
           return map
-        ) map [0..(fromIntegral nin-1)]
+        ) map [0..(fromIntegral n-1)]
 
 
   pwaffFromMap map >>= pwaffCoalesce
@@ -1292,6 +1292,8 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
   -- final, move parameters in:
   ifnal <- mapConditionallyMoveDims final (const True) IslDimParam IslDimIn
+  -- move the viv dimension out as a param
+  ifnal <- mapConditionallyMoveDims final (== idviv) IslDimIn IslDimParam
 
 
   pwaff <- pwaffFromMap final >>= pwaffCoalesce
@@ -1303,6 +1305,17 @@ traverseMap :: (Ord k, Monad m) => (k -> v -> m o)
             -> m (M.Map k o)
 traverseMap f k2v = 
   M.fromList <$> traverse (\(k, v) -> (k,) <$> f k v) (M.toList k2v)
+
+
+-- align the space against every member
+spaceAlignAgainstAll :: Spaced a => Ptr Space -> [a] -> IO (Ptr Space)
+spaceAlignAgainstAll sp as = do
+  foldM (\sp a -> getSpace a >>= spaceAlignParams sp) sp as
+
+-- This is ridiculous, I'm using O(n^2) to align params, but fuck it
+alignParamsPairwise :: [Ptr Pwaff] -> IO [Ptr Pwaff]
+alignParamsPairwise pws = 
+   traverse (\pw -> foldM (\pw pw' -> getSpace pw' >>= pwaffAlignParams pw) pw pws) pws
 
 -- { [a] -> [b] }
 -- { [c] -> [a] }
@@ -1325,7 +1338,7 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
         islidstopullback <- traverse (getDimId curpwaff IslDimIn) [0..(nin-1)]
         -- if we have the ID, then pullback. If not, produce the function
         -- that evaluates to the given value
-        pwaffstopullback <- traverse 
+        pullback_pws <- traverse 
           (\islid ->
             case islid2pwaff M.!? islid of 
               Just pwaff -> return pwaff
@@ -1334,13 +1347,23 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
                 -- find the given ISL id in the space
                 Just ix <- findDimById space IslDimSet islid
                 pw <- affVarOnDomain space IslDimSet ix >>= pwaffFromAff
-                pwaffGetSpace curpwaff >>= pwaffAlignParams pw 
+                return pw
+                -- pwaffGetSpace curpwaff >>= pwaffAlignParams pw 
               ) islidstopullback
 
-        pwaffToStr curpwaff >>= \s -> putStrLn $ "bundle for: " ++ s
-        traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "  --" ++ s ) pwaffstopullback
+        -- space to align everything against
+        putStrLn "1"
+        toalign <- pwaffGetSpace curpwaff >>= \s -> spaceAlignAgainstAll s pullback_pws
+        putStrLn "2"
+        curpwaff <- spaceCopy toalign >>= pwaffAlignParams curpwaff
+        putStrLn "3"
+        pullback_pws <- traverse (\pw -> spaceCopy toalign >>= pwaffAlignParams pw ) pullback_pws
+        putStrLn "4"
 
-        domain <-pwaffGetDomainSpace curpwaff
+        pwaffToStr curpwaff >>= \s -> putStrLn $ "bundle for: " ++ s
+        traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "  --" ++ s ) pullback_pws
+
+        domain <- pwaffGetDomainSpace curpwaff
         domain' <- pwaffGetDomainSpace curpwaff
 
         multipwspace <- spaceMapFromDomainAndRange domain domain'
@@ -1348,12 +1371,12 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
           spaceAlignParams multipwspace s
 
         putStrLn "2"
-        listpws <- toListPwaff ctx pwaffstopullback 
+        listpws <- toListPwaff ctx pullback_pws 
         putStrLn "3"
         multipw <-  multipwaffFromPwaffList multipwspace listpws
-        putStrLn "4"
-
-        return curpwaff
+        multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
+        putStrLn "----"
+        return curpwaff >>= pwaffCopy
    in traverseMap helper id2pwaff
 
 initId2Pwaff :: Ptr Ctx 

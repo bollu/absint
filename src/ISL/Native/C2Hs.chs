@@ -569,7 +569,12 @@ toListPwaff ctx pws = do
     l <- pwaffListAlloc ctx 0
     foldM (\l pw -> pwaffListAdd l pw) l pws
 
-{#fun isl_multi_pw_aff_from_pw_aff_list as multipwaffFromPwaffList { id `Ptr Space', id `Ptr (List Pwaff)' } -> `Ptr Multipwaff' id #}
+{#fun isl_multi_pw_aff_from_pw_aff_list as multipwaffFromPwaffList 
+{ id `Ptr Space', id `Ptr (List Pwaff)' } -> `Ptr Multipwaff' id #}
+
+
+{# fun isl_multi_pw_aff_to_str as multipwaffToStr
+    {id `Ptr Multipwaff' } -> `String' #}
 
 -- =================
 -- pw multi aff
