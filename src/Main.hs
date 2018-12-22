@@ -1120,7 +1120,30 @@ pwaffAlignLoopViv pw pw' = do
           let tofix = [ninpw..ninpw'-1]
           newids <- traverse (getDimId pw' IslDimIn) tofix
           pw <- addNamedDims pw IslDimIn newids
+          -- we need to ensure domain constraints are the same
+          pw'domain <- pwaffCopy pw' >>= mapFromPwaff >>= mapDomain
+          pw <- pwaffIntersectDomain pw pw'domain
           return pw
+
+-- On calling functions such as set indicator, we will get pwaffs
+-- with negative viv. For example, consider:
+-- set: { [x] : 0 <= x <= 4 }
+-- indicator: { [x] -> [1] : 0 <= x <= 4 , [x] -> [0]: x < 0 or x > 4 }
+-- We dont' want the part where x < 0, since viv can't be less than 0.
+pwaffMkVivNonNegative :: Ptr Pwaff -> IO (Ptr Pwaff)
+pwaffMkVivNonNegative pwaff = do
+  map <- mapFromPwaff pwaff
+  nin <- ndim map IslDimIn
+
+  mapToStr map >>= \s -> putStrLn $ "map: " ++ s
+  map <- foldM (\map ix -> do
+          idgt0 <- getSpace map >>= localSpaceFromSpace >>= constraintAllocInequality
+          idgt0 <- constraintSetCoefficientSi idgt0 IslDimIn ix (1)
+          map <- mapAddConstraint map idgt0
+          return map
+        ) map [0..(fromIntegral nin-1)]
+
+  pwaffFromMap map >>= pwaffCoalesce
 
 
 -- Given the symbolic representation of all other expressions, maximal
@@ -1139,7 +1162,11 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
 
   case bop of
     Add -> pwaffAdd pwl pwr
-    Lt ->  pwaffLtSet pwl pwr >>= setIndicatorFunction 
+    Lt ->  do
+            ltset <- pwaffLtSet pwl pwr 
+            setToStr ltset >>= \s -> putStrLn $ "-----> pwlt: " ++ s
+            pwlt <- return ltset >>= setIndicatorFunction >>= pwaffCoalesce 
+            return pwlt >>= pwaffMkVivNonNegative
 
 -- TODO: actually attach the loop header name here
 symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
@@ -1217,7 +1244,7 @@ symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
 
 
   putStrLn "#####"
-  pwaff <- pwaffFromMap final
+  pwaff <- pwaffFromMap final >>= pwaffCoalesce
   pwaffToStr pwaff >>= \s -> putStrLn $ "final pwaff:" ++ s
   return pwaff
 

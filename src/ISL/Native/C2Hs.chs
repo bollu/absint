@@ -280,6 +280,12 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , id `CUInt'
   , id `Ptr Id'
   } -> `Ptr Set' id #}
+
+  
+{#fun isl_set_coalesce as setCoalesce
+  { id `Ptr Set'
+  } -> `Ptr Set' id #}
+
 -- =================
 -- constraint
 
@@ -478,6 +484,17 @@ spaceGetDimId space dt ix = spaceGetDimId_ space dt (fromIntegral ix)
   , fromDimType `DimType'
   , id `CUInt'
   , id `Ptr Id'
+  } -> `Ptr Pwaff' id #}
+
+
+{#fun isl_pw_aff_coalesce as pwaffCoalesce
+  { id `Ptr Pwaff'
+  } -> `Ptr Pwaff' id #}
+
+
+{#fun isl_pw_aff_intersect_domain as pwaffIntersectDomain
+  { id `Ptr Pwaff'
+  , id `Ptr Set'
   } -> `Ptr Pwaff' id #}
 
 -- =================
