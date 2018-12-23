@@ -1324,6 +1324,8 @@ iteratePwaffRepresentation :: Ptr Ctx
 iteratePwaffRepresentation ctx id2sym id2islid id2pwaff = 
   let helper :: Id -> Ptr Pwaff -> IO (Ptr Pwaff)
       helper curid curpw = do
+        -- vvvv TODO: this fixes the memory corruption. Why?
+        curpw <- pwaffCopy curpw
         let cursym = id2sym M.! curid
         let curislid = id2islid M.! curid 
         let islid2pwaff = M.fromList [(islid, id2pwaff M.! id) | (id, islid) <- (M.toList id2islid)]
@@ -1370,13 +1372,15 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
         putStrLn "6"
         multipw <-  multipwaffFromPwaffList multipwspace listpws
         multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
+        pwaffToStr curpw >>= \s -> putStrLn $ "curpw: " ++ s
 
         putStrLn "----"
         -- vvv COMMMENT THIS TO FIX MEMORY CORRUPTION vv
-        newpw <- pwaffCopy curpw >>= \pw -> pwaffPullbackMultipwaff pw multipw
+        -- newpw <- pwaffCopy curpw >>= \pw -> pwaffPullbackMultipwaff pw multipw
         -- pwaffToStr newpw >>= \s -> putStrLn $ "newpw: " ++ s
 
-        pwaffCopy curpw
+        pwaffCopy curpw >>= \curpw -> pwaffPullbackMultipwaff curpw multipw
+
 
    in traverseMap helper id2pwaff
 
