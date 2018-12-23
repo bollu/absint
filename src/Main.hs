@@ -1312,10 +1312,6 @@ spaceAlignAgainstAll :: Spaced a => Ptr Space -> [a] -> IO (Ptr Space)
 spaceAlignAgainstAll sp as = do
   foldM (\sp a -> getSpace a >>= spaceAlignParams sp) sp as
 
--- This is ridiculous, I'm using O(n^2) to align params, but fuck it
-alignParamsPairwise :: [Ptr Pwaff] -> IO [Ptr Pwaff]
-alignParamsPairwise pws = 
-   traverse (\pw -> foldM (\pw pw' -> getSpace pw' >>= pwaffAlignParams pw) pw pws) pws
 
 -- { [a] -> [b] }
 -- { [c] -> [a] }
@@ -1327,56 +1323,61 @@ iteratePwaffRepresentation :: Ptr Ctx
             -> IO (M.Map Id (Ptr Pwaff))
 iteratePwaffRepresentation ctx id2sym id2islid id2pwaff = 
   let helper :: Id -> Ptr Pwaff -> IO (Ptr Pwaff)
-      helper curid curpwaff = do
+      helper curid curpw = do
         let cursym = id2sym M.! curid
         let curislid = id2islid M.! curid 
         let islid2pwaff = M.fromList [(islid, id2pwaff M.! id) | (id, islid) <- (M.toList id2islid)]
+        pwaffToStr curpw >>= \s -> putStrLn $ "curpw: " ++ s
 
         -- ids to replace this pwaff's representation with
         -- pwaffs to pullback with
-        nin <- ndim curpwaff IslDimIn
-        islidstopullback <- traverse (getDimId curpwaff IslDimIn) [0..(nin-1)]
+        nin <- ndim curpw IslDimIn
+        islidstopullback <- traverse (getDimId curpw IslDimIn) [0..(nin-1)]
         -- if we have the ID, then pullback. If not, produce the function
         -- that evaluates to the given value
         pullback_pws <- traverse 
           (\islid ->
             case islid2pwaff M.!? islid of 
-              Just pwaff -> return pwaff
+              Just pwaff -> pwaffCopy pwaff
               Nothing -> do
-                space <- pwaffGetDomainSpace curpwaff >>= localSpaceFromSpace
+                space <- pwaffGetDomainSpace curpw >>= localSpaceFromSpace
                 -- find the given ISL id in the space
                 Just ix <- findDimById space IslDimSet islid
                 pw <- affVarOnDomain space IslDimSet ix >>= pwaffFromAff
                 return pw
-                -- pwaffGetSpace curpwaff >>= pwaffAlignParams pw 
+                -- pwaffGetSpace curpw >>= pwaffAlignParams pw 
               ) islidstopullback
 
         -- space to align everything against
         putStrLn "1"
-        toalign <- pwaffGetSpace curpwaff >>= \s -> spaceAlignAgainstAll s pullback_pws
+        toalign <- pwaffGetSpace curpw >>= \s -> spaceAlignAgainstAll s pullback_pws
         putStrLn "2"
-        curpwaff <- spaceCopy toalign >>= pwaffAlignParams curpwaff
+        curpw <- spaceCopy toalign >>= pwaffAlignParams curpw
         putStrLn "3"
         pullback_pws <- traverse (\pw -> spaceCopy toalign >>= pwaffAlignParams pw ) pullback_pws
         putStrLn "4"
 
-        pwaffToStr curpwaff >>= \s -> putStrLn $ "bundle for: " ++ s
+        pwaffToStr curpw >>= \s -> putStrLn $ "bundle for: " ++ s
         traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "  --" ++ s ) pullback_pws
 
-        domain <- pwaffGetDomainSpace curpwaff
-        domain' <- pwaffGetDomainSpace curpwaff
+        domain <- pwaffGetDomainSpace curpw
+        domain' <- pwaffGetDomainSpace curpw
 
         multipwspace <- spaceMapFromDomainAndRange domain domain'
-        multipwspace <- pwaffGetSpace curpwaff >>= \s -> 
-          spaceAlignParams multipwspace s
-
-        putStrLn "2"
+        multipwspace <- pwaffGetSpace curpw >>= \s -> spaceAlignParams multipwspace s
+        putStrLn "5"
         listpws <- toListPwaff ctx pullback_pws 
-        putStrLn "3"
+        putStrLn "6"
         multipw <-  multipwaffFromPwaffList multipwspace listpws
         multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
+
         putStrLn "----"
-        return curpwaff >>= pwaffCopy
+        -- vvv COMMMENT THIS TO FIX MEMORY CORRUPTION vv
+        newpw <- pwaffCopy curpw >>= \pw -> pwaffPullbackMultipwaff pw multipw
+        -- pwaffToStr newpw >>= \s -> putStrLn $ "newpw: " ++ s
+
+        pwaffCopy curpw
+
    in traverseMap helper id2pwaff
 
 initId2Pwaff :: Ptr Ctx 

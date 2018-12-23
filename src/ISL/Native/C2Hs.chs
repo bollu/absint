@@ -546,7 +546,7 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
   } -> `Ptr Pwaff' id #}
 
 
-{#fun isl_pw_aff_pullback_multi_pw_aff as pwaffPullbackMultiPwaff
+{#fun isl_pw_aff_pullback_multi_pw_aff as pwaffPullbackMultipwaff
   { id `Ptr Pwaff'
   , id `Ptr Multipwaff'
   } -> `Ptr Pwaff' id #}
