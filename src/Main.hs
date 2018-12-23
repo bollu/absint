@@ -1351,16 +1351,12 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
               ) islidstopullback
 
         -- space to align everything against
-        putStrLn "1"
         toalign <- pwaffGetSpace curpw >>= \s -> spaceAlignAgainstAll s pullback_pws
-        putStrLn "2"
         curpw <- spaceCopy toalign >>= pwaffAlignParams curpw
-        putStrLn "3"
         pullback_pws <- traverse (\pw -> spaceCopy toalign >>= pwaffAlignParams pw ) pullback_pws
-        putStrLn "4"
 
         pwaffToStr curpw >>= \s -> putStrLn $ "bundle for: " ++ s
-        traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "  --" ++ s ) pullback_pws
+        traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "\t" ++ s ) pullback_pws
 
         domain <- pwaffGetDomainSpace curpw
         domain' <- pwaffGetDomainSpace curpw
@@ -1374,12 +1370,15 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
         multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
         pwaffToStr curpw >>= \s -> putStrLn $ "curpw: " ++ s
 
-        putStrLn "----"
         -- vvv COMMMENT THIS TO FIX MEMORY CORRUPTION vv
         -- newpw <- pwaffCopy curpw >>= \pw -> pwaffPullbackMultipwaff pw multipw
         -- pwaffToStr newpw >>= \s -> putStrLn $ "newpw: " ++ s
 
-        pwaffCopy curpw >>= \curpw -> pwaffPullbackMultipwaff curpw multipw
+        newpw <- pwaffCopy curpw >>= \curpw -> pwaffPullbackMultipwaff curpw multipw
+        newpw <- pwaffCoalesce newpw
+        pwaffToStr newpw >>= \s -> putStrLn $ "newpw: " ++ s ++ "\n"
+        putStrLn "----"
+        return newpw
 
 
    in traverseMap helper id2pwaff
@@ -1578,9 +1577,9 @@ main = do
 
     putStrLn ""
     putStrLn "***iterated pwaff values***"
-    id2pwaffs <- repeatTillFixDebugTraceM 5 (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
+    id2pwaffs <- repeatTillFixDebugTraceM 10 (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
 
     forM_ id2pwaffs (\id2pwaff -> do
-      putStrLn "" 
+      putStrLn "====\n====\n====="
       traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty)
 
