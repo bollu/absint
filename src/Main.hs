@@ -230,14 +230,14 @@ repeatTillFixDebugTrace 0 f a = [a]
 repeatTillFixDebugTrace n f a = 
   let a' = f a in if a' == a then [a] else a:repeatTillFixDebugTrace (n - 1) f a'
 
-repeatTillFixDebugTraceM :: (Eq a, Monad m) => Int -> (a -> m a) -> a -> m [a]
-repeatTillFixDebugTraceM 0 f a = return [a]
-repeatTillFixDebugTraceM n f a = do
+repeatTillFixDebugTraceM :: (Monad m) => Int -> (a -> a -> Bool) -> (a -> m a) -> a -> m [a]
+repeatTillFixDebugTraceM 0 eqf f a = return [a]
+repeatTillFixDebugTraceM n eqf f a = do
   a' <- f a
-  if a == a' 
+  if eqf a a' 
   then return [a]
   else do
-    as <- repeatTillFixDebugTraceM (n - 1) f a'
+    as <- repeatTillFixDebugTraceM (n - 1) eqf f a'
     return (a' : as)
 
 
@@ -1577,7 +1577,8 @@ main = do
 
     putStrLn ""
     putStrLn "***iterated pwaff values***"
-    id2pwaffs <- repeatTillFixDebugTraceM 10 (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
+    let is_maps_eq m1 m2 = and $ Unsafe.unsafePerformIO $ traverse (\k -> pwaffIsEqual (m1 M.! k) (m2 M.! k)) (M.keys m1)
+    id2pwaffs <- repeatTillFixDebugTraceM 10 is_maps_eq (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
 
     forM_ id2pwaffs (\id2pwaff -> do
       putStrLn "====\n====\n====="

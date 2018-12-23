@@ -551,6 +551,12 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
   , id `Ptr Multipwaff'
   } -> `Ptr Pwaff' id #}
 
+
+{#fun isl_pw_aff_is_equal as pwaffIsEqual
+  { id `Ptr Pwaff'
+  , id `Ptr Pwaff'
+  } -> `Bool' #}
+
 -- =================
 -- pwaff list 
 
