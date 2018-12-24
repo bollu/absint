@@ -954,7 +954,7 @@ phiGetSymbolic (Phi _ Phicond idphi (bbidl, idl) (bbidr, idr)) env =
  let 
     ml = exprGetSymbolic idphi (EId idl) env
     mr = exprGetSymbolic idphi (EId idr) env
-    mphi = liftA2 (\ml mr -> SymvalPhiloop idphi idl ml idr mr) ml mr
+    mphi = liftA2 (\ml mr -> SymvalPhicond idphi idl ml idr mr) ml mr
  in case mphi of
       Just sym -> M.insert idphi sym env
       Nothing -> M.insert idphi (symValId idphi) env
