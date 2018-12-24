@@ -310,14 +310,19 @@ instance Located Inst where
   location (Assign loc _ _) = loc
 
 -- Phi nodes
-data Phi = Phi !Loc Id (BBId, Id) (BBId, Id) deriving(Eq, Ord, Show)
+data Phity = Philoop | Phicond deriving(Eq, Ord, Show)
+instance Pretty Phity where
+  pretty (Philoop) = pretty "loop"
+  pretty (Phicond) = pretty "cond"
+
+data Phi = Phi !Loc Phity Id (BBId, Id) (BBId, Id) deriving(Eq, Ord, Show)
 
 instance Located Phi where
-  location (Phi loc _ _ _) = loc
+  location (Phi loc ty _ _ _) = loc
 
 instance Pretty Phi where
-  pretty (Phi pc id l r) =
-    pretty pc <+> pretty "phi" <+> 
+  pretty (Phi loc ty id l r) =
+    pretty loc <+> pretty "phi" <+> pretty ty <+>
       pretty id <+> equals <+> pretty l <+> pretty r
 
 -- Terminator instruction
@@ -475,7 +480,7 @@ mkSemPhi :: Pretty a => Phi
          -> BBId  -- prevbbid
          -> VEnv a 
          -> VEnv a
-mkSemPhi  p@(Phi _ id (bbidl, idl) (bbidr, idr)) prevbbid env = 
+mkSemPhi  p@(Phi _ _ id (bbidl, idl) (bbidr, idr)) prevbbid env = 
   if prevbbid == bbidl 
      then M.insert id (env !!# idl) env
      else if prevbbid == bbidr 
@@ -821,13 +826,13 @@ instance Pretty Symaff where
 -- polynomials
 data SymVal = SymValAff !Symaff 
             | SymValBinop !Binop !SymVal !SymVal 
-            | SymValPhi !Id !Id !SymVal !Id !SymVal deriving(Eq, Ord)
+            | SymvalPhiloop !Id !Id !SymVal !Id !SymVal deriving(Eq, Ord)
 
 -- return a list of IDs that occur in this symbolic value
 symValOccurs :: SymVal -> S.Set Id
 symValOccurs (SymValAff aff) = symAffOccurs aff
 symValOccurs (SymValBinop _ l r) = symValOccurs l `S.union` symValOccurs r
-symValOccurs (SymValPhi _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
+symValOccurs (SymvalPhiloop _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
@@ -845,7 +850,7 @@ instance Pretty SymVal where
   pretty (SymValAff p) = pretty p
   pretty (SymValBinop op sym sym') =
     parens $  pretty sym <+> pretty op <+> pretty sym'
-  pretty (SymValPhi idphi idl syml idr symr) 
+  pretty (SymvalPhiloop idphi idl syml idr symr) 
     = parens $ pretty "phi" <+> pretty idphi <+> pretty (idl, syml)<+> pretty (idr, symr)
 
 -- constant folding for symbols
@@ -907,11 +912,11 @@ mapInsertMaybe _ Nothing m = m
 -- Otherwise, disallow
 -- TODO: clean this up, too many cases
 phiGetSymbolic :: Phi -> M.Map Id SymVal -> M.Map Id SymVal
-phiGetSymbolic (Phi _ idphi (bbidl, idl) (bbidr, idr)) env = 
+phiGetSymbolic (Phi _ Philoop idphi (bbidl, idl) (bbidr, idr)) env = 
   let
     ml = exprGetSymbolic idphi (EId idl) env
     mr = exprGetSymbolic idphi (EId idr) env
-    mphi = liftA2 (\ml mr -> SymValPhi idphi idl ml idr mr) ml mr
+    mphi = liftA2 (\ml mr -> SymvalPhiloop idphi idl ml idr mr) ml mr
  in case mphi of
       Just sym -> M.insert idphi sym env
       Nothing -> M.insert idphi (symValId idphi) env
@@ -933,7 +938,7 @@ bbGetSymbolic bb env =
 
 bbInitSymbolic :: BB -> M.Map Id SymVal 
 bbInitSymbolic bb = 
-  let envphis = M.fromList $ map (\(Phi _ id _ _) -> (id, symValId id)) (bbphis bb)
+  let envphis = M.fromList $ map (\(Phi _ _ id _ _) -> (id, symValId id)) (bbphis bb)
       envinsts = M.fromList $ map (\(Assign _ id _ ) -> (id, symValId id)) (bbinsts bb)
    in envphis <> envinsts
 
@@ -1216,10 +1221,10 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
             pwlt <- return ltset >>= setIndicatorFunction >>= pwaffCoalesce 
             return pwlt >>= pwaffMkVivNonNegative
 
--- symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = idToAff ctx id2islid idphi >>= pwaffFromAff
+-- symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = idToAff ctx id2islid idphi >>= pwaffFromAff
 -- TODO: actually attach the loop header name here
 
-symValToPwaff ctx id2islid id2sym (SymValPhi idphi idl syml idr symr) = do
+symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = do
   -- { [x_loop, rest] -> [x_loop] }
   mapid <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
   -- [x_loop] -> { [rest] -> [x_loop] }
@@ -1494,10 +1499,10 @@ done = do
   loc <- builderLocIncr
   setTerm (Done loc)
 
-phi :: String -> (BBId, String) -> (BBId, String) -> ST.State ProgramBuilder ()
-phi id (bbidl, idl) (bbidr, idr) = do
+phi :: Phity -> String -> (BBId, String) -> (BBId, String) -> ST.State ProgramBuilder ()
+phi ty id (bbidl, idl) (bbidr, idr) = do
   loc <- builderLocIncr
-  appendPhi (Phi loc (Id id) (bbidl, Id idl) (bbidr, Id idr))
+  appendPhi (Phi loc ty (Id id) (bbidl, Id idl) (bbidr, Id idr))
 
 condbr :: String -> BBId -> BBId -> ST.State ProgramBuilder ()
 condbr id bbidt bbidf = do
@@ -1527,12 +1532,103 @@ pLoop = runProgramBuilder $ do
   done
 
   focusBB loop
-  phi "x_loop" (entry, "x_entry") (loop, "x_next")
+  phi Philoop "x_loop" (entry, "x_entry") (loop, "x_next")
 
   assign "x_loop_lt_5" ("x_loop" <. (EInt 5))
   assign "x_next" ("x_loop" +. (EInt 1))
 
   condbr "x_loop_lt_5" loop exit
+
+
+pNestedLoop :: Program
+pNestedLoop = runProgramBuilder $ do
+  entry <- buildNewBB "entry" Nothing 
+  loop1 <- buildNewBB "loop" (Just $ BBLoop [])
+  loop2 <- buildNewBB "loop2" (Just $ BBLoop [])
+  exit <- buildNewBB "exit" Nothing
+
+  focusBB entry
+  assign "x_entry" (EInt 1)
+  br loop1
+
+
+  focusBB loop1
+  phi Philoop "x_loop" (entry, "x_entry") (loop1, "x_next")
+  assign "y_entry" (EInt 0)
+
+  assign "x_loop_lt_5" ("x_loop" <. (EInt 5))
+  assign "x_next" ("x_loop" +. (EInt 1))
+
+  condbr "x_loop_lt_5" loop2 exit
+
+  focusBB loop2
+  phi Philoop "y_loop" (loop1, "y_entry") (loop2, "y_next")
+  assign "x_loop_lt_2" ("y_loop" <. (EInt 2))
+  assign "y_loop_next" ("y_loop" +. (EInt 1))
+  condbr "y_loop_lt_2" loop2 loop1
+
+
+  focusBB exit
+  done
+
+pIf :: Program
+pIf = runProgramBuilder $ do
+  entry <- buildNewBB "entry" Nothing
+  true <- buildNewBB "entry" Nothing
+  false <- buildNewBB "entry" Nothing
+  merge <- buildNewBB "entry" Nothing
+
+  focusBB entry
+  assign "x" (EInt 1)
+  assign "x_lt_2" $ "x" <. EInt 2
+  condbr "x_lt_2" true false
+
+  focusBB true
+  assign "yt" (EInt 1)
+  br merge
+
+  focusBB false
+  assign "yf" (EInt (-1))
+  br merge
+
+  focusBB merge
+  m <- phi Phicond "m" (true, "yt") (false, "yf")
+  done
+
+pAdjacentLoop :: Program
+pAdjacentLoop = runProgramBuilder $ do
+  entry <- buildNewBB "entry" Nothing 
+  loop1 <- buildNewBB "loop" (Just $ BBLoop [])
+  loop1_to_loop2 <- buildNewBB "loop1_to_loop2" (Just $ BBLoop [])
+  loop2 <- buildNewBB "loop2" (Just $ BBLoop [])
+  exit <- buildNewBB "exit" Nothing
+
+  focusBB entry
+  assign "x_entry" (EInt 1)
+  br loop1
+
+
+  focusBB loop1
+  phi Philoop "x_loop" (entry, "x_entry") (loop1, "x_next")
+
+  assign "x_loop_lt_5" ("x_loop" <. (EInt 5))
+  assign "x_next" ("x_loop" +. (EInt 1))
+
+  condbr "x_loop_lt_5" loop1 loop1_to_loop2
+
+  focusBB loop1_to_loop2
+  assign "y_entry" (EInt 0)
+  br loop2
+
+  focusBB loop2
+  phi Philoop "y_loop" (loop1_to_loop2, "y_entry") (loop2, "y_next")
+  assign "x_loop_lt_2" ("y_loop" <. (EInt 2))
+  assign "y_loop_next" ("y_loop" +. (EInt 1))
+  condbr "y_loop_lt_2" loop2 loop1
+
+
+  focusBB exit
+  done
 -- 
 -- -- ========================
 -- -- CHOOSE YOUR PROGRAM HERE
