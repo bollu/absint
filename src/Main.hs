@@ -267,21 +267,28 @@ instance Pretty Binop where
   pretty Add = pretty "+."
   pretty Lt = pretty "<."
 
-data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id | EParam Id
+data Paramid = Paramid String deriving(Eq, Ord)
+instance Show Paramid where
+  show (Paramid p) = "param:" ++ p
+
+instance Pretty Paramid where
+  pretty p = pretty . show $ p
+
+data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id | EParam Paramid
   deriving(Eq, Ord)
 
 instance Show Expr where
     show (EInt i) = show i
     show (EBool b) = show b
     show (EId id) = show id
-    show (EParam id) = show "p-" ++ show id
+    show (EParam id) = show id
     show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e2 ++ ")"
 
 instance Pretty Expr where
   pretty (EInt i) = pretty i
   pretty (EBool b) = pretty b
   pretty (EId id) = pretty id
-  pretty (EParam id) = pretty "p-" <> pretty id
+  pretty (EParam id) = pretty id
   pretty (EBinop op e1 e2) = parens $  pretty e1 <+> pretty op <+> pretty e2
 
 
@@ -392,18 +399,19 @@ bbGetLocs (BB _ _ loc phis insts term) =
   [loc] ++ (map location phis) ++ (map location insts) ++ [location term]
 
 
--- Program is a collection of basic blocks. First basic block is the
--- entry block (block that gets executed on startup
-newtype Program = Program [BB] deriving(Eq)
+-- Program is a collection of basic blocks, and list of input parameter names.
+-- First basic block is the entry block (block that gets executed on startup)
+data Program = Program { progparams :: S.Set Paramid, progbbs :: [BB]  } deriving(Eq)
 
 
 programMaxLoc :: Program -> Loc
-programMaxLoc (Program bbs) = 
+programMaxLoc (Program _ bbs) = 
   let locs = bbs >>= bbGetLocs 
    in maximum locs
 
 instance Pretty Program where
-  pretty (Program bbs) = vcat $ map pretty bbs
+  pretty (Program params bbs) = vcat $ 
+    [pretty "prog" <> parens (pretty (S.toList params))] ++ map pretty bbs
 
 -- Setup for the semantics
 -- =======================
@@ -448,7 +456,7 @@ type Collecting a = M.Map Loc (S.Set (Env a))
 
 -- Setup the initial environment for the collecting semantics
 collectingBegin :: Ord a => Program -> Env a -> Collecting a
-collectingBegin p@(Program (entry:_)) initenv = 
+collectingBegin p@(Program _ (entry:_)) initenv = 
   let locs = map Loc [-1..(unLoc (programMaxLoc p))]
       allempty = M.fromList $ zip locs (repeat mempty)
    in M.insert (location entry) (S.singleton initenv) allempty
@@ -526,11 +534,11 @@ bbExec sem (BB bbid bbty _ phis insts term) (Env venv lenv pcprev) =
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
 programBBId2BB :: Program -> M.Map BBId BB
-programBBId2BB (Program bbs) = 
+programBBId2BB (Program _ bbs) = 
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
 
 programBBId2nl :: Program -> M.Map BBId NaturalLoop
-programBBId2nl (Program bbs) = M.fromList $ do
+programBBId2nl (Program _ bbs) = M.fromList $ do
   bb <- bbs
   let ty = bbty bb
   case ty of
@@ -540,7 +548,7 @@ programBBId2nl (Program bbs) = M.fromList $ do
 
 
 programExec :: Pretty a => Semantics a -> Program -> Env a -> Env a
-programExec sem p@(Program bbs) env@(Env _ _ pc) = 
+programExec sem p@(Program _ bbs) env@(Env _ _ pc) = 
   let bbid2bb :: M.Map BBId BB
       bbid2bb = programBBId2BB p
   in
@@ -558,7 +566,7 @@ semExprConcrete :: Expr -> VEnv Int -> Int
 semExprConcrete (EInt i) _ =  i
 semExprConcrete (EBool b) _ =  if b then 1 else 0
 semExprConcrete (EId id) env = env !!# id
-semExprConcrete (EParam id) env = env !!# id
+semExprConcrete (EParam (Paramid id)) env = env !!# Id id
 semExprConcrete (EBinop op e1 e2) env = semExprConcrete e1 env `opimpl` semExprConcrete e2 env where
   opimpl = case op of
              Add -> (+)
@@ -731,7 +739,7 @@ bbExecCollecting sem bbid2nl bbid2loc bb csem = let
 
 
 programExecCollecting :: Ord a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
-programExecCollecting sem p@(Program bbs) csem = 
+programExecCollecting sem p@(Program _ bbs) csem = 
   let bbid2loc = M.map bbloc (programBBId2BB p) 
       bbid2nl = programBBId2nl p
    in foldl (\csem bb -> bbExecCollecting sem bbid2nl bbid2loc bb csem) csem bbs
@@ -919,7 +927,7 @@ exprGetSymbolic :: Id  -- identifier to avoid occurs check with
 exprGetSymbolic _ (EInt i) _ =  Just $ symValConst i
 exprGetSymbolic _ (EBool b) _ =  Just $ if b then (symValConst 1) else (symValConst 0)
 exprGetSymbolic idinf (EId id) env = (symBlockInfiniteType idinf (symValId id)) <$> (env M.!? id)
-exprGetSymbolic idinf (EParam p) env =  Just $ symValId p
+exprGetSymbolic idinf (EParam (Paramid p)) env =  Just $ symValId (Id p)
 exprGetSymbolic idinf (EBinop op e1 e2) env = 
   let ml = exprGetSymbolic idinf e1 env
       mr = exprGetSymbolic idinf e2 env
@@ -973,13 +981,18 @@ bbInitSymbolic bb =
    in envphis <> envinsts
 
 programGetSymbolic :: Program -> M.Map Id SymVal
-programGetSymbolic (Program bbs) = 
+programGetSymbolic (Program params bbs) = 
   let 
     runbbs :: M.Map Id SymVal -> M.Map Id SymVal
     runbbs env = foldl (flip bbGetSymbolic) env bbs
 
+    paramenv :: M.Map Id SymVal
+    paramenv = M.fromList $  
+      [(Id idstr, symValId (Id idstr)) | Paramid idstr <- S.toList params]
+
     initenv :: M.Map Id SymVal
-    initenv = mconcat $ map bbInitSymbolic bbs
+    initenv = (mconcat $ map bbInitSymbolic bbs) `M.union` paramenv
+
  in (repeatTillFix runbbs) initenv
 
 
@@ -1009,7 +1022,7 @@ idToAff :: Ptr Ctx
   -> IO (Ptr Aff)
 idToAff ctx id2islid curid = do
   ls <- localSpaceIds ctx id2islid
-  -- TODO: we are assuming that IDs are found in the parameter dimension
+  -- TODO: we are assuming that IDs are found in the parameter dimension.
   (Just varix) <- findDimById ls IslDimSet (id2islid !!# curid)
   var <- affVarOnDomain ls IslDimSet varix
   return var
@@ -1464,11 +1477,10 @@ instance ToExpr Expr where
 (<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
 (<.) a b = EBinop Lt (toexpr a) (toexpr b)
 
-param :: String -> Expr
-param = EParam . Id 
 
 -- Builder of program state
 data ProgramBuilder = ProgramBuilder { 
+  builderparams ::  S.Set Paramid,
   builderpc :: Loc, 
   curbbid :: Maybe BBId,
   bbid2bb :: OM.OrderedMap BBId BB
@@ -1478,12 +1490,22 @@ data ProgramBuilder = ProgramBuilder {
 runProgramBuilder :: ST.State ProgramBuilder () -> Program
 runProgramBuilder pbst = 
   let pbinit :: ProgramBuilder
-      pbinit = ProgramBuilder (Loc (-1)) Nothing OM.empty
+      pbinit = ProgramBuilder mempty (Loc (-1)) Nothing OM.empty
 
       pbout :: ProgramBuilder
       pbout = ST.execState pbst pbinit
-   in Program $ map snd (OM.toList (bbid2bb pbout))
 
+      progbbs :: [BB]
+      progbbs = map snd (OM.toList (bbid2bb pbout))
+
+      progparams = builderparams pbout
+   in Program progparams progbbs
+
+param :: String -> ST.State ProgramBuilder Expr
+param pname = do 
+  ST.modify (\s -> s { 
+    builderparams = (Paramid pname) `S.insert` (builderparams s) })
+  return (EParam (Paramid pname))
 
 builderLocIncr :: ST.State ProgramBuilder Loc
 builderLocIncr = do
@@ -1610,9 +1632,10 @@ pIf = runProgramBuilder $ do
   true <- buildNewBB "true" Nothing
   false <- buildNewBB "false" Nothing
   merge <- buildNewBB "merge" Nothing
+  p <- param "p"
 
   focusBB entry
-  assign "p_lt_2" $ (param "p") <. EInt 2
+  assign "p_lt_2" $ p <. EInt 2
   condbr "p_lt_2" true false
 
   focusBB true
