@@ -826,13 +826,17 @@ instance Pretty Symaff where
 -- polynomials
 data SymVal = SymValAff !Symaff 
             | SymValBinop !Binop !SymVal !SymVal 
-            | SymvalPhiloop !Id !Id !SymVal !Id !SymVal deriving(Eq, Ord)
+            | SymvalPhiloop !Id !Id !SymVal !Id !SymVal 
+            | SymvalPhicond !Id !Id !SymVal !Id !SymVal
+            deriving(Eq, Ord)
+
 
 -- return a list of IDs that occur in this symbolic value
 symValOccurs :: SymVal -> S.Set Id
 symValOccurs (SymValAff aff) = symAffOccurs aff
 symValOccurs (SymValBinop _ l r) = symValOccurs l `S.union` symValOccurs r
 symValOccurs (SymvalPhiloop _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
+symValOccurs (SymvalPhicond _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
 
 symValId :: Id -> SymVal
 symValId = SymValAff . symAffId
@@ -851,7 +855,11 @@ instance Pretty SymVal where
   pretty (SymValBinop op sym sym') =
     parens $  pretty sym <+> pretty op <+> pretty sym'
   pretty (SymvalPhiloop idphi idl syml idr symr) 
-    = parens $ pretty "phi" <+> pretty idphi <+> pretty (idl, syml)<+> pretty (idr, symr)
+    = parens $ pretty "phi_loop" <+> pretty idphi <+> 
+      pretty (idl, syml) <+> pretty (idr, symr)
+  pretty (SymvalPhicond idphi idl syml idr symr) 
+    = parens $ pretty "phi_cond" <+> pretty idphi <+> 
+      pretty (idl, syml) <+> pretty (idr, symr)
 
 -- constant folding for symbols
 symConstantFold :: SymVal -> SymVal
@@ -914,6 +922,14 @@ mapInsertMaybe _ Nothing m = m
 phiGetSymbolic :: Phi -> M.Map Id SymVal -> M.Map Id SymVal
 phiGetSymbolic (Phi _ Philoop idphi (bbidl, idl) (bbidr, idr)) env = 
   let
+    ml = exprGetSymbolic idphi (EId idl) env
+    mr = exprGetSymbolic idphi (EId idr) env
+    mphi = liftA2 (\ml mr -> SymvalPhiloop idphi idl ml idr mr) ml mr
+ in case mphi of
+      Just sym -> M.insert idphi sym env
+      Nothing -> M.insert idphi (symValId idphi) env
+phiGetSymbolic (Phi _ Phicond idphi (bbidl, idl) (bbidr, idr)) env = 
+ let 
     ml = exprGetSymbolic idphi (EId idl) env
     mr = exprGetSymbolic idphi (EId idr) env
     mphi = liftA2 (\ml mr -> SymvalPhiloop idphi idl ml idr mr) ml mr
@@ -1574,9 +1590,9 @@ pNestedLoop = runProgramBuilder $ do
 pIf :: Program
 pIf = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing
-  true <- buildNewBB "entry" Nothing
-  false <- buildNewBB "entry" Nothing
-  merge <- buildNewBB "entry" Nothing
+  true <- buildNewBB "true" Nothing
+  false <- buildNewBB "false" Nothing
+  merge <- buildNewBB "merge" Nothing
 
   focusBB entry
   assign "x" (EInt 1)
@@ -1634,7 +1650,7 @@ pAdjacentLoop = runProgramBuilder $ do
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
 pcur :: Program
-pcur = pLoop
+pcur = pIf
 
 
 main :: IO ()
