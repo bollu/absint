@@ -1256,7 +1256,6 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
   pwr <- symValToPwaff ctx id2islid id2sym r
   pwl <- pwaffAlignLoopViv pwl pwr
   pwr <- pwaffAlignLoopViv pwr pwl
-
   case bop of
     Add -> pwaffAdd pwl pwr
     Lt ->  do
@@ -1264,6 +1263,12 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
             pwlt <- return ltset >>= setIndicatorFunction >>= pwaffCoalesce 
             return pwlt >>= pwaffMkVivNonNegative
 
+symValToPwaff ctx id2islid id2sym (SymvalPhicond idphi idl syml idr symr) = do
+  pwl <- id2sym M.! idl
+  pwr <- idl2sym M.! idr
+  error "we need to propogate data along BB edges, or we need dominators"
+
+  
 -- symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = idToAff ctx id2islid idphi >>= pwaffFromAff
 -- TODO: actually attach the loop header name here
 
