@@ -30,15 +30,20 @@ import Foreign.Ptr
 import Control.Monad (foldM)
 import qualified Control.Monad (join)
 import qualified System.IO.Unsafe as Unsafe (unsafePerformIO)
+import GHC.Stack
 
 
-(!!#) :: Ord k => Pretty k => Pretty v => M.Map k v -> k -> v
+(!!#) :: HasCallStack => Ord k => Pretty k => Pretty v => M.Map k v -> k -> v
 (!!#) m k = 
   case M.lookup k m of
     Just v -> v
     Nothing -> error . docToString $  
                 pretty "missing key: " <+> pretty k <+> 
                   pretty "in map: " <+> pretty m
+{-# Inline (!!#) #-}
+
+instance Pretty (Ptr a) where
+  pretty pa = pretty $ show pa
 
 -- Pretty Utils
 -- ============
@@ -197,8 +202,8 @@ lmempty = LM $ M.empty
 lmtolist :: Ord k => SemiMeetMap k v -> [(k, v)]
 lmtolist (LM m) = M.toList m
 
-instance (Ord k, Show k, Show v) => Show (SemiMeetMap k v) where
-  show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
+instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (SemiMeetMap k v) where
+  show (LM m) = show $ [(k, m !!# k) | k <- M.keys m]
 
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (SemiMeetMap k v) where
@@ -262,19 +267,21 @@ instance Pretty Binop where
   pretty Add = pretty "+."
   pretty Lt = pretty "<."
 
-data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id
+data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id | EParam Id
   deriving(Eq, Ord)
 
 instance Show Expr where
     show (EInt i) = show i
     show (EBool b) = show b
     show (EId id) = show id
+    show (EParam id) = show "p-" ++ show id
     show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e2 ++ ")"
 
 instance Pretty Expr where
   pretty (EInt i) = pretty i
   pretty (EBool b) = pretty b
   pretty (EId id) = pretty id
+  pretty (EParam id) = pretty "p-" <> pretty id
   pretty (EBinop op e1 e2) = parens $  pretty e1 <+> pretty op <+> pretty e2
 
 
@@ -424,6 +431,10 @@ instance Pretty v => Pretty (Env v) where
 envBegin :: Env v
 envBegin = Env mempty mempty PCEntry
 
+
+envFromParamList :: [(Id, v)] -> Env v
+envFromParamList id2v = Env (M.fromList id2v) mempty PCEntry
+
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
 type AbsVal = Ptr Pwaff
@@ -435,11 +446,12 @@ type AbsDomain = M.Map Loc AbsEnv
 -- collecting semantics in general. Map PC to a set of environments
 type Collecting a = M.Map Loc (S.Set (Env a))
 
-collectingBegin :: Ord a => Program -> Collecting a
-collectingBegin p@(Program (entry:_)) = 
+-- Setup the initial environment for the collecting semantics
+collectingBegin :: Ord a => Program -> Env a -> Collecting a
+collectingBegin p@(Program (entry:_)) initenv = 
   let locs = map Loc [-1..(unLoc (programMaxLoc p))]
       allempty = M.fromList $ zip locs (repeat mempty)
-   in M.insert (location entry) (S.singleton envBegin) allempty
+   in M.insert (location entry) (S.singleton initenv) allempty
 
 -- concrete environments
 type ConcreteEnv = Env Int
@@ -546,6 +558,7 @@ semExprConcrete :: Expr -> VEnv Int -> Int
 semExprConcrete (EInt i) _ =  i
 semExprConcrete (EBool b) _ =  if b then 1 else 0
 semExprConcrete (EId id) env = env !!# id
+semExprConcrete (EParam id) env = env !!# id
 semExprConcrete (EBinop op e1 e2) env = semExprConcrete e1 env `opimpl` semExprConcrete e2 env where
   opimpl = case op of
              Add -> (+)
@@ -906,6 +919,7 @@ exprGetSymbolic :: Id  -- identifier to avoid occurs check with
 exprGetSymbolic _ (EInt i) _ =  Just $ symValConst i
 exprGetSymbolic _ (EBool b) _ =  Just $ if b then (symValConst 1) else (symValConst 0)
 exprGetSymbolic idinf (EId id) env = (symBlockInfiniteType idinf (symValId id)) <$> (env M.!? id)
+exprGetSymbolic idinf (EParam p) env =  Just $ symValId p
 exprGetSymbolic idinf (EBinop op e1 e2) env = 
   let ml = exprGetSymbolic idinf e1 env
       mr = exprGetSymbolic idinf e2 env
@@ -996,7 +1010,7 @@ idToAff :: Ptr Ctx
 idToAff ctx id2islid curid = do
   ls <- localSpaceIds ctx id2islid
   -- TODO: we are assuming that IDs are found in the parameter dimension
-  (Just varix) <- findDimById ls IslDimSet (id2islid M.! curid)
+  (Just varix) <- findDimById ls IslDimSet (id2islid !!# curid)
   var <- affVarOnDomain ls IslDimSet varix
   return var
 
@@ -1249,7 +1263,7 @@ symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = do
   setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
 
   --  { [x_loop, rest] -> [xloop + delta] }
-  mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym M.! idr) >>= mapFromPwaff
+  mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym !!# idr) >>= mapFromPwaff
   --  [x_loop] -> { [rest] -> [xloop + delta] }
   mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam
   mapToStr mapbackedge >>= \s -> putStrLn $ "mapbackedge: " ++ s
@@ -1260,7 +1274,7 @@ symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = do
   -- [x_loop] -> { [[] -> [xloop]] -> [[] -> [xloop + delta]] }
   mapbackedgeff <- mapFromDomainAndRange setid setbackedge
   mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff: " ++ s
-  (Just phiix)  <- mapGetIxOfId mapbackedgeff IslDimParam (id2islid M.! idphi) 
+  (Just phiix)  <- mapGetIxOfId mapbackedgeff IslDimParam (id2islid !!# idphi) 
   mapbackedgeff <- mapProjectOut mapbackedgeff IslDimParam (fromIntegral phiix) 1
   mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff (after project): " ++ s
 
@@ -1347,9 +1361,9 @@ iteratePwaffRepresentation ctx id2sym id2islid id2pwaff =
       helper curid curpw = do
         -- vvvv TODO: this fixes the memory corruption. Why?
         curpw <- pwaffCopy curpw
-        let cursym = id2sym M.! curid
-        let curislid = id2islid M.! curid 
-        let islid2pwaff = M.fromList [(islid, id2pwaff M.! id) | (id, islid) <- (M.toList id2islid)]
+        let cursym = id2sym !!# curid
+        let curislid = id2islid !!# curid 
+        let islid2pwaff = M.fromList [(islid, id2pwaff !!# id) | (id, islid) <- (M.toList id2islid)]
         pwaffToStr curpw >>= \s -> putStrLn $ "curpw: " ++ s
 
         -- ids to replace this pwaff's representation with
@@ -1449,6 +1463,9 @@ instance ToExpr Expr where
 
 (<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
 (<.) a b = EBinop Lt (toexpr a) (toexpr b)
+
+param :: String -> Expr
+param = EParam . Id 
 
 -- Builder of program state
 data ProgramBuilder = ProgramBuilder { 
@@ -1595,9 +1612,8 @@ pIf = runProgramBuilder $ do
   merge <- buildNewBB "merge" Nothing
 
   focusBB entry
-  assign "x" (EInt 1)
-  assign "x_lt_2" $ "x" <. EInt 2
-  condbr "x_lt_2" true false
+  assign "p_lt_2" $ (param "p") <. EInt 2
+  condbr "p_lt_2" true false
 
   focusBB true
   assign "yt" (EInt 1)
@@ -1652,6 +1668,8 @@ pAdjacentLoop = runProgramBuilder $ do
 pcur :: Program
 pcur = pIf
 
+envcur :: Env Int
+envcur = envFromParamList [(Id "p", 1)]
 
 main :: IO ()
 main = do
@@ -1663,15 +1681,14 @@ main = do
     putStrLn ""
     
     putStrLn "***program output***"
-    let outenv =  (programExec semConcrete pcur) envBegin
+    let outenv =  (programExec semConcrete pcur) envcur
     print outenv
 
 
     putStrLn "***collecting semantics (concrete x symbol):***"
-    let cbegin = (collectingBegin pcur) :: Collecting Int
+    let cbegin = (collectingBegin pcur envcur) :: Collecting Int
     let csem = programFixCollecting semConcrete pcur cbegin
     putDocW 80 (pretty csem)
-    -- forM_  (S.toList curCSemIntSym) (\m -> (putDocW 80 . pretty $ m) >> putStrLn "---")
 
   
     putStrLn ""
@@ -1689,7 +1706,7 @@ main = do
 
     putStrLn ""
     putStrLn "***iterated pwaff values***"
-    let is_maps_eq m1 m2 = and $ Unsafe.unsafePerformIO $ traverse (\k -> pwaffIsEqual (m1 M.! k) (m2 M.! k)) (M.keys m1)
+    let is_maps_eq m1 m2 = and $ Unsafe.unsafePerformIO $ traverse (\k -> pwaffIsEqual (m1 !!# k) (m2 !!# k)) (M.keys m1)
     id2pwaffs <- repeatTillFixDebugTraceM 10 is_maps_eq (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
 
     forM_ id2pwaffs (\id2pwaff -> do
