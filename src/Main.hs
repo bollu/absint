@@ -1264,8 +1264,8 @@ symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
             return pwlt >>= pwaffMkVivNonNegative
 
 symValToPwaff ctx id2islid id2sym (SymvalPhicond idphi idl syml idr symr) = do
-  pwl <- id2sym M.! idl
-  pwr <- idl2sym M.! idr
+  let pwl = id2sym M.! idl
+  let pwr = id2sym M.! idr
   error "we need to propogate data along BB edges, or we need dominators"
 
   
@@ -1724,7 +1724,8 @@ main = do
     let id2sym = programGetSymbolic pcur
     putDocW 80 (pretty id2sym)
 
-
+mainSym2Pwaff :: Ptr Ctx -> M.Map Id SymVal -> IO ()
+mainSym2Pwaff islctx id2sym = do
     putStrLn ""
     putStrLn "***pwaff values***"
     id2islid <- traverseMap (\(Id idstr) _ -> idAlloc islctx idstr) id2sym

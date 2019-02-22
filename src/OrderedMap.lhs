@@ -48,13 +48,14 @@ instance (Ord k, Pretty k, Pretty v) => Pretty (OrderedMap k v) where
     pkv :: (Pretty k, Pretty v) => (k, v) -> Doc ann
     pkv (k, v) =  pretty k <+> pretty " => " <+> pretty v
 
+instance Ord k => Semigroup (OrderedMap k v) where
+  (<>) :: OrderedMap k v -> OrderedMap k v -> OrderedMap k v
+  (<>) (OrderedMap m o) (OrderedMap m' o') = OrderedMap (m `mappend` m') (o `mappend` o')
 
 instance Ord k => Monoid (OrderedMap k v) where
   mempty :: OrderedMap k v
   mempty = OrderedMap mempty mempty
 
-  mappend :: OrderedMap k v -> OrderedMap k v -> OrderedMap k v
-  mappend (OrderedMap m o) (OrderedMap m' o') = OrderedMap (m `mappend` m') (o `mappend` o')
 
 
 empty :: Ord k => OrderedMap k v 
