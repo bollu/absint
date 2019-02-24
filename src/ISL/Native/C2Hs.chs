@@ -470,6 +470,8 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
     {id `Ptr Space'} -> `Ptr Set' id #}
 {# fun isl_set_indicator_function as setIndicatorFunction
     {id `Ptr Set'} -> `Ptr Pwaff' id #}
+{# fun isl_set_empty as setEmpty
+    {id `Ptr Space'} -> `Ptr Set' id#}
 
 
 {# fun isl_set_apply as setApply

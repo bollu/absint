@@ -14,7 +14,7 @@ import Data.List (intercalate, nub)
 import Data.Semigroup
 import qualified Control.Monad.State as ST
 import Data.Foldable 
-import Data.Traversable (sequenceA)
+import Data.Traversable (sequenceA, for)
 import Control.Applicative
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
@@ -41,8 +41,7 @@ import GHC.Stack
                 pretty "missing key: " <+> pretty k <+> 
                   pretty "in map: " <+> pretty m
 {-# Inline (!!#) #-}
-
-instance Pretty (Ptr a) where
+instance {-# OVERLAPPABLE #-} Pretty (Ptr a) where
   pretty pa = pretty $ show pa
 
 -- Pretty Utils
@@ -166,50 +165,50 @@ instance Show a => Show (BottomedLattice a) where
 
 -- A map based representation of a function (a -> b), which on partial
 -- missing keys returns _|_
-data SemiMeetMap k v = LM !(M.Map k v)  deriving (Eq, Ord, Functor)
+data LatticeMap k v = LM !(M.Map k v)  deriving (Eq, Ord, Functor)
 
 -- Insert a regular value into a lattice map
-lminsert :: Ord k => k -> v -> SemiMeetMap k v -> SemiMeetMap k v
+lminsert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
 lminsert k v (LM m) = LM $ M.insert k v m
 
 -- pointwise produce of two lattice maps
 -- If a value is missing in either lattice, put a bottom in its place
-lmproduct :: (SemiMeet v, SemiMeet w, Ord k) => SemiMeetMap k v -> SemiMeetMap k w -> SemiMeetMap k (v, w)
+lmproduct :: (SemiMeet v, SemiMeet w, Ord k) => LatticeMap k v -> LatticeMap k w -> LatticeMap k (v, w)
 lmproduct (LM m) (LM m') = let
   missingm' = M.mapMissing (\k w -> bottom)
   missingm =  M.mapMissing (\k v -> bottom)
   merger = M.zipWithMatched (\k tx ty -> (tx, ty))
   in LM $ M.merge missingm' missingm merger m m'
 
-adjust :: Ord k => k -> (v -> v) -> SemiMeetMap k v -> SemiMeetMap k v
+adjust :: Ord k => k -> (v -> v) -> LatticeMap k v -> LatticeMap k v
 adjust k f (LM m) = LM $ M.adjust f k m
 
-(!!#!) :: (Ord k, SemiMeet v) => SemiMeetMap k v -> k -> v
+(!!#!) :: (Ord k, SemiMeet v) => LatticeMap k v -> k -> v
 (!!#!) (LM m) k = case m M.!? k of
                    Just v -> v
                    Nothing -> bottom
 
 
-(!!#?) :: Ord k => SemiMeetMap k v -> k -> Maybe v
+(!!#?) :: Ord k => LatticeMap k v -> k -> Maybe v
 (!!#?) (LM m) k = m M.!? k 
 
-lmfromlist :: Ord k => [(k, v)] -> SemiMeetMap k v
+lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
 lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]
 
-lmempty :: SemiMeetMap k v 
+lmempty :: LatticeMap k v 
 lmempty = LM $ M.empty
 
-lmtolist :: Ord k => SemiMeetMap k v -> [(k, v)]
+lmtolist :: Ord k => LatticeMap k v -> [(k, v)]
 lmtolist (LM m) = M.toList m
 
-instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (SemiMeetMap k v) where
+instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (LatticeMap k v) where
   show (LM m) = show $ [(k, m !!# k) | k <- M.keys m]
 
 
-instance (Ord k, Pretty k, Pretty v) => Pretty (SemiMeetMap k v) where
+instance (Ord k, Pretty k, Pretty v) => Pretty (LatticeMap k v) where
   pretty (LM m) =  pretty m -- vcat $ [pretty k <+> pretty "->" <+> pretty (m !!# k) | k <- M.keys m]
 
-instance SemiMeet v => SemiMeet (SemiMeetMap k v) where
+instance SemiMeet v => SemiMeet (LatticeMap k v) where
   bottom = LM M.empty
   meet _ _ = error "TODO: define meet"
 
@@ -315,12 +314,17 @@ instance Pretty BBId where
   pretty (BBId id) = pretty id
 
 -- Instructions
-data Inst = Assign !Loc !Id !Expr  deriving(Eq, Ord, Show)
-instance Pretty Inst where
+data Assign = Assign {
+    assignloc :: !Loc,
+    assignid :: !Id,
+    assignexpr :: !Expr
+}deriving(Eq, Ord, Show)
+
+instance Pretty Assign where
   pretty (Assign pc id expr) =
     pretty pc <+> pretty id <+> equals <+> pretty expr
 
-instance Located Inst where
+instance Located Assign where
   location (Assign loc _ _) = loc
 
 -- Phi nodes
@@ -329,7 +333,13 @@ instance Pretty Phity where
   pretty (Philoop) = pretty "loop"
   pretty (Phicond) = pretty "cond"
 
-data Phi = Phi !Loc Phity Id (BBId, Id) (BBId, Id) deriving(Eq, Ord, Show)
+data Phi = Phi {
+    philoc :: !Loc,
+    phity :: Phity,
+    phiid :: Id,
+    phil :: (BBId, Id),
+    phir :: (BBId, Id) 
+} deriving(Eq, Ord, Show)
 
 instance Located Phi where
   location (Phi loc ty _ _ _) = loc
@@ -368,7 +378,7 @@ data BB = BB {
  bbty :: Maybe BBTy,
  bbloc :: Loc,
  bbphis :: [Phi],
- bbinsts :: [Inst],
+ bbinsts :: [Assign],
  bbterm :: Term 
 }deriving(Eq, Ord, Show)
 
@@ -381,7 +391,7 @@ instance Located BB where
   location (BB _ _ loc _ _ _) = loc
 
 
-bbModifyInsts :: ([Inst] -> [Inst]) -> BB -> BB
+bbModifyInsts :: ([Assign] -> [Assign]) -> BB -> BB
 bbModifyInsts f (BB id ty loc phis insts term) = 
   BB id ty loc phis (f insts) term 
 
@@ -398,12 +408,21 @@ bbGetLocs :: BB -> [Loc]
 bbGetLocs (BB _ _ loc phis insts term) = 
   [loc] ++ (map location phis) ++ (map location insts) ++ [location term]
 
+bbGetIds :: BB -> [Id]
+bbGetIds (BB _ _ _ phis assigns _) = 
+    map phiid phis ++ map assignid assigns
+
 
 -- Program is a collection of basic blocks, and list of input parameter names.
 -- First basic block is the entry block (block that gets executed on startup)
 data Program = Program { progparams :: S.Set Paramid, progbbs :: [BB]  } deriving(Eq)
 
+-- get the entry basic block ID
+programEntryId :: Program -> BBId
+programEntryId (Program _ (entry:_)) = bbid entry
 
+
+-- get the largest location
 programMaxLoc :: Program -> Loc
 programMaxLoc (Program _ bbs) = 
   let locs = bbs >>= bbGetLocs 
@@ -445,10 +464,6 @@ envFromParamList id2v = Env (M.fromList id2v) mempty PCEntry
 
 -- map variables to functions of loop trip counts
 type TripCount = M.Map Id Int
-type AbsVal = Ptr Pwaff
--- abstract environments
-type AbsEnv = Env AbsVal
-type AbsDomain = M.Map Loc AbsEnv 
 
 
 -- collecting semantics in general. Map PC to a set of environments
@@ -470,7 +485,7 @@ type ConcreteDomain  = Collecting ConcreteEnv
 
 -- type SemExpr = Expr -> Env a -> a
 -- type SemPhi = Phi -> BBId -> Env a -> Env a
--- type SemInst = Inst -> Env a -> Env a
+-- type SemInst = Assign -> Env a -> Env a
 -- type SemTerm = Term -> BBId -> Env a -> PC
 -- 
 -- definitino of semantics
@@ -479,7 +494,7 @@ data Semantics a = Semantics {
  semPredicate :: a -> Maybe Bool
 }
 
-mkSemInst :: (Expr -> VEnv a -> a) -> Inst -> VEnv a -> VEnv a
+mkSemInst :: (Expr -> VEnv a -> a) -> Assign -> VEnv a -> VEnv a
 mkSemInst sem (Assign _ id e) env  = 
   M.insert id (sem e env) env
 
@@ -632,7 +647,7 @@ mapEnvCollecting loc loc' f csem =
 
 instExecCollecting :: Ord a => Pretty a =>
                      (Expr -> VEnv a -> a) 
-                   -> Inst 
+                   -> Assign 
                    -> Loc -- loc to pull from
                    -> Collecting a -> Collecting a
 instExecCollecting exprsem inst loc csem = 
@@ -750,255 +765,9 @@ programFixCollecting :: (Eq a, Ord a, Pretty a, Pretty a) =>
 programFixCollecting sem p csem = 
   repeatTillFix (programExecCollecting sem p) csem
 
--- Symbolic values
--- ===============
 
-
--- Symbolic polynomial with constant term and coefficients for the other terms
-data Symaff = Symaff !(Int, M.Map Id Int) deriving (Eq, Ord)
-
--- return a list of IDs that occur in this sym aff
-symAffOccurs :: Symaff -> S.Set Id
-symAffOccurs (Symaff (_, coeffs)) = S.fromList $ M.keys $ M.filter (> 0) coeffs
-
-instance Show Symaff where
-  show (Symaff (c, coeffs)) = 
-    let 
-        showTerm :: Int -> Id -> Maybe String
-        showTerm 0 x = Nothing
-        showTerm 1 x = Just $ show x
-        showTerm c x = Just $ show c ++ show x
-
-        coeffs' :: [String]
-        coeffs' = catMaybes [showTerm c id | (id, c) <- M.toList coeffs]
-        
-        c' :: String
-        c' = if c == 0
-                then "" 
-                else if length coeffs' == 0 then show c else " + " ++ show c
-     in (intercalate " + " $ coeffs') ++ c'
-
--- lift an identifier to a polynomial
-symAffId :: Id -> Symaff
-symAffId id = Symaff (0, M.fromList [(id, 1)])
-
--- extract an ID from a symaff, if the symaff represents an Id
-symAffExtractId :: Symaff -> Maybe Id
-symAffExtractId sa@(Symaff (_, id2coeffs)) = 
-  case M.toList id2coeffs of
-    [(id, _)] -> Just id
-    _ -> Nothing
-
--- Lift a constant to a polynomial
-symAffConst :: Int -> Symaff
-symAffConst c = Symaff (c, M.empty)
-
--- remove IDs that have value 0 in the Symaff
--- Call internally after peforming operations
-_symAffRemoveZeroIds :: Symaff -> Symaff
-_symAffRemoveZeroIds (Symaff (c, cs)) = 
-  (Symaff (c, M.filter (/= 0) cs))
-
--- Add two symbolic polynomials
-symAffAdd :: Symaff -> Symaff -> Symaff
-symAffAdd (Symaff (c1, p1)) (Symaff (c2, p2)) = 
-  let pres = 
-        M.merge 
-          M.preserveMissing
-          M.preserveMissing
-          (M.zipWithMatched (\k x y -> x + y)) p1 p2 
-       in _symAffRemoveZeroIds $ Symaff (c1 + c2, pres)
-
--- If a Symaff is constant, return the constant value, otherwise
--- return Nothing
-symAffAsConst :: Symaff -> Maybe Int
-symAffAsConst (Symaff (c, cs)) = if cs == M.empty then Just c else Nothing
-
--- negate a Symbolic affine value
-symAffNegate :: Symaff -> Symaff
-symAffNegate (Symaff (c, cs)) = Symaff (-c, M.map (\x -> (-x)) cs)
-
--- Check if one Symaff is defnitely less than the other
--- Use the fact that x < y <-> x - y < 0
-symAffIsLt :: Symaff -> Symaff -> Maybe Bool
-symAffIsLt a1 a2 = 
-  let sub = symAffAdd a1 (symAffNegate a2)
-      msubc = symAffAsConst sub
-   in fmap (< 0)  msubc
-
-
-instance Pretty Symaff where
-  pretty (Symaff (c, coeffs)) = 
-    let 
-    prettyTerm :: Int -> Id -> Maybe (Doc a)
-    prettyTerm 0 x = Nothing
-    prettyTerm 1 x = Just $ pretty x
-    prettyTerm c x = Just $ pretty c <> pretty x 
-
-    c' :: Doc a
-    c' = if c == 0 then mempty 
-         else if null coeffs then pretty c else pretty "+" <+> pretty c
-
-    coeffs' :: [Doc a]
-    coeffs' = catMaybes [prettyTerm c id | (id, c) <- M.toList coeffs]
-     in hcat (punctuate (pretty "+") coeffs') <+> c'
-
--- Symbolic value that is either a symbolic polynomial or a binop of two such
--- polynomials
-data SymVal = SymValAff !Symaff 
-            | SymValBinop !Binop !SymVal !SymVal 
-            | SymvalPhiloop !Id !Id !SymVal !Id !SymVal 
-            | SymvalPhicond !Id !Id !SymVal !Id !SymVal
-            deriving(Eq, Ord)
-
-
--- return a list of IDs that occur in this symbolic value
-symValOccurs :: SymVal -> S.Set Id
-symValOccurs (SymValAff aff) = symAffOccurs aff
-symValOccurs (SymValBinop _ l r) = symValOccurs l `S.union` symValOccurs r
-symValOccurs (SymvalPhiloop _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
-symValOccurs (SymvalPhicond _ _ l _ r) = symValOccurs l `S.union` symValOccurs r
-
-symValId :: Id -> SymVal
-symValId = SymValAff . symAffId
-
-
-symValConst :: Int -> SymVal
-symValConst = SymValAff . symAffConst
-
-instance Show SymVal where
-  show (SymValAff p) = show p
-  show (SymValBinop op sym sym') = 
-   "(" ++ show op ++ " " ++ show sym ++ " " ++ show sym' ++ ")"
-
-instance Pretty SymVal where
-  pretty (SymValAff p) = pretty p
-  pretty (SymValBinop op sym sym') =
-    parens $  pretty sym <+> pretty op <+> pretty sym'
-  pretty (SymvalPhiloop idphi idl syml idr symr) 
-    = parens $ pretty "phi_loop" <+> pretty idphi <+> 
-      pretty (idl, syml) <+> pretty (idr, symr)
-  pretty (SymvalPhicond idphi idl syml idr symr) 
-    = parens $ pretty "phi_cond" <+> pretty idphi <+> 
-      pretty (idl, syml) <+> pretty (idr, symr)
-
--- constant folding for symbols
-symConstantFold :: SymVal -> SymVal
-symConstantFold (SymValBinop op s1 s2) = 
-  let 
-    s1' = symConstantFold s1
-    s2' = symConstantFold s2
- in case (op, s1', s2') of
-      (Add, SymValAff p1, SymValAff p2) -> SymValAff $ symAffAdd p1 p2
-      (Lt, SymValAff p1, SymValAff p2) -> 
-        case symAffIsLt p1 p2 of
-          Just True -> symValConst 1
-          Just False -> symValConst 0
-          Nothing -> (SymValBinop op s1' s2')
-      _ -> SymValBinop  op s1' s2'
-      
--- if it's a polynomial, leave it unchanged
-symConstantFold p = p
-
-
--- Values to make opaque at a given PC
-data OpaqueVals = OpaqueVals !(M.Map PC [Id])
-
-
--- Symbolic interpretation
+-- Abstract interpretation
 -- =======================
--- check if sym occurs in itself. ie, you're trying to construct an infinite type
-symInfiniteType :: Id -> SymVal -> Bool
-symInfiniteType id val = id `S.member` symValOccurs val
-
-
--- if the val is infinite, block it. Otherwise, let it be constructed
-symBlockInfiniteType :: Id -- id to block
-                     -> SymVal -- symval to use as backup
-                     -> SymVal -- symval to check
-                     -> SymVal
-symBlockInfiniteType id backup val = 
-  if symInfiniteType id val then backup else val
-
--- get the symbolic value of an expression
-exprGetSymbolic :: Id  -- identifier to avoid occurs check with
-                ->  Expr 
-                -> M.Map Id SymVal -> Maybe SymVal
-exprGetSymbolic _ (EInt i) _ =  Just $ symValConst i
-exprGetSymbolic _ (EBool b) _ =  Just $ if b then (symValConst 1) else (symValConst 0)
-exprGetSymbolic idinf (EId id) env = (symBlockInfiniteType idinf (symValId id)) <$> (env M.!? id)
-exprGetSymbolic idinf (EParam (Paramid p)) env =  Just $ symValId (Id p)
-exprGetSymbolic idinf (EBinop op e1 e2) env = 
-  let ml = exprGetSymbolic idinf e1 env
-      mr = exprGetSymbolic idinf e2 env
-   in liftA2 opimpl ml mr where
-    opimpl v1 v2 = symConstantFold $ SymValBinop op v1 v2
-
-mapInsertMaybe :: Ord k => k -> Maybe v -> M.Map k v -> M.Map k v
-mapInsertMaybe k (Just v) m = M.insert k v m
-mapInsertMaybe _ Nothing m = m
-
--- If the phi does not create an infinite type, then allow it.
--- Otherwise, disallow
--- TODO: clean this up, too many cases
-phiGetSymbolic :: Phi -> M.Map Id SymVal -> M.Map Id SymVal
-phiGetSymbolic (Phi _ Philoop idphi (bbidl, idl) (bbidr, idr)) env = 
-  let
-    ml = exprGetSymbolic idphi (EId idl) env
-    mr = exprGetSymbolic idphi (EId idr) env
-    mphi = liftA2 (\ml mr -> SymvalPhiloop idphi idl ml idr mr) ml mr
- in case mphi of
-      Just sym -> M.insert idphi sym env
-      Nothing -> M.insert idphi (symValId idphi) env
-phiGetSymbolic (Phi _ Phicond idphi (bbidl, idl) (bbidr, idr)) env = 
- let 
-    ml = exprGetSymbolic idphi (EId idl) env
-    mr = exprGetSymbolic idphi (EId idr) env
-    mphi = liftA2 (\ml mr -> SymvalPhicond idphi idl ml idr mr) ml mr
- in case mphi of
-      Just sym -> M.insert idphi sym env
-      Nothing -> M.insert idphi (symValId idphi) env
-
-
-instGetSymbolic :: Inst -> M.Map Id SymVal -> M.Map Id SymVal
-instGetSymbolic (Assign _ id expr) env = 
-  case exprGetSymbolic id expr env of
-    Just v -> M.insert id v env
-    Nothing -> M.insert id (symValId id) env
-
-  -- mapInsertMaybe id (exprGetSymbolic expr env) env
-
-bbGetSymbolic :: BB -> M.Map Id SymVal -> M.Map Id SymVal
-bbGetSymbolic bb env = 
-  let envphis = foldl (flip phiGetSymbolic) env (bbphis bb)
-      envinsts = foldl (flip instGetSymbolic) envphis (bbinsts bb)
-   in envinsts
-
-bbInitSymbolic :: BB -> M.Map Id SymVal 
-bbInitSymbolic bb = 
-  let envphis = M.fromList $ map (\(Phi _ _ id _ _) -> (id, symValId id)) (bbphis bb)
-      envinsts = M.fromList $ map (\(Assign _ id _ ) -> (id, symValId id)) (bbinsts bb)
-   in envphis <> envinsts
-
-programGetSymbolic :: Program -> M.Map Id SymVal
-programGetSymbolic (Program params bbs) = 
-  let 
-    runbbs :: M.Map Id SymVal -> M.Map Id SymVal
-    runbbs env = foldl (flip bbGetSymbolic) env bbs
-
-    paramenv :: M.Map Id SymVal
-    paramenv = M.fromList $  
-      [(Id idstr, symValId (Id idstr)) | Paramid idstr <- S.toList params]
-
-    initenv :: M.Map Id SymVal
-    initenv = (mconcat $ map bbInitSymbolic bbs) `M.union` paramenv
-
- in (repeatTillFix runbbs) initenv
-
-
-
--- Symbolic expression to Pwaff
--- ============================
 localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
 localSpaceIds ctx id2islid = do
   ls <- localSpaceSetAlloc ctx 0 (length id2islid)
@@ -1016,43 +785,6 @@ localSpaceIds ctx id2islid = do
   return ls
 
 
-idToAff :: Ptr Ctx
-  -> M.Map Id (Ptr ISLTy.Id)
-  -> Id
-  -> IO (Ptr Aff)
-idToAff ctx id2islid curid = do
-  ls <- localSpaceIds ctx id2islid
-  -- TODO: we are assuming that IDs are found in the parameter dimension.
-  (Just varix) <- findDimById ls IslDimSet (id2islid !!# curid)
-  var <- affVarOnDomain ls IslDimSet varix
-  return var
-
-termToPwaff :: Ptr Ctx 
-            -> M.Map Id (Ptr ISLTy.Id) 
-            -> M.Map Id SymVal 
-            -> Id 
-            -> Int 
-            -> IO (Ptr Pwaff)
-termToPwaff ctx id2islid id2sym id coeff = do
-  -- TODO: refactor this
-  var <- idToAff ctx id2islid id
-  coeff <- localSpaceIds ctx id2islid >>= \ls -> affInt ctx ls coeff
-  term <- affMul var coeff >>= pwaffFromAff
-  return term
-
-
-  
-
-symaffToPwaff :: Ptr Ctx -> M.Map Id (Ptr ISLTy.Id) -> M.Map Id SymVal -> Symaff -> IO (Ptr Pwaff)
-symaffToPwaff ctx id2islid id2sym(Symaff (c, terms)) = do
-    ls <- localSpaceIds ctx id2islid 
-    pwconst <- pwaffInt ctx ls c
-    pwaffToStr pwconst >>= \s -> putStrLn $ "pwconst:" ++ s
-    if M.null terms
-       then return pwconst
-       else do
-         pwterms <- traverse (\(id, coeff) -> termToPwaff ctx id2islid id2sym id coeff) (M.toList terms)
-         foldM pwaffAdd pwconst pwterms 
 
 -- add a new dimension to the map and return its index
 mapAddUnnamedDim :: Ptr Map -> DimType -> Maybe (Ptr ISLTy.Id) -> IO (Ptr Map, Int)
@@ -1180,275 +912,52 @@ class Spaced b => Alignable a b where
 instance Spaced b => Alignable (Ptr Pwaff) b where
   alignParams pwaff b = getSpace b >>= \s -> pwaffAlignParams pwaff s
 
-
-
 constraintEqualityForSpaced :: Spaced  a => a -> IO (Ptr Constraint)
 constraintEqualityForSpaced set = do
   getSpace set >>= localSpaceFromSpace >>= constraintAllocEquality
 
 
--- assume two pwaffs:
--- pw1: [x_entry, params] -> { [viv] -> [x_entry + viv] : viv >= 0 }
--- pw2: [params] -> { [1] }
--- We would like to add the inputs of pw1 to pw2, and lift it to the constant function
--- In general, we want to check that the dimensions match till where they match,
--- and align the rest
--- aligns the *first* parameter *to* second param
--- if first has more dimensions, returns the second unchanged
-pwaffAlignLoopViv :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
-pwaffAlignLoopViv pw pw' = do
-    ninpw <- ndim pw IslDimIn
-    ninpw' <- ndim pw' IslDimIn
-
-    if ninpw > ninpw' 
-       then return pw
-       else do 
-          -- indeces to check are equal
-          let tocheck = [0..ninpw-1]
-          forM_ tocheck (\ix -> do
-            id <- getDimId pw IslDimIn ix
-            id' <- getDimId pw' IslDimIn ix
-            return $ assert  (id == id') ())
-
-          -- indeces to be aligned
-          let tofix = [ninpw..ninpw'-1]
-          newids <- traverse (getDimId pw' IslDimIn) tofix
-          pw <- addNamedDims pw IslDimIn newids
-          -- we need to ensure domain constraints are the same
-          pw'domain <- pwaffCopy pw' >>= mapFromPwaff >>= mapDomain
-          pw <- pwaffIntersectDomain pw pw'domain
-          return pw
-
--- On calling functions such as set indicator, we will get pwaffs
--- with negative viv. For example, consider:
--- set: { [x] : 0 <= x <= 4 }
--- indicator: { [x] -> [1] : 0 <= x <= 4 , [x] -> [0]: x < 0 or x > 4 }
--- We dont' want the part where x < 0, since viv can't be less than 0.
-pwaffMkVivNonNegative :: Ptr Pwaff -> IO (Ptr Pwaff)
-pwaffMkVivNonNegative pwaff = do
-  map <- mapFromPwaff pwaff
-  n <- ndim map IslDimParam
-
-  map <- foldM (\map ix -> do
-          idgt0 <- getSpace map >>= localSpaceFromSpace >>= constraintAllocInequality
-          idgt0 <- constraintSetCoefficientSi idgt0 IslDimParam ix (1)
-          map <- mapAddConstraint map idgt0
-          return map
-        ) map [0..(fromIntegral n-1)]
-
-
-  pwaffFromMap map >>= pwaffCoalesce
-
-
-
-
--- Given the symbolic representation of all other expressions, maximal
--- upto occurs check, create the symbolic value for this expression
-symValToPwaff :: Ptr Ctx 
-              -> M.Map Id (Ptr ISLTy.Id) -- id to ISL ids of that variable
-              -> M.Map Id SymVal  -- values of each ID
-              -> SymVal  -- symval to convert
-              -> IO (Ptr Pwaff)
-symValToPwaff ctx id2islid id2sym (SymValAff aff) = 
-  symaffToPwaff ctx id2islid id2sym aff
-symValToPwaff ctx id2islid id2sym (SymValBinop bop l r) = do
-  pwl <- symValToPwaff ctx id2islid id2sym l
-  pwr <- symValToPwaff ctx id2islid id2sym r
-  pwl <- pwaffAlignLoopViv pwl pwr
-  pwr <- pwaffAlignLoopViv pwr pwl
-  case bop of
-    Add -> pwaffAdd pwl pwr
-    Lt ->  do
-            ltset <- pwaffLtSet pwl pwr 
-            pwlt <- return ltset >>= setIndicatorFunction >>= pwaffCoalesce 
-            return pwlt >>= pwaffMkVivNonNegative
-
-symValToPwaff ctx id2islid id2sym (SymvalPhicond idphi idl syml idr symr) = do
-  let pwl = id2sym M.! idl
-  let pwr = id2sym M.! idr
-  error "we need to propogate data along BB edges, or we need dominators"
-
-  
--- symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = idToAff ctx id2islid idphi >>= pwaffFromAff
--- TODO: actually attach the loop header name here
-
-symValToPwaff ctx id2islid id2sym (SymvalPhiloop idphi idl syml idr symr) = do
-  -- { [x_loop, rest] -> [x_loop] }
-  mapid <- symValToPwaff ctx id2islid id2sym (symValId idphi) >>= mapFromPwaff
-  -- [x_loop] -> { [rest] -> [x_loop] }
-  mapid <- mapConditionallyMoveDims mapid (const True) IslDimIn IslDimParam
-  setid <- mapWrap mapid
-  setToStr setid >>= \s -> putStrLn $ "setid: " ++ s
-
-  --  { [x_loop, rest] -> [xloop + delta] }
-  mapbackedge <- symValToPwaff ctx id2islid id2sym (id2sym !!# idr) >>= mapFromPwaff
-  --  [x_loop] -> { [rest] -> [xloop + delta] }
-  mapbackedge <- mapConditionallyMoveDims mapbackedge (const True) IslDimIn IslDimParam
-  mapToStr mapbackedge >>= \s -> putStrLn $ "mapbackedge: " ++ s
-  setbackedge <- mapWrap mapbackedge
-  setToStr setbackedge >>= \s -> putStrLn $ "setbackege: " ++ s
-
-
-  -- [x_loop] -> { [[] -> [xloop]] -> [[] -> [xloop + delta]] }
-  mapbackedgeff <- mapFromDomainAndRange setid setbackedge
-  mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff: " ++ s
-  (Just phiix)  <- mapGetIxOfId mapbackedgeff IslDimParam (id2islid !!# idphi) 
-  mapbackedgeff <- mapProjectOut mapbackedgeff IslDimParam (fromIntegral phiix) 1
-  mapToStr mapbackedgeff >>= \s -> putStrLn $ "mapbackedgeff (after project): " ++ s
-
-
-
-  -- [params] -> { [k] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
-  (pow, _) <- mapPower mapbackedgeff
-  idviv <- idAlloc ctx "viv"
-  pow <- mapSetDimId pow IslDimIn 0 idviv
-  mapToStr pow >>= \s -> putStrLn $ "power: " ++ s
-
-  -- [params, k] -> { [] -> [[[] -> [o0]] -> [[] -> [k + o0]]] : k > 0 }
-  pow <- mapConditionallyMoveDims pow (const True) IslDimIn IslDimParam
-  -- [params, k] -> { [[] -> [o0]] -> [[] -> [k + o0]] : k > 0 }
-  pow <- mapRange pow >>= setUnwrap
-
-  -- { [params] -> [entryval] }
-  entry <- symValToPwaff ctx id2islid id2sym (symValId idl) >>= mapFromPwaff
-  -- [params] -> { [] -> [entryval] }
-  entry <- mapConditionallyMoveDims entry (const True) IslDimIn IslDimParam
-  mapToStr entry >>= \s -> putStrLn  $ "entry: " ++ s
-
-  -- [params] -> { [[] -> [entryval]] }
-  entryset <- mapCopy entry >>= mapWrap
-
-  -- [params, k] -> { [] -> [k+ o0] }
-  final <- setApply entryset pow >>= setUnwrap
-
-
-  -- [params] -> { [k] -> [k+ o0] }
-  final <- mapConditionallyMoveDims  final (== idviv) IslDimParam IslDimIn
-  mapToStr final >>= \s -> putStrLn  $ "final: " ++ s
-
-  -- Now, align final with the entry data
-  -- final: [params] -> { [k] -> [k + o0] }
-  -- entry: [params] -> { [o0] }
-  -- need to make entry:
-  -- entry: [params] -> { [k] -> [o0] : k = 0 }
-  (final_iter_0, _) <- mapCopy entry >>= \entry -> mapAddUnnamedDim entry IslDimIn  (Just idviv)
-
-  k0 <- constraintEqualityForSpaced final_iter_0
-  -- TODO: verify that dim 0 is `idviv`
-  let idvivix = 0
-  k0 <- constraintSetCoefficientSi k0 IslDimIn idvivix (-1)
-  final_iter_0 <- mapAddConstraint final_iter_0 k0
-
-  -- final: [params] -> { [k] -> [k + o0] : k > 0 and [0] -> [entry] }
-  final <- mapUnion final final_iter_0
-  mapToStr final >>= \s -> putStrLn $ "final map with entry: " ++ s
-
-  -- final, move parameters in:
-  ifnal <- mapConditionallyMoveDims final (const True) IslDimParam IslDimIn
-  -- move the viv dimension out as a param
-  ifnal <- mapConditionallyMoveDims final (== idviv) IslDimIn IslDimParam
-
-
-  pwaff <- pwaffFromMap final >>= pwaffCoalesce
-  pwaffToStr pwaff >>= \s -> putStrLn $ "final pwaff:" ++ s
-  return pwaff
-
-traverseMap :: (Ord k, Monad m) => (k -> v -> m o) 
-            -> M.Map k v 
-            -> m (M.Map k o)
-traverseMap f k2v = 
-  M.fromList <$> traverse (\(k, v) -> (k,) <$> f k v) (M.toList k2v)
-
-
--- align the space against every member
-spaceAlignAgainstAll :: Spaced a => Ptr Space -> [a] -> IO (Ptr Space)
-spaceAlignAgainstAll sp as = do
-  foldM (\sp a -> getSpace a >>= spaceAlignParams sp) sp as
-
-
--- { [a] -> [b] }
--- { [c] -> [a] }
--- iterate the representation of values as pwaffs
-iteratePwaffRepresentation :: Ptr Ctx
-            -> M.Map Id SymVal
-            -> M.Map Id (Ptr ISLTy.Id) -- id to ISL ids of that variable
-            -> M.Map Id (Ptr Pwaff)
-            -> IO (M.Map Id (Ptr Pwaff))
-iteratePwaffRepresentation ctx id2sym id2islid id2pwaff = 
-  let helper :: Id -> Ptr Pwaff -> IO (Ptr Pwaff)
-      helper curid curpw = do
-        -- vvvv TODO: this fixes the memory corruption. Why?
-        curpw <- pwaffCopy curpw
-        let cursym = id2sym !!# curid
-        let curislid = id2islid !!# curid 
-        let islid2pwaff = M.fromList [(islid, id2pwaff !!# id) | (id, islid) <- (M.toList id2islid)]
-        pwaffToStr curpw >>= \s -> putStrLn $ "curpw: " ++ s
-
-        -- ids to replace this pwaff's representation with
-        -- pwaffs to pullback with
-        nin <- ndim curpw IslDimIn
-        islidstopullback <- traverse (getDimId curpw IslDimIn) [0..(nin-1)]
-        -- if we have the ID, then pullback. If not, produce the function
-        -- that evaluates to the given value
-        pullback_pws <- traverse 
-          (\islid ->
-            case islid2pwaff M.!? islid of 
-              Just pwaff -> pwaffCopy pwaff
-              Nothing -> do
-                space <- pwaffGetDomainSpace curpw >>= localSpaceFromSpace
-                -- find the given ISL id in the space
-                Just ix <- findDimById space IslDimSet islid
-                pw <- affVarOnDomain space IslDimSet ix >>= pwaffFromAff
-                return pw
-                -- pwaffGetSpace curpw >>= pwaffAlignParams pw 
-              ) islidstopullback
-
-        -- space to align everything against
-        toalign <- pwaffGetSpace curpw >>= \s -> spaceAlignAgainstAll s pullback_pws
-        curpw <- spaceCopy toalign >>= pwaffAlignParams curpw
-        pullback_pws <- traverse (\pw -> spaceCopy toalign >>= pwaffAlignParams pw ) pullback_pws
-
-        pwaffToStr curpw >>= \s -> putStrLn $ "bundle for: " ++ s
-        traverse (\pwaff -> pwaffToStr pwaff >>= \s -> putStrLn $ "\t" ++ s ) pullback_pws
-
-        domain <- pwaffGetDomainSpace curpw
-        domain' <- pwaffGetDomainSpace curpw
-
-        multipwspace <- spaceMapFromDomainAndRange domain domain'
-        multipwspace <- pwaffGetSpace curpw >>= \s -> spaceAlignParams multipwspace s
-        putStrLn "5"
-        listpws <- toListPwaff ctx pullback_pws 
-        putStrLn "6"
-        multipw <-  multipwaffFromPwaffList multipwspace listpws
-        multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
-        pwaffToStr curpw >>= \s -> putStrLn $ "curpw: " ++ s
-
-        -- vvv COMMMENT THIS TO FIX MEMORY CORRUPTION vv
-        -- newpw <- pwaffCopy curpw >>= \pw -> pwaffPullbackMultipwaff pw multipw
-        -- pwaffToStr newpw >>= \s -> putStrLn $ "newpw: " ++ s
-
-        newpw <- pwaffCopy curpw >>= \curpw -> pwaffPullbackMultipwaff curpw multipw
-        newpw <- pwaffCoalesce newpw
-        pwaffToStr newpw >>= \s -> putStrLn $ "newpw: " ++ s ++ "\n"
-        putStrLn "----"
-        return newpw
-
-
-   in traverseMap helper id2pwaff
-
-initId2Pwaff :: Ptr Ctx 
-             -> M.Map Id (Ptr ISLTy.Id) -- ID to the ISL id of the variable
-             -> [Id] 
-             -> IO (M.Map Id (Ptr Pwaff)) 
-initId2Pwaff ctx id2islids ids = 
-  M.fromList <$> traverse 
-    (\id -> (id,) <$>  (idToAff ctx id2islids id >>= pwaffFromAff)) ids
-
 -- Abstract interpretation
 -- =======================
+instance Pretty (Ptr Pwaff) where
+    pretty pw = pretty $ (Unsafe.unsafePerformIO (pwaffToStr pw))
+-- abstract environments
+type AbsVEnv = LatticeMap Id (Ptr Pwaff)
+data AbsDomain = 
+    AbsDomain (LatticeMap Id (Ptr Pwaff)) (LatticeMap (BBId, BBId) (Ptr Set))
+    deriving(Show)
 
-absint :: Program -> AbsDomain
-absint = undefined
+instance Pretty AbsDomain where
+    pretty (AbsDomain id2pwaff edge2set) = vcat [pretty id2pwaff, pretty edge2set]
+
+-- construct a pwnan on the n-dimensional space
+pwnan :: Ptr Ctx -> Ptr Space -> IO (Ptr Pwaff)
+pwnan ctx s = do
+    ls <- spaceCopy s >>= localSpaceFromSpace
+    emptyset <- setEmpty s
+
+    pwaff <- pwaffInt ctx ls 0 -- affValOnDomain ls 0 >>= pwaffFromAff
+    pwaff <- pwaffIntersectDomain pwaff emptyset
+    return pwaff
+
+absdomStart :: Ptr Ctx -> Program -> IO AbsDomain
+absdomStart ctx p = do
+    let nparams = length (progparams p)
+    s <- spaceSetAlloc ctx nparams 0
+
+    id2pwnan <- lmfromlist <$> 
+        for (progbbs p >>= bbGetIds)
+            (\id -> (id, ) <$> (spaceCopy s >>= pwnan ctx))
+    return $ AbsDomain id2pwnan lmempty
+
+absintbb :: Program -> BBId -> AbsDomain -> IO AbsDomain
+absintbb p bbid dom = return dom
+
+absint :: Ptr Ctx -> Program -> IO AbsDomain
+absint ctx p = do
+    dom <- absdomStart ctx p
+    absintbb p (programEntryId p) dom
+
 
 gamma :: AbsDomain -> ConcreteDomain
 gamma = undefined
@@ -1540,7 +1049,7 @@ builderCurBBModify f =
                  in s { bbid2bb = m' })
 
 
-appendInst :: Inst -> ST.State ProgramBuilder ()
+appendInst :: Assign -> ST.State ProgramBuilder ()
 appendInst i = builderCurBBModify (bbModifyInsts (++ [i]))
 
 appendPhi :: Phi -> ST.State ProgramBuilder ()
@@ -1701,7 +1210,6 @@ envcur = envFromParamList [(Id "p", 1)]
 
 main :: IO ()
 main = do
-
     putStrLn "***program***"
     putDocW 80 (pretty pcur)
     putStrLn ""
@@ -1710,8 +1218,10 @@ main = do
     let outenv =  (programExec semConcrete pcur) envcur
     print outenv
 
+    putStrLn "***absint output***"
     islctx <- ctxAlloc
-    return ()
+    absenv <- absint islctx pcur
+    putDocW 80 (pretty absenv)
 
 
 
@@ -1721,26 +1231,4 @@ mainCSem = do
     let cbegin = (collectingBegin pcur envcur) :: Collecting Int
     let csem = programFixCollecting semConcrete pcur cbegin
     putDocW 80 (pretty csem)
-
-mainSym :: Ptr Ctx ->  IO ()
-mainSym islctx = do
-    putStrLn ""
-    putStrLn "***symbolic values***"
-    let id2sym = programGetSymbolic pcur
-    putDocW 80 (pretty id2sym)
-    putStrLn ""
-    putStrLn "***pwaff values***"
-    id2islid <- traverseMap (\(Id idstr) _ -> idAlloc islctx idstr) id2sym
-    id2pwaff  <- traverse (symValToPwaff islctx id2islid id2sym) id2sym
-    traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty 
-
-
-    putStrLn ""
-    putStrLn "***iterated pwaff values***"
-    let is_maps_eq m1 m2 = and $ Unsafe.unsafePerformIO $ traverse (\k -> pwaffIsEqual (m1 !!# k) (m2 !!# k)) (M.keys m1)
-    id2pwaffs <- repeatTillFixDebugTraceM 10 is_maps_eq (iteratePwaffRepresentation  islctx id2sym id2islid) id2pwaff
-
-    forM_ id2pwaffs (\id2pwaff -> do
-      putStrLn "====\n====\n====="
-      traverse pwaffToStr id2pwaff >>= (putDocW 80) . pretty)
 
