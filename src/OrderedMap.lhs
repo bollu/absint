@@ -23,10 +23,13 @@ module OrderedMap(OrderedMap,
   mapWithKey,
   OrderedMap.lookup,
   empty,
-  delete) where
+  delete,
+  forMWithIx_,
+  foldMWithIx) where
 import qualified Data.Map.Strict as M
 import Control.Applicative(liftA2)
 import qualified Control.Arrow as A
+import Control.Monad
 import Data.Monoid
 import PrettyUtils
 import Data.Text.Prettyprint.Doc
@@ -41,6 +44,14 @@ instance (Ord k, Pretty k) => Foldable (OrderedMap k) where
 
 instance (Ord k, Pretty k) => Traversable (OrderedMap k) where
  traverse f omap = fmap fromList (traverse ((\(k, v) -> liftA2 (,) (pure k) (f v)))  (toList omap))
+
+-- fold (left) monadically with index
+foldMWithIx :: Ord k => Monad m => x -> OrderedMap k v -> (x -> Int -> k -> v -> m x) ->  m x
+foldMWithIx x om f = foldM (\x (ix, (k, v)) -> f x ix k v) x (zip [0, 1..] (toList om))
+
+-- loop monadically with index 
+forMWithIx_ :: Ord k => Monad m =>  OrderedMap k v -> (Int -> k -> v -> m ()) ->  m ()
+forMWithIx_ om f = forM_ (zip [0..] (toList om)) (\(ix, (k, v)) -> f ix k v)
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (OrderedMap k v) where
   pretty (OrderedMap _ []) = pretty "empty map"

@@ -13,6 +13,7 @@ import qualified Data.Set as S
 import Data.List (intercalate, nub)
 import Data.Semigroup
 import qualified Control.Monad.State as ST
+import qualified Control.Monad.Reader as MR
 import Data.Foldable 
 import Data.Traversable (sequenceA, for)
 import Control.Applicative
@@ -769,10 +770,10 @@ programFixCollecting sem p csem =
 -- Abstract interpretation
 -- =======================
 localSpaceIds :: Ptr Ctx -> M.Map Id  (Ptr ISLTy.Id) -> IO (Ptr LocalSpace)
-localSpaceIds ctx id2islid = do
-  ls <- localSpaceSetAlloc ctx 0 (length id2islid)
+localSpaceIds ctx id2isl = do
+  ls <- localSpaceSetAlloc ctx 0 (length id2isl)
   putStrLn "local space created."
-  let islidcounters = zip (M.elems id2islid) [0, 1..]
+  let islidcounters = zip (M.elems id2isl) [0, 1..]
   islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
 
   putStrLn "local space adding dimensions."
@@ -940,23 +941,41 @@ pwnan ctx s = do
     pwaff <- pwaffIntersectDomain pwaff emptyset
     return pwaff
 
-absdomStart :: Ptr Ctx -> Program -> IO AbsDomain
-absdomStart ctx p = do
-    let nparams = length (progparams p)
-    s <- spaceSetAlloc ctx nparams 0
+-- State of the abstract interpreter. Does *not* include the abstract domain.
+-- Rather, there are more ISL <-> outside world state
 
+absSetSpace :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> IO (Ptr Space)
+absSetSpace ctx id2isl = do
+    s <- MR.liftIO $ spaceSetAlloc ctx (length id2isl) 0
+    s <- OM.foldMWithIx s id2isl (\s ix _ islid -> setDimId s IslDimParam ix islid)
+    return s
+
+
+newISLState :: Program -> IO (Ptr Ctx, OM.OrderedMap Id (Ptr ISLTy.Id))
+newISLState p = do
+    ctx <- ctxAlloc
+    let ps = map (\(Paramid p) -> Id p) (S.toList . progparams $ p)
+    islids <- OM.fromList <$> for ps (\id -> (id, ) <$> idAlloc ctx (show id))
+
+    return $ (ctx, islids)
+
+-- Initial abstract domain
+absDomainStart :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) ->  Program -> IO AbsDomain
+absDomainStart ctx id2isl p = do
     id2pwnan <- lmfromlist <$> 
         for (progbbs p >>= bbGetIds)
-            (\id -> (id, ) <$> (spaceCopy s >>= pwnan ctx))
-    return $ AbsDomain id2pwnan lmempty
+            (\id -> (id, ) <$> (absSetSpace ctx id2isl >>= pwnan ctx))
+    let absdom = AbsDomain id2pwnan lmempty
+    return $ absdom
 
-absintbb :: Program -> BBId -> AbsDomain -> IO AbsDomain
-absintbb p bbid dom = return dom
+absintbb :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Program -> BBId -> AbsDomain -> IO AbsDomain
+absintbb ctx id2isl p bbid dom = return dom
+    
 
-absint :: Ptr Ctx -> Program -> IO AbsDomain
-absint ctx p = do
-    dom <- absdomStart ctx p
-    absintbb p (programEntryId p) dom
+absint :: Program -> IO AbsDomain
+absint p = do
+     (ctx, id2isl) <- newISLState p
+     absDomainStart ctx id2isl p >>= absintbb ctx id2isl p (programEntryId p)
 
 
 gamma :: AbsDomain -> ConcreteDomain
@@ -1219,8 +1238,7 @@ main = do
     print outenv
 
     putStrLn "***absint output***"
-    islctx <- ctxAlloc
-    absenv <- absint islctx pcur
+    absenv <- absint pcur
     putDocW 80 (pretty absenv)
 
 
