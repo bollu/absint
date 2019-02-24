@@ -941,16 +941,15 @@ pwnan ctx s = do
     pwaff <- pwaffIntersectDomain pwaff emptyset
     return pwaff
 
--- State of the abstract interpreter. Does *not* include the abstract domain.
--- Rather, there are more ISL <-> outside world state
-
+-- Create the set space common to all functions in the abstract domain
 absSetSpace :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> IO (Ptr Space)
 absSetSpace ctx id2isl = do
-    s <- MR.liftIO $ spaceSetAlloc ctx (length id2isl) 0
-    s <- OM.foldMWithIx s id2isl (\s ix _ islid -> setDimId s IslDimParam ix islid)
+    s <- MR.liftIO $ spaceSetAlloc ctx 0 (length id2isl)
+    s <- OM.foldMWithIx s id2isl (\s ix _ islid -> setDimId s IslDimSet ix islid)
     return s
 
 
+-- return the ISL state that is used in common across the absint
 newISLState :: Program -> IO (Ptr Ctx, OM.OrderedMap Id (Ptr ISLTy.Id))
 newISLState p = do
     ctx <- ctxAlloc
