@@ -76,7 +76,7 @@ executable absint
 
   build-tools: c2hs >= 0.19.1
 
-  extra-libraries: isl, gmp
+  extra-libraries: isl
 
   -- Directories containing source files.
   hs-source-dirs:      src

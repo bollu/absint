@@ -1701,8 +1701,6 @@ envcur = envFromParamList [(Id "p", 1)]
 
 main :: IO ()
 main = do
-    islctx <- ctxAlloc
-
 
     putStrLn "***program***"
     putDocW 80 (pretty pcur)
@@ -1712,20 +1710,24 @@ main = do
     let outenv =  (programExec semConcrete pcur) envcur
     print outenv
 
+    islctx <- ctxAlloc
+    return ()
 
+
+
+mainCSem :: IO ()
+mainCSem = do
     putStrLn "***collecting semantics (concrete x symbol):***"
     let cbegin = (collectingBegin pcur envcur) :: Collecting Int
     let csem = programFixCollecting semConcrete pcur cbegin
     putDocW 80 (pretty csem)
 
-  
+mainSym :: Ptr Ctx ->  IO ()
+mainSym islctx = do
     putStrLn ""
     putStrLn "***symbolic values***"
     let id2sym = programGetSymbolic pcur
     putDocW 80 (pretty id2sym)
-
-mainSym2Pwaff :: Ptr Ctx -> M.Map Id SymVal -> IO ()
-mainSym2Pwaff islctx id2sym = do
     putStrLn ""
     putStrLn "***pwaff values***"
     id2islid <- traverseMap (\(Id idstr) _ -> idAlloc islctx idstr) id2sym
