@@ -178,6 +178,9 @@ progGetBB curid p = head . filter ((curid ==) . bbid) . progbbs $ p
 programEntryId :: Program -> BBId
 programEntryId (Program _ (entry:_)) = bbid entry
 
+progids :: Program -> S.Set Id
+progids p = progparams p `S.union` (S.fromList (progbbs p >>= bbGetIds))
+
 
 -- get the largest location
 programMaxLoc :: Program -> Loc

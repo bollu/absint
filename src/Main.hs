@@ -67,8 +67,8 @@ newISLState :: Program -> IO (Ptr Ctx, OM.OrderedMap Id (Ptr ISLTy.Id))
 newISLState p = do
     ctx <- ctxAlloc
     islAbortOnError ctx
-    let ids = (progbbs p >>= bbGetIds)
-    islids <- OM.fromList <$> for ids (\id -> (id, ) <$> idAlloc ctx (show id))
+    let ids = S.toList (progids p)
+    islids <- OM.fromList  <$> for ids (\id -> (id, ) <$> idAlloc ctx (show id))
 
     return $ (ctx, islids)
 
@@ -76,7 +76,7 @@ pwVar :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Id -> IO (Ptr Pwaff)
 pwVar ctx id2isl id = do
   ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace
   Just ix <- findDimById ls  IslDimSet (id2isl OM.! id)
-  affVarOnDomain ls IslDimIn ix >>= pwaffFromAff
+  affVarOnDomain ls IslDimSet ix >>= pwaffFromAff
 
 -- Initial abstract domain
 absDomainStart :: Ptr Ctx 
@@ -85,7 +85,7 @@ absDomainStart :: Ptr Ctx
     -> IO AbsDomain
 absDomainStart ctx id2isl p = do
     id2pwnan <- M.fromList <$> 
-        for (progbbs p >>= bbGetIds)
+        for (S.toList (progids p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
     let absdom = AbsDomain id2pwnan lmempty
     return $ absdom
