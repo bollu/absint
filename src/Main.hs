@@ -36,26 +36,50 @@ import Collectingsem
 import Absdomain
 
 
+-- | Abstract domain model
 data AbsDomain = AbsDomain {
     absdomval :: M.Map Id (Ptr Pwaff),
     absdomedge :: (M.Map (BBId, BBId) (Ptr Set)),
     absdombb :: M.Map BBId (Ptr Set)
 } deriving(Show)
 
-getAbsdomAtVid :: AbsDomain -> Id -> (Ptr Pwaff)
-getAbsdomAtVid d id = absdomval d !!# id
+-- | dom[id]
+absdomGetVal :: AbsDomain -> Id -> (Ptr Pwaff)
+absdomGetVal d id = absdomval d !!# id
 
-absdomSetVid :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
-absdomSetVid id pwaff d = 
+-- | dom[id <- v]
+absdomSetVal :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
+absdomSetVal id pwaff d = 
     d { absdomval =  M.insert id pwaff (absdomval d) }
 
-absdomSetEdge :: BBId -> BBId -> Ptr Set -> AbsDomain -> AbsDomain
-absdomSetEdge bb bb' set d = 
+
+absdomSetEdge_ :: BBId -> BBId -> Ptr Set -> AbsDomain -> AbsDomain
+absdomSetEdge_ bb bb' set d = 
     d { absdomedge = M.insert (bb, bb') set (absdomedge d) }
 
 
+-- | dom[bb, bb']
 absdomGetEdge :: BBId -> BBId -> AbsDomain -> Ptr Set
 absdomGetEdge bb bb' d = absdomedge d !!# (bb, bb')
+
+-- | dom[bb, bb'] = dom[bb, bb'] U s
+absdomUnionEdge :: BBId -> BBId -> Ptr Set -> AbsDomain -> IO AbsDomain
+absdomUnionEdge bb bb' s d = do
+    let scur = absdomGetEdge bb bb' d
+    s' <- setUnion s scur
+    return $ absdomSetEdge_ bb bb' s' d
+
+-- | dom[bb]
+absdomGetBB :: BBId -> AbsDomain -> Ptr Set
+absdomGetBB bb d = absdombb d !!# bb
+
+-- | dom[bb] = dom[bb] U s
+absdomUnionBB :: BBId -> Ptr Set -> AbsDomain -> IO AbsDomain
+absdomUnionBB bb s d = do
+    let scur = absdomGetBB bb d
+    s' <- setUnion s scur
+    return $ d { absdombb = M.insert bb s' (absdombb d) }
+
 
 
 instance Pretty AbsDomain where
@@ -65,7 +89,7 @@ instance Pretty AbsDomain where
               pretty "Edge:", indent 1 $ pretty (absdomedge d)]
 
 
--- Create the set space common to all functions in the abstract domain
+-- | Create the set space common to all functions in the abstract domain
 absSetSpace :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> IO (Ptr Space)
 absSetSpace ctx id2isl = do
     s <- spaceSetAlloc ctx 0 (length id2isl)
@@ -84,11 +108,19 @@ newISLState p = do
 
     return $ (ctx, islids)
 
+-- | Create a pwaff that takes on the value of the variable
 pwVar :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Id -> IO (Ptr Pwaff)
 pwVar ctx id2isl id = do
   ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace
   Just ix <- findDimById ls IslDimSet (id2isl OM.! id)
   affVarOnDomain ls IslDimSet ix >>= pwaffFromAff
+
+
+-- | Create a constant pwaff
+pwConst :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Int -> IO (Ptr Pwaff)
+pwConst ctx id2isl i = do
+    ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace 
+    pwaffInt ctx ls i
 
 -- Initial abstract domain
 absDomainStart :: Ptr Ctx 
@@ -99,7 +131,11 @@ absDomainStart ctx id2isl p = do
     dval <- M.fromList <$> 
         for (S.toList (progids p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
-    let dedge = mempty
+
+    let edges = [(bbid bb, bbid bb') | bb <- progbbs p, bb' <- progbbs p]
+    dedge <- M.fromList <$> for edges
+        (\e -> (e,) <$> (absSetSpace ctx id2isl >>= setEmpty))
+
     dbb <- M.fromList <$> for (zip [0..] (progbbs p))
         (\(ix, bb) ->
             if ix == 0
@@ -118,25 +154,25 @@ absintexpr :: Ptr Ctx
     -> Expr
     -> AbsDomain
     -> IO (Ptr Pwaff)
-absintexpr ctx id2isl id (EId id') absdom = pwaffCopy (getAbsdomAtVid absdom id')
+absintexpr ctx id2isl id (EId id') absdom = pwaffCopy (absdomGetVal absdom id')
 
-absintexpr ctx id2isl _ (EInt i) _ = do
-    ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace 
-    pwaffInt ctx ls i
+absintexpr ctx id2isl _ (EInt i) _ = pwConst ctx id2isl i
 
 absintexpr ctx id2isl _ (EBinop Add id1 id2) absdom = do
-    pw1 <- pwaffCopy $ getAbsdomAtVid absdom id1
-    pw2 <- pwaffCopy $ getAbsdomAtVid absdom id2
+    pw1 <- pwaffCopy $ absdomGetVal absdom id1
+    pw2 <- pwaffCopy $ absdomGetVal absdom id2
     pwaffAdd pw1 pw2
 
 
 absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
-    pw1 <- pwaffCopy $ getAbsdomAtVid absdom id1
-    pw2  <- pwaffCopy $ getAbsdomAtVid absdom id2
+    pw1 <- pwaffCopy $ absdomGetVal absdom id1
+    pw2  <- pwaffCopy $ absdomGetVal absdom id2
     pwaffLtSet pw1 pw2 >>= setIndicatorFunction
     
 
 -- | Abstract interpret assignment expressions
+-- | TODO: code repetition of forwarding to BB. This should most likely
+-- | be the responsibility of the BB code.
 absintassign :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program
@@ -148,17 +184,40 @@ absintassign ctx id2isl p a d = do
     let id = assignid a
 
     pwaff <- absintexpr ctx id2isl id e d
-    return $ absdomSetVid id pwaff d
+    return $ absdomSetVal id pwaff d
 
 -- | Abstract interpret terminators
 absintterm :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program
+    -> BBId -- ^ Current BBId
     -> Term
     -> AbsDomain
     -> IO AbsDomain
-absintterm ctx id2isl p (Done _) dom = return dom
-absintterm ctx id2isl p (Br _ bbnext') dom = undefined
+absintterm ctx id2isl p _ (Done _) d = return d
+absintterm ctx id2isl p bb (Br _ bb') d = do
+    let s = absdomGetBB bb d
+    d <- setCopy s >>= \s -> absdomUnionEdge bb bb' s d
+    d <- setCopy s >>= \s -> absdomUnionBB bb' s d
+    return d
+
+absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
+    vc <- pwaffCopy $ absdomGetVal d c
+    let dbb  = absdomGetBB bb d
+
+    -- true = -1
+    vcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
+    vcTrue <- setCopy dbb >>= \dbb -> vcTrue `setIntersect` dbb
+    d <- setCopy vcTrue >>= \s -> absdomUnionEdge bb bbl s d
+    d <- absdomUnionBB bbl vcTrue d
+
+
+    vcFalse <- setCopy vcTrue >>= setComplement
+    vcFalse <- setCopy dbb >>= \dbb -> vcFalse `setIntersect` dbb
+    d <- setCopy vcFalse >>= \s -> absdomUnionEdge bb bbr s d
+    d <- absdomUnionBB bbr vcFalse d
+
+    return d
     
 
 
@@ -173,7 +232,7 @@ absintbb :: Ptr Ctx
 absintbb ctx id2isl p bb d = do
     dassign <- foldM 
         (\d a -> absintassign ctx id2isl p a d) d (bbinsts bb) 
-    dterm <- absintterm ctx id2isl p (bbterm bb) dassign
+    dterm <- absintterm ctx id2isl p (bbid bb) (bbterm bb) dassign
     return dterm
 
 
@@ -260,30 +319,6 @@ pNestedLoop = runProgramBuilder $ do
   focusBB exit
   done
 
-pIf :: Program
-pIf = runProgramBuilder $ do
-  entry <- buildNewBB "entry" Nothing
-  true <- buildNewBB "true" Nothing
-  false <- buildNewBB "false" Nothing
-  merge <- buildNewBB "merge" Nothing
-  p <- param "p"
-
-  focusBB entry
-  assign "p_lt_2" $ p <. EInt 2
-  condbr "p_lt_2" true false
-
-  focusBB true
-  assign "yt" (EInt 1)
-  br merge
-
-  focusBB false
-  assign "yf" (EInt (-1))
-  br merge
-
-  focusBB merge
-  m <- phi Phicond "m" (true, "yt") (false, "yf")
-  done
-
 pAdjacentLoop :: Program
 pAdjacentLoop = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing 
@@ -332,12 +367,40 @@ passign = runProgramBuilder $ do
     assign "p2" $ "p_plus_one" +. "minus_one"
     done
 
+
+pIf :: Program
+pIf = runProgramBuilder $ do
+  entry <- buildNewBB "entry" Nothing
+  true <- buildNewBB "true" Nothing
+  false <- buildNewBB "false" Nothing
+  merge <- buildNewBB "merge" Nothing
+  p <- param "p"
+  
+
+  focusBB entry
+  assign "two" $ EInt 2
+  assign "p_lt_2" $ "p" <. "two"
+  condbr "p_lt_2" true false
+
+  focusBB true
+  assign "yt" (EInt 1)
+  br merge
+
+  focusBB false
+  assign "yf" (EInt (-1))
+  br merge
+
+  focusBB merge
+  m <- phi Phicond "m" (true, "yt") (false, "yf")
+  done
+
+
 -- 
 -- -- ========================
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
 pcur :: Program
-pcur = passign
+pcur = pIf
 
 envcur :: Env Int
 envcur = envFromParamList [(Id "p", 1)]

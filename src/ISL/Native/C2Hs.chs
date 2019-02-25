@@ -479,6 +479,8 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
     {id `Ptr Set'} -> `Ptr Pwaff' id #}
 {# fun isl_set_empty as setEmpty
     {id `Ptr Space'} -> `Ptr Set' id#}
+{#fun isl_set_copy as setCopy { id `Ptr Set' } -> `Ptr Set' id #}
+{#fun isl_set_complement as setComplement { id `Ptr Set' } -> `Ptr Set' id #}
 
 
 {# fun isl_set_apply as setApply
@@ -518,6 +520,9 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
     {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Pwaff' id #}
 
 {# fun isl_pw_aff_lt_set as pwaffLtSet
+    {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Set' id #}
+
+{# fun isl_pw_aff_eq_set as pwaffEqSet
     {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Set' id #}
 
 {# fun isl_pw_aff_align_params as pwaffAlignParams
