@@ -519,6 +519,10 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
 {# fun isl_pw_aff_add as pwaffAdd
     {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Pwaff' id #}
 
+
+{# fun isl_pw_aff_union_add as pwaffUnionAdd
+    {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Pwaff' id #}
+
 {# fun isl_pw_aff_lt_set as pwaffLtSet
     {id `Ptr Pwaff', id `Ptr Pwaff'} -> `Ptr Set' id #}
 

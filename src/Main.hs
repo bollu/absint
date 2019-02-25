@@ -167,7 +167,14 @@ absintexpr ctx id2isl _ (EBinop Add id1 id2) absdom = do
 absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
     pw1 <- pwaffCopy $ absdomGetVal absdom id1
     pw2  <- pwaffCopy $ absdomGetVal absdom id2
-    pwaffLtSet pw1 pw2 >>= setIndicatorFunction
+    lt <- pwaffLtSet pw1 pw2
+
+    pwt <- (pwConst ctx id2isl (-1))
+    pwt <- setCopy lt >>= pwaffIntersectDomain pwt
+
+    pwf <- (pwConst ctx id2isl 0)
+    pwf <- setComplement lt >>= pwaffIntersectDomain pwf
+    pwaffUnionAdd pwt pwf
     
 
 -- | Abstract interpret assignment expressions
