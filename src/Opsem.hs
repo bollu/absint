@@ -152,10 +152,9 @@ programExec sem p@(Program _ bbs) env@(Env _ _ pc) =
 -- Expression evaluation
 semExprConcrete :: Expr -> VEnv Int -> Int
 semExprConcrete (EInt i) _ =  i
-semExprConcrete (EBool b) _ =  if b then 1 else 0
 semExprConcrete (EId id) env = env !!# id
-semExprConcrete (EParam (Paramid id)) env = env !!# Id id
-semExprConcrete (EBinop op e1 e2) env = semExprConcrete e1 env `opimpl` semExprConcrete e2 env where
+semExprConcrete (EBinop op id1 id2) env = 
+    (env !!# id1) `opimpl` (env !!# id2)  where
   opimpl = case op of
              Add -> (+)
              Lt -> (\a b -> if a < b then 1 else 0)

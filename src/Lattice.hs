@@ -88,16 +88,9 @@ instance Show a => Show (LiftedLattice a) where
   show (LL a) = show a
 
 
-class Lattice a => BooleanAlgebra a where
-  complement :: a -> a
-
--- implication in the boolean algebra
-imply :: BooleanAlgebra a => a -> a -> a
-imply a b = (complement a) `join` b
-
--- symbol
-(===>) :: BooleanAlgebra a => a -> a -> a
-(===>) = imply
+-- Create a LatticeMap with one element
+(~>) :: Ord k => k -> v -> LatticeMap k v
+(~>) k v = lminsert k v lmempty 
 
 
 -- Adjoin a top element 

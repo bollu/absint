@@ -26,28 +26,21 @@ instance Pretty Binop where
   pretty Add = pretty "+."
   pretty Lt = pretty "<."
 
-data Paramid = Paramid String deriving(Eq, Ord)
-instance Show Paramid where
-  show (Paramid p) = "param:" ++ p
 
-instance Pretty Paramid where
-  pretty p = pretty . show $ p
-
-data Expr = EInt !Int | EBool !Bool  | EBinop !Binop !Expr !Expr | EId Id | EParam Paramid
+data Expr = EInt !Int 
+    | EBinop !Binop !Id !Id
+    | EId Id 
   deriving(Eq, Ord)
 
 instance Show Expr where
     show (EInt i) = show i
-    show (EBool b) = show b
     show (EId id) = show id
-    show (EParam id) = show id
-    show (EBinop  op e1 e2) = "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e2 ++ ")"
+    show (EBinop  op e1 e2) = 
+        "(" ++ show op ++ " " ++ show e1 ++ " " ++ show e2 ++ ")"
 
 instance Pretty Expr where
   pretty (EInt i) = pretty i
-  pretty (EBool b) = pretty b
   pretty (EId id) = pretty id
-  pretty (EParam id) = pretty id
   pretty (EBinop op e1 e2) = parens $  pretty e1 <+> pretty op <+> pretty e2
 
 
@@ -175,9 +168,13 @@ bbGetIds (BB _ _ _ phis assigns _) =
 
 -- Program is a collection of basic blocks, and list of input parameter names.
 -- First basic block is the entry block (block that gets executed on startup)
-data Program = Program { progparams :: S.Set Paramid, progbbs :: [BB]  } deriving(Eq)
+data Program = Program { progparams :: S.Set Id, progbbs :: [BB]  } deriving(Eq)
 
--- get the entry basic block ID
+-- | Get a basic block with the ID
+progGetBB :: BBId -> Program -> BB
+progGetBB curid p = head . filter ((curid ==) . bbid) . progbbs $ p
+
+-- | get the entry basic block ID
 programEntryId :: Program -> BBId
 programEntryId (Program _ (entry:_)) = bbid entry
 
@@ -212,34 +209,17 @@ nlContainsBB id (NaturalLoop headerid bodyids) =
 -- ===============
 -- ===============
 
-class ToExpr a where
-  toexpr :: a -> Expr
-
-instance ToExpr Id where
-  toexpr a = EId a
+(+.) :: String -> String -> Expr
+(+.) id id' = EBinop Add (Id id) (Id id')
 
 
-instance ToExpr String where
-  toexpr a = EId (Id a)
-
-instance ToExpr Bool where
-  toexpr True = EInt 1
-  toexpr False = EInt 0
-
-instance ToExpr Expr where
-  toexpr = id
-
-(+.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
-(+.) a b = EBinop Add (toexpr a) (toexpr b)
-
-
-(<.) :: (ToExpr a, ToExpr b) => a -> b -> Expr
-(<.) a b = EBinop Lt (toexpr a) (toexpr b)
+(<.) :: String -> String -> Expr
+(<.) id id' = EBinop Lt (Id id) (Id id')
 
 
 -- Builder of program state
 data ProgramBuilder = ProgramBuilder { 
-  builderparams ::  S.Set Paramid,
+  builderparams ::  S.Set Id,
   builderpc :: Loc, 
   curbbid :: Maybe BBId,
   bbid2bb :: OM.OrderedMap BBId BB
@@ -263,8 +243,8 @@ runProgramBuilder pbst =
 param :: String -> ST.State ProgramBuilder Expr
 param pname = do 
   ST.modify (\s -> s { 
-    builderparams = (Paramid pname) `S.insert` (builderparams s) })
-  return (EParam (Paramid pname))
+    builderparams = (Id pname) `S.insert` (builderparams s) })
+  return (EId (Id pname))
 
 builderLocIncr :: ST.State ProgramBuilder Loc
 builderLocIncr = do

@@ -4,6 +4,7 @@
 module ISL.Native.Types where
 
 #include <isl/space.h>
+#include <isl/options.h>
 
 import Foreign.C (CInt)
 
@@ -74,6 +75,10 @@ data Multipwaff
 
 fromDimType :: DimType -> CInt
 fromDimType = fromIntegral . fromEnum
+
+-- figure out how to use #defines
+islEnumOnErrorAbort :: CInt
+islEnumOnErrorAbort = fromIntegral 2
 
 fromRawIslBool :: CInt -> Maybe Bool
 fromRawIslBool i = 

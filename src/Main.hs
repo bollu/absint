@@ -37,18 +37,28 @@ import Absdomain
 
 
 data AbsDomain = 
-    AbsDomain (LatticeMap Id (Ptr Pwaff)) (LatticeMap (BBId, BBId) (Ptr Set))
+    AbsDomain (M.Map Id (Ptr Pwaff)) (LatticeMap (BBId, BBId) (Ptr Set))
     deriving(Show)
 
+getAbsdomAtVid :: AbsDomain -> Id -> (Ptr Pwaff)
+getAbsdomAtVid (AbsDomain id2pwaff _) id = id2pwaff !!# id
+
+absdomSetVid :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
+absdomSetVid id pwaff (AbsDomain id2pwaff edge2bb) = 
+    AbsDomain (M.insert id pwaff id2pwaff) edge2bb
+
+
 instance Pretty AbsDomain where
-    pretty (AbsDomain id2pwaff edge2set) = vcat [pretty id2pwaff, pretty edge2set]
+    pretty (AbsDomain id2pwaff edge2set) = 
+        vcat [pretty id2pwaff, pretty edge2set]
 
 
 -- Create the set space common to all functions in the abstract domain
 absSetSpace :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> IO (Ptr Space)
 absSetSpace ctx id2isl = do
     s <- MR.liftIO $ spaceSetAlloc ctx 0 (length id2isl)
-    s <- OM.foldMWithIx s id2isl (\s ix _ islid -> setDimId s IslDimSet ix islid)
+    s <- OM.foldMWithIx s id2isl 
+        (\s ix _ islid -> setDimId s IslDimSet ix islid)
     return s
 
 
@@ -56,28 +66,116 @@ absSetSpace ctx id2isl = do
 newISLState :: Program -> IO (Ptr Ctx, OM.OrderedMap Id (Ptr ISLTy.Id))
 newISLState p = do
     ctx <- ctxAlloc
-    let ps = map (\(Paramid p) -> Id p) (S.toList . progparams $ p)
-    islids <- OM.fromList <$> for ps (\id -> (id, ) <$> idAlloc ctx (show id))
+    islAbortOnError ctx
+    let ids = (progbbs p >>= bbGetIds)
+    islids <- OM.fromList <$> for ids (\id -> (id, ) <$> idAlloc ctx (show id))
 
     return $ (ctx, islids)
 
+pwVar :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Id -> IO (Ptr Pwaff)
+pwVar ctx id2isl id = do
+  ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace
+  Just ix <- findDimById ls  IslDimSet (id2isl OM.! id)
+  affVarOnDomain ls IslDimIn ix >>= pwaffFromAff
+
 -- Initial abstract domain
-absDomainStart :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) ->  Program -> IO AbsDomain
+absDomainStart :: Ptr Ctx 
+    -> OM.OrderedMap Id (Ptr ISLTy.Id) 
+    ->  Program 
+    -> IO AbsDomain
 absDomainStart ctx id2isl p = do
-    id2pwnan <- lmfromlist <$> 
+    id2pwnan <- M.fromList <$> 
         for (progbbs p >>= bbGetIds)
-            (\id -> (id, ) <$> (absSetSpace ctx id2isl >>= pwnan ctx))
+            (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
     let absdom = AbsDomain id2pwnan lmempty
     return $ absdom
 
-absintbb :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Program -> BBId -> AbsDomain -> IO AbsDomain
-absintbb ctx id2isl p bbid dom = return dom
+-- Abstract interpret expressions
+absintexpr :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Id
+    -> Expr
+    -> AbsDomain
+    -> IO (Ptr Pwaff)
+absintexpr ctx id2isl id (EId id') absdom = return $ getAbsdomAtVid absdom id'
+
+absintexpr ctx id2isl _ (EInt i) _ = do
+    ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace 
+    pwaffInt ctx ls i
+
+absintexpr ctx id2isl _ (EBinop Add id1 id2) absdom = do
+    let pw1 = getAbsdomAtVid absdom id1
+    let pw2 = getAbsdomAtVid absdom id2
+    pwaffAdd pw1 pw2
+
+
+absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
+    let pw1 = getAbsdomAtVid absdom id1
+    let pw2 = getAbsdomAtVid absdom id2
+    pwaffLtSet pw1 pw2 >>= setIndicatorFunction
+    
+
+-- | Abstract interpret assignment expressions
+absintassign :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> Assign
+    -> AbsDomain
+    -> IO AbsDomain
+absintassign ctx id2isl p a d = do
+    print "xx"
+    let e = assignexpr a
+    let id = assignid a
+
+    pwaff <- absintexpr ctx id2isl id e d
+    return $ absdomSetVid id pwaff d
+
+-- | Abstract interpret terminators
+absintterm :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> Term
+    -> AbsDomain
+    -> IO AbsDomain
+absintterm ctx id2isl p (Done _) dom = return dom
+
+
+
+-- | Abstract interpret basic blocks
+absintbb :: Ptr Ctx 
+    -> OM.OrderedMap Id (Ptr ISLTy.Id) 
+    -> Program 
+    -> BB 
+    -> AbsDomain 
+    -> IO AbsDomain
+absintbb ctx id2isl p bb d = do
+    print "###a"
+    dassign <- foldM 
+        (\d a -> absintassign ctx id2isl p a d) d (bbinsts bb) 
+    print "###b"
+    dterm <- absintterm ctx id2isl p (bbterm bb) dassign
+    return dterm
+
+
+    
+-- perform the abstract interpretation for one iteration
+absint_ :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program 
+    -> AbsDomain 
+    -> IO AbsDomain
+absint_ ctx id2isl p d = do
+    foldM (\d bb -> absintbb ctx id2isl p bb d) d (progbbs p)
     
 
 absint :: Program -> IO AbsDomain
 absint p = do
+     print "###1"
      (ctx, id2isl) <- newISLState p
-     absDomainStart ctx id2isl p >>= absintbb ctx id2isl p (programEntryId p)
+     print "###2"
+     d <- absDomainStart ctx id2isl p
+     print "###3"
+     absint_ ctx id2isl p d
 
 
 gamma :: AbsDomain -> ConcreteDomain
@@ -89,6 +187,8 @@ gamma = undefined
 -- Example programs
 -- ================
 
+{-
+
 pLoop :: Program
 pLoop = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing 
@@ -97,6 +197,7 @@ pLoop = runProgramBuilder $ do
 
   focusBB entry
   assign "x_entry" (EInt 1)
+
   br loop
 
   focusBB exit
@@ -200,12 +301,26 @@ pAdjacentLoop = runProgramBuilder $ do
 
   focusBB exit
   done
+-}
+
+passign :: Program
+passign = runProgramBuilder $ do
+    param "p"
+    entry <- buildNewBB "entry" Nothing
+    focusBB entry
+    assign "one" $ EInt 1
+    assign "minus_one" $ EInt (-1)
+    assign "psq" $ "p" +. "p"
+    assign "p_plus_one" $ "p" +. "one"
+    assign "p2" $ "p_plus_one" +. "minus_one"
+    done
+
 -- 
 -- -- ========================
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
 pcur :: Program
-pcur = pIf
+pcur = passign
 
 envcur :: Env Int
 envcur = envFromParamList [(Id "p", 1)]

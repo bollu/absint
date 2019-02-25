@@ -67,6 +67,7 @@ instance Ord k => Semigroup (OrderedMap k v) where
 instance Ord k => Monoid (OrderedMap k v) where
   mempty :: OrderedMap k v
   mempty = OrderedMap mempty mempty
+  mappend = (Data.Monoid.<>)
 
 
 

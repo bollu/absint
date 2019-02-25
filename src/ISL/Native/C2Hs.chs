@@ -13,6 +13,7 @@ module ISL.Native.C2Hs where
 #include <isl/space.h>
 #include <isl/list.h>
 #include <isl/multi.h>
+#include <isl/options.h>
 
 import Foreign.Ptr
 import Foreign.Marshal.Alloc
@@ -74,6 +75,12 @@ type PtrListPwaff = Ptr (List Pwaff)
 
 -- =================
 -- ID
+
+{# fun isl_options_set_on_error  as islOptionsSetOnError
+    { id `Ptr Ctx', id `CInt'} -> `()' #}
+
+islAbortOnError :: Ptr Ctx -> IO ()
+islAbortOnError ctx = islOptionsSetOnError ctx islEnumOnErrorAbort
 
 {#fun isl_id_alloc as idAlloc_ { id `Ptr Ctx', `String', `Ptr ()' } -> `Ptr Id'  id #}
 {#fun isl_id_copy as idCopy { id `Ptr Id' } -> `Ptr Id'  id #}
