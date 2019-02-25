@@ -36,21 +36,33 @@ import Collectingsem
 import Absdomain
 
 
-data AbsDomain = 
-    AbsDomain (M.Map Id (Ptr Pwaff)) (LatticeMap (BBId, BBId) (Ptr Set))
-    deriving(Show)
+data AbsDomain = AbsDomain {
+    absdomval :: M.Map Id (Ptr Pwaff),
+    absdomedge :: (M.Map (BBId, BBId) (Ptr Set)),
+    absdombb :: M.Map BBId (Ptr Set)
+} deriving(Show)
 
 getAbsdomAtVid :: AbsDomain -> Id -> (Ptr Pwaff)
-getAbsdomAtVid (AbsDomain id2pwaff _) id = id2pwaff !!# id
+getAbsdomAtVid d id = absdomval d !!# id
 
 absdomSetVid :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
-absdomSetVid id pwaff (AbsDomain id2pwaff edge2bb) = 
-    AbsDomain (M.insert id pwaff id2pwaff) edge2bb
+absdomSetVid id pwaff d = 
+    d { absdomval =  M.insert id pwaff (absdomval d) }
+
+absdomSetEdge :: BBId -> BBId -> Ptr Set -> AbsDomain -> AbsDomain
+absdomSetEdge bb bb' set d = 
+    d { absdomedge = M.insert (bb, bb') set (absdomedge d) }
+
+
+absdomGetEdge :: BBId -> BBId -> AbsDomain -> Ptr Set
+absdomGetEdge bb bb' d = absdomedge d !!# (bb, bb')
 
 
 instance Pretty AbsDomain where
-    pretty (AbsDomain id2pwaff edge2set) = 
-        vcat [pretty id2pwaff, pretty edge2set]
+    pretty d = 
+        vcat [pretty "Val:", indent 1 $ pretty (absdomval d),
+              pretty "BB:", indent 1 $ pretty (absdombb d),
+              pretty "Edge:", indent 1 $ pretty (absdomedge d)]
 
 
 -- Create the set space common to all functions in the abstract domain
@@ -84,11 +96,20 @@ absDomainStart :: Ptr Ctx
     ->  Program 
     -> IO AbsDomain
 absDomainStart ctx id2isl p = do
-    id2pwnan <- M.fromList <$> 
+    dval <- M.fromList <$> 
         for (S.toList (progids p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
-    let absdom = AbsDomain id2pwnan lmempty
-    return $ absdom
+    let dedge = mempty
+    dbb <- M.fromList <$> for (zip [0..] (progbbs p))
+        (\(ix, bb) ->
+            if ix == 0
+            then do
+                s <- absSetSpace ctx id2isl >>= setUniverse
+                return (bbid bb, s)
+            else do 
+                s <- absSetSpace ctx id2isl >>= setEmpty
+                return (bbid bb, s))
+    return $ AbsDomain dval dedge dbb
 
 -- Abstract interpret expressions
 absintexpr :: Ptr Ctx
@@ -137,6 +158,8 @@ absintterm :: Ptr Ctx
     -> AbsDomain
     -> IO AbsDomain
 absintterm ctx id2isl p (Done _) dom = return dom
+absintterm ctx id2isl p (Br _ bbnext') dom = undefined
+    
 
 
 

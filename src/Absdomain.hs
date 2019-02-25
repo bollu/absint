@@ -171,6 +171,9 @@ constraintEqualityForSpaced set = do
 -- =======================
 instance Pretty (Ptr Pwaff) where
     pretty pw = pretty $ (Unsafe.unsafePerformIO (pwaffToStr pw))
+
+instance Pretty (Ptr Set) where
+    pretty s = pretty $ (Unsafe.unsafePerformIO (setToStr s))
 -- abstract environments
 type AbsVEnv = LatticeMap Id (Ptr Pwaff)
 
