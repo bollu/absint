@@ -32,7 +32,7 @@ import qualified Control.Arrow as A
 import Control.Monad
 import Data.Monoid
 import Data.Semigroup
-import PrettyUtils
+import Util
 import Data.Text.Prettyprint.Doc
 import qualified Data.List as L
 

@@ -59,7 +59,12 @@ executable absint
     , ISL.Native.Types
     , ISL.Types
     , OrderedMap
-    , PrettyUtils
+    , Util
+    , IR
+    , Opsem
+    , Lattice
+    , Collectingsem
+    , Absdomain
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
