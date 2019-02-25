@@ -11,7 +11,7 @@ import Util
 -- Identifiers
 newtype Id = Id String deriving(Eq, Ord)
 instance Show Id where
-  show (Id s) = "id:" ++ s
+  show (Id s) = s
 
 instance Pretty Id where
   pretty (Id s) =  pretty s

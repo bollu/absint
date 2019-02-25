@@ -56,9 +56,9 @@ instance Pretty AbsDomain where
 -- Create the set space common to all functions in the abstract domain
 absSetSpace :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> IO (Ptr Space)
 absSetSpace ctx id2isl = do
-    s <- MR.liftIO $ spaceSetAlloc ctx 0 (length id2isl)
+    s <- spaceSetAlloc ctx 0 (length id2isl)
     s <- OM.foldMWithIx s id2isl 
-        (\s ix _ islid -> setDimId s IslDimSet ix islid)
+        (\s ix _ islid -> idCopy islid >>= setDimId s IslDimSet ix)
     return s
 
 
@@ -75,7 +75,7 @@ newISLState p = do
 pwVar :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Id -> IO (Ptr Pwaff)
 pwVar ctx id2isl id = do
   ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace
-  Just ix <- findDimById ls  IslDimSet (id2isl OM.! id)
+  Just ix <- findDimById ls IslDimSet (id2isl OM.! id)
   affVarOnDomain ls IslDimSet ix >>= pwaffFromAff
 
 -- Initial abstract domain
@@ -97,21 +97,21 @@ absintexpr :: Ptr Ctx
     -> Expr
     -> AbsDomain
     -> IO (Ptr Pwaff)
-absintexpr ctx id2isl id (EId id') absdom = return $ getAbsdomAtVid absdom id'
+absintexpr ctx id2isl id (EId id') absdom = pwaffCopy (getAbsdomAtVid absdom id')
 
 absintexpr ctx id2isl _ (EInt i) _ = do
     ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace 
     pwaffInt ctx ls i
 
 absintexpr ctx id2isl _ (EBinop Add id1 id2) absdom = do
-    let pw1 = getAbsdomAtVid absdom id1
-    let pw2 = getAbsdomAtVid absdom id2
+    pw1 <- pwaffCopy $ getAbsdomAtVid absdom id1
+    pw2 <- pwaffCopy $ getAbsdomAtVid absdom id2
     pwaffAdd pw1 pw2
 
 
 absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
-    let pw1 = getAbsdomAtVid absdom id1
-    let pw2 = getAbsdomAtVid absdom id2
+    pw1 <- pwaffCopy $ getAbsdomAtVid absdom id1
+    pw2  <- pwaffCopy $ getAbsdomAtVid absdom id2
     pwaffLtSet pw1 pw2 >>= setIndicatorFunction
     
 
@@ -123,7 +123,6 @@ absintassign :: Ptr Ctx
     -> AbsDomain
     -> IO AbsDomain
 absintassign ctx id2isl p a d = do
-    print "xx"
     let e = assignexpr a
     let id = assignid a
 
@@ -149,10 +148,8 @@ absintbb :: Ptr Ctx
     -> AbsDomain 
     -> IO AbsDomain
 absintbb ctx id2isl p bb d = do
-    print "###a"
     dassign <- foldM 
         (\d a -> absintassign ctx id2isl p a d) d (bbinsts bb) 
-    print "###b"
     dterm <- absintterm ctx id2isl p (bbterm bb) dassign
     return dterm
 
@@ -170,11 +167,8 @@ absint_ ctx id2isl p d = do
 
 absint :: Program -> IO AbsDomain
 absint p = do
-     print "###1"
      (ctx, id2isl) <- newISLState p
-     print "###2"
      d <- absDomainStart ctx id2isl p
-     print "###3"
      absint_ ctx id2isl p d
 
 
@@ -310,7 +304,7 @@ passign = runProgramBuilder $ do
     focusBB entry
     assign "one" $ EInt 1
     assign "minus_one" $ EInt (-1)
-    assign "psq" $ "p" +. "p"
+    assign "p_plus_p" $ "p" +. "p"
     assign "p_plus_one" $ "p" +. "one"
     assign "p2" $ "p_plus_one" +. "minus_one"
     done
