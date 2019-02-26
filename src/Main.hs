@@ -406,25 +406,20 @@ pif = runProgramBuilder $ do
 -- -- ========================
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
-pcur :: Program
-pcur = pif
-
-envcur :: Env Int
-envcur = envFromParamList [(Id "p", 1)]
 
 
-runProgram :: Program -> IO ()
-runProgram p = do
+runProgram :: Program -> Env Int -> IO ()
+runProgram p e = do
     putStrLn "***program***"
     putDocW 80 (pretty p)
     putStrLn ""
 
     putStrLn "***program output***"
-    let outenv = (programExec semConcrete p) envcur
+    let outenv = (programExec semConcrete p) e
     print outenv
 
     --putStrLn "***collecting semantics (concrete x symbol):***"
-    --let cbegin = (collectingBegin pcur envcur) :: Collecting Int
+    --let cbegin = (collectingBegin pcur e) :: Collecting Int
     --let csem = programFixCollecting semConcrete pcur cbegin
     --putDocW 80 (pretty csem)
 
@@ -432,9 +427,13 @@ runProgram p = do
     absenv <- absint p
     putDocW 80 (pretty absenv)
 
+-- | Default environment we start with
+edefault :: Env Int
+edefault = envFromParamList [(Id "p", 1)]
+
 -- | Main entry point that executes all programs
 main :: IO ()
-main = for_ [passign, pif] (\p -> do
-    runProgram  p
+main = for_ [(passign, edefault), (pif, edefault)] (\(p, e) -> do
+    runProgram  p e
     putStrLn "\n=========================")
 
