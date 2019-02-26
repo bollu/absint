@@ -375,8 +375,8 @@ passign = runProgramBuilder $ do
     done
 
 
-pIf :: Program
-pIf = runProgramBuilder $ do
+pif :: Program
+pif = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing
   true <- buildNewBB "true" Nothing
   false <- buildNewBB "false" Nothing
@@ -407,31 +407,34 @@ pIf = runProgramBuilder $ do
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
 pcur :: Program
-pcur = pIf
+pcur = pif
 
 envcur :: Env Int
 envcur = envFromParamList [(Id "p", 1)]
 
-main :: IO ()
-main = do
+
+runProgram :: Program -> IO ()
+runProgram p = do
     putStrLn "***program***"
-    putDocW 80 (pretty pcur)
+    putDocW 80 (pretty p)
     putStrLn ""
-    
+
     putStrLn "***program output***"
-    let outenv =  (programExec semConcrete pcur) envcur
+    let outenv = (programExec semConcrete p) envcur
     print outenv
 
+    --putStrLn "***collecting semantics (concrete x symbol):***"
+    --let cbegin = (collectingBegin pcur envcur) :: Collecting Int
+    --let csem = programFixCollecting semConcrete pcur cbegin
+    --putDocW 80 (pretty csem)
+
     putStrLn "***absint output***"
-    absenv <- absint pcur
+    absenv <- absint p
     putDocW 80 (pretty absenv)
 
-
-
-mainCSem :: IO ()
-mainCSem = do
-    putStrLn "***collecting semantics (concrete x symbol):***"
-    let cbegin = (collectingBegin pcur envcur) :: Collecting Int
-    let csem = programFixCollecting semConcrete pcur cbegin
-    putDocW 80 (pretty csem)
+-- | Main entry point that executes all programs
+main :: IO ()
+main = for_ [passign, pif] (\p -> do
+    runProgram  p
+    putStrLn "\n=========================")
 

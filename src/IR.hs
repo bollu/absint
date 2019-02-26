@@ -204,7 +204,8 @@ programMaxLoc (Program _ bbs) =
 
 instance Pretty Program where
   pretty (Program params bbs) = vcat $ 
-    [pretty "prog" <> parens (pretty (S.toList params))] ++ map pretty bbs
+    [pretty "prog" <> parens (pretty (S.toList params)),
+            (indent 1 $ (vcat  $ map pretty bbs))]
 
 
 data NaturalLoop = 
