@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TupleSections #-}
 module IR where
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
@@ -119,6 +120,12 @@ instance Pretty Term where
       pretty cid <+> pretty bbidl <+> pretty bbidr
   pretty (Done loc) = pretty loc <+> pretty "done"
 
+-- get next basic blocks from terminator
+termnextbbs :: Term -> [BBId]
+termnextbbs (Done _) = []
+termnextbbs (Br _ bb) = [bb]
+termnextbbs (BrCond _ _ bbl bbr) = [bbl, bbr]
+
 data BBTy = 
   BBLoop [BBId] -- if it's a loop, the list of basic blocks that are bodies of this loop
   deriving(Eq, Ord, Show)
@@ -166,6 +173,10 @@ bbGetIds (BB _ _ _ phis assigns _) =
     map phiid phis ++ map assignid assigns
 
 
+-- | Get edges out of BB
+bbedges :: BB -> [(BBId, BBId)]
+bbedges bb = map (bbid bb,) (termnextbbs . bbterm $ bb)
+
 -- Program is a collection of basic blocks, and list of input parameter names.
 -- First basic block is the entry block (block that gets executed on startup)
 data Program = Program { progparams :: S.Set Id, progbbs :: [BB]  } deriving(Eq)
@@ -180,6 +191,9 @@ programEntryId (Program _ (entry:_)) = bbid entry
 
 progids :: Program -> S.Set Id
 progids p = progparams p `S.union` (S.fromList (progbbs p >>= bbGetIds))
+
+progedges :: Program -> [(BBId, BBId)]
+progedges p = progbbs p >>= bbedges
 
 
 -- get the largest location

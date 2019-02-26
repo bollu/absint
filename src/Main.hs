@@ -132,7 +132,7 @@ absDomainStart ctx id2isl p = do
         for (S.toList (progids p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
 
-    let edges = [(bbid bb, bbid bb') | bb <- progbbs p, bb' <- progbbs p]
+    let edges = progedges p
     dedge <- M.fromList <$> for edges
         (\e -> (e,) <$> (absSetSpace ctx id2isl >>= setEmpty))
 
