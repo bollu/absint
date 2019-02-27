@@ -6,8 +6,10 @@ import Data.Text.Prettyprint.Doc.Internal
 import Data.Text.Prettyprint.Doc.Util
 import qualified Data.Set as S
 import qualified Control.Monad.State as ST
+import qualified Data.Map.Strict as M
 import qualified OrderedMap as OM
 import Util
+import Data.Maybe (catMaybes)
 
 -- Identifiers
 newtype Id = Id String deriving(Eq, Ord)
@@ -63,7 +65,7 @@ pcinit = Loc 0
 class Located a where
   location :: a -> Loc
 
-data BBId = BBId String deriving(Eq, Ord, Show)
+data BBId = BBId { unBBId :: String } deriving(Eq, Ord, Show)
 instance Pretty BBId where
   pretty (BBId id) = pretty id
 
@@ -127,7 +129,7 @@ termnextbbs (Br _ bb) = [bb]
 termnextbbs (BrCond _ _ bbl bbr) = [bbl, bbr]
 
 data BBTy = 
-  BBLoop [BBId] -- if it's a loop, the list of basic blocks that are bodies of this loop
+  BBLoop (S.Set BBId) -- if it's a loop, the list of basic blocks that are bodies of this loop
   deriving(Eq, Ord, Show)
 
 instance Pretty BBTy where
@@ -149,6 +151,7 @@ instance Pretty BB where
 
 instance Located BB where
   location (BB _ _ loc _ _ _) = loc
+
 
 
 bbModifyInsts :: ([Assign] -> [Assign]) -> BB -> BB
@@ -189,11 +192,32 @@ progGetBB curid p = head . filter ((curid ==) . bbid) . progbbs $ p
 programEntryId :: Program -> BBId
 programEntryId (Program _ (entry:_)) = bbid entry
 
+-- | IDs listed in the program
 progids :: Program -> S.Set Id
 progids p = progparams p `S.union` (S.fromList (progbbs p >>= bbGetIds))
 
+-- | Virtual induction variables in the program
+progvivs :: Program -> S.Set Id
+progvivs p = S.fromList $ map (Id . unBBId . nlheader) (prognls p)
+
+-- | Edges in the program
 progedges :: Program -> [(BBId, BBId)]
 progedges p = progbbs p >>= bbedges
+
+-- Create a map, mapping basic block IDs to basic blocks
+-- for the given program
+programBBId2BB :: Program -> M.Map BBId BB
+programBBId2BB (Program _ bbs) = 
+  foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
+
+-- | Mapping from basic header IDs to natural loops
+programBBId2nl :: Program -> M.Map BBId NaturalLoop
+programBBId2nl (Program _ bbs) = M.fromList $ do
+  bb <- bbs
+  let ty = bbty bb
+  case ty of
+    Just (BBLoop bodies) -> return (bbid bb, NaturalLoop (bbid bb) bodies)
+    Nothing -> []
 
 
 -- get the largest location
@@ -209,7 +233,7 @@ instance Pretty Program where
 
 
 data NaturalLoop = 
-  NaturalLoop { nlHeader :: BBId, nlbody :: S.Set BBId } deriving(Eq, Ord, Show)
+  NaturalLoop { nlheader :: BBId, nlbody :: S.Set BBId } deriving(Eq, Ord, Show)
 
 instance Pretty NaturalLoop where
   pretty (NaturalLoop header body) = 
@@ -221,6 +245,16 @@ nlContainsBB :: BBId -> NaturalLoop ->  Bool
 nlContainsBB id (NaturalLoop headerid bodyids) = 
   id == headerid || id `S.member` bodyids
 
+
+-- | extract a natural loop if the BB represents one
+bbloopheaderLoops :: BB -> Maybe NaturalLoop
+bbloopheaderLoops bb = fmap 
+    (\(BBLoop bbs) -> NaturalLoop (bbid bb) bbs) (bbty bb)
+
+
+-- | Get all natural loops in the program
+prognls :: Program -> [NaturalLoop]
+prognls p = catMaybes . (map bbloopheaderLoops) . progbbs $ p
 
 
 -- Program builder

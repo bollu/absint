@@ -103,7 +103,7 @@ newISLState :: Program -> IO (Ptr Ctx, OM.OrderedMap Id (Ptr ISLTy.Id))
 newISLState p = do
     ctx <- ctxAlloc
     islAbortOnError ctx
-    let ids = S.toList (progids p)
+    let ids = S.toList (progids p) ++ S.toList (progvivs p)
     islids <- OM.fromList  <$> for ids (\id -> (id, ) <$> idAlloc ctx (show id))
 
     return $ (ctx, islids)
@@ -253,6 +253,15 @@ pwaffUnion pl pr = do
             , pretty "---\n"]
         error $ "pwaffs are not equal on common domain"
 
+
+-- | update abstact domain if we are entering into a loop phi node
+absintEntryIntoLoopPhi :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> BBId
+    -> AbsDomain
+    -> IO AbsDomain
+absintEntryIntoLoopPhi ctx id2isl p bbid d = return d
     
 -- | Abstract interpret phi nodes
 absintphi :: Ptr Ctx
@@ -429,7 +438,7 @@ pif = runProgramBuilder $ do
 ploop :: Program
 ploop = runProgramBuilder $ do
   entry <- buildNewBB "entry" Nothing 
-  loop <- buildNewBB "loop" (Just $ BBLoop [])
+  loop <- buildNewBB "loop" (Just . BBLoop . S.fromList $ [])
   exit <- buildNewBB "exit" Nothing
 
   focusBB entry

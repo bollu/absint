@@ -119,19 +119,6 @@ bbExec sem (BB bbid bbty _ phis insts term) (Env venv lenv pcprev) =
       pc' = mkSemTerm (semPredicate sem) term bbid venvinst 
    in Env venvinst lenvbb pc'
 
--- Create a map, mapping basic block IDs to basic blocks
--- for the given program
-programBBId2BB :: Program -> M.Map BBId BB
-programBBId2BB (Program _ bbs) = 
-  foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
-
-programBBId2nl :: Program -> M.Map BBId NaturalLoop
-programBBId2nl (Program _ bbs) = M.fromList $ do
-  bb <- bbs
-  let ty = bbty bb
-  case ty of
-    Just (BBLoop bodies) -> return (bbid bb, NaturalLoop (bbid bb) (S.fromList bodies))
-    Nothing -> []
 
 
 
