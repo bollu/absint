@@ -225,8 +225,33 @@ absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     d <- absdomUnionBB bbr vcFalse d
 
     return d
-    
 
+-- | take a disjoin union of two pwaffs
+pwaffUnion :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
+pwaffUnion pl pr = do
+    dl <- pwaffDomain pl
+    dr <- pwaffDomain pr
+    dintersect <- setIntersect dl dr
+    deq <- pwaffEqSet pl pr
+
+    isEqOnCommon <- setIsSubset dintersect deq
+    if isEqOnCommon
+    then  pwaffUnionAdd pl pr
+    else error $ "pwaffs are not equal on common domain"
+
+    
+-- | Abstract interpret phi nodes
+absintphi :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id) 
+    -> Program 
+    -> Phi 
+    -> AbsDomain 
+    -> IO AbsDomain
+absintphi cx id2isl p phi d = do
+    let pl =  absdomGetVal d (snd . phil $ phi)
+    let pr =  absdomGetVal d (snd . phir $ phi)
+    pwaff <- pwaffUnion pl pr
+    return $ absdomSetVal (phiid phi) pwaff d
 
 
 -- | Abstract interpret basic blocks
@@ -237,8 +262,10 @@ absintbb :: Ptr Ctx
     -> AbsDomain 
     -> IO AbsDomain
 absintbb ctx id2isl p bb d = do
+    dphi <- foldM 
+        (\d phi -> absintphi ctx id2isl p phi d) d (bbphis bb)
     dassign <- foldM 
-        (\d a -> absintassign ctx id2isl p a d) d (bbinsts bb) 
+        (\d a -> absintassign ctx id2isl p a d) dphi (bbinsts bb) 
     dterm <- absintterm ctx id2isl p (bbid bb) (bbterm bb) dassign
     return dterm
 

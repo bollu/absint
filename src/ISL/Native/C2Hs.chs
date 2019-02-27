@@ -305,6 +305,11 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Set'
   } -> `Ptr Set' id #}
 
+
+{#fun isl_set_is_empty as setIsEmpty
+  { id `Ptr Set'
+  } -> `Maybe Bool' fromRawIslBool #}
+
 -- =================
 -- constraint
 
@@ -535,6 +540,8 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
 {# fun isl_pw_aff_get_space as pwaffGetSpace
     {id `Ptr Pwaff' } -> `Ptr Space' id #}
 
+{# fun isl_pw_aff_domain as pwaffDomain
+    {id `Ptr Pwaff' } -> `Ptr Set' id #}
 
 {# fun isl_pw_aff_get_domain_space as pwaffGetDomainSpace
     {id `Ptr Pwaff' } -> `Ptr Space' id #}
