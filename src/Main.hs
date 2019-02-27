@@ -240,7 +240,10 @@ pwaffUnion pl pr = do
 
     Just isEqOnCommon <- setIsSubset dintersect deq
     if isEqOnCommon
-    then  pwaffUnionAdd pl pr
+    then  do
+        pl <- pwaffCopy pl
+        pr <- pwaffCopy pr
+        pwaffUnionAdd pl pr
     else do 
         putDocW 80 $ vcat $ 
             [pretty "pl: " <> pretty pl
@@ -431,14 +434,17 @@ pif = runProgramBuilder $ do
 
   focusBB true
   assign "yt" (EInt 1)
+  assign "xt" (EInt 1)
   br merge
 
   focusBB false
   assign "yf" (EInt (-1))
+  assign "xf" (EInt (1))
   br merge
 
   focusBB merge
   m <- phi Phicond "m" (true, "yt") (false, "yf")
+  m2 <- phi Phicond "m2" (true, "xt") (false, "xf")
   done
 
 
