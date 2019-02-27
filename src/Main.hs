@@ -353,12 +353,12 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     d <- absdomUnionBB bbr vcFalse d
 
 
-    let doml = absdomGetBB bbl d
-    dl <- absdomRestrictValDomains doml d
+    doml <- setCopy $ absdomGetBB bbl d 
+    dl <- absdomainCopy d >>= absdomRestrictValDomains doml
 
 
-    let domr = absdomGetBB bbr d
-    dr <- absdomRestrictValDomains domr d
+    domr <- setCopy $ absdomGetBB bbr d
+    dr <- absdomainCopy d >>= absdomRestrictValDomains domr
 
     return $ [(bbl, dl), (bbr, dr)]
 
