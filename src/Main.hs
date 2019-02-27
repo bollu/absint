@@ -151,6 +151,17 @@ absdomUnionBB bb s d = do
     return $ d { absdombb = M.insert bb s' (absdombb d) }
 
 
+-- restrict the domain of all values
+absdomRestrictValDomains :: Ptr Set -> AbsDomain  -> IO AbsDomain
+absdomRestrictValDomains s d = do
+    absdomval' <- traverse 
+        (\pw -> do
+            s <- setCopy s 
+            pw <- pwaffCopy pw
+            pwaffIntersectDomain pw s)
+        (absdomval d)
+    return $ d { absdomval = absdomval'}
+
 
 instance Pretty AbsDomain where
     pretty d = 
@@ -224,7 +235,8 @@ abstransexpr :: Ptr Ctx
     -> Expr
     -> AbsDomain
     -> IO (Ptr Pwaff)
-abstransexpr ctx id2isl id (EId id') absdom = pwaffCopy (absdomGetVal absdom id')
+abstransexpr ctx id2isl id (EId id') absdom = 
+    pwaffCopy (absdomGetVal absdom id')
 
 abstransexpr ctx id2isl _ (EInt i) _ = pwConst ctx id2isl i
 
@@ -280,7 +292,8 @@ edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
     case bbid2nl M.!? bbid of
         Nothing -> return s
         Just nl -> do
-            putDocW 80 (pretty "#NATURAL LOOP: " <> pretty nl <> pretty "\n")
+            putDocW 80 (pretty "#NATURAL LOOP: " <> 
+                pretty nl <> pretty "\n")
             putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
             -- dim of the loop
             let lid = id2isl OM.! (nl2loopid nl)
@@ -330,7 +343,15 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     d <- setCopy vcFalse >>= \s -> absdomUnionEdge bb bbr s d
     d <- absdomUnionBB bbr vcFalse d
 
-    return $ [(bbl, d), (bbr, d)]
+
+    let doml = absdomGetBB bbl d
+    dl <- absdomRestrictValDomains doml d
+
+
+    let domr = absdomGetBB bbr d
+    dr <- absdomRestrictValDomains domr d
+
+    return $ [(bbl, dl), (bbr, dr)]
 
 -- | take a disjoin union of two pwaffs
 -- | Take, Take -> Give
@@ -408,9 +429,19 @@ absintbb ctx id2isl p dmempty bb l2d = do
             l2d <- loc2dUnion (locincr (location a)) d' l2d
             return l2d
         ) l2d (bbinsts bb)
-    return l2d
 
-    -- | now abstract interpret the terminator
+    -- | now abstract interpret the terminator, updating
+    -- | the states of everyone after us.
+    let t = bbterm bb
+    bbid2d <- abstransterm ctx id2isl p (bbid bb) t (loc2dget l2d t)
+    l2d <- foldM (\l2d (bbid, d) -> do
+        let bbid2bb = progbbid2bb p
+        let bb' = bbid2bb !!# bbid
+        -- update at the location of the next bb
+        loc2dUnion (bbloc bb') d l2d 
+        ) l2d bbid2d
+        
+    return l2d
 
 
     
