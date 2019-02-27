@@ -36,6 +36,11 @@ import Collectingsem
 import Absdomain
 
 
+-- each location has an associated abstract domain.
+-- each location's abstract domain is the value that is held
+-- right after that location.
+newtype Absint = Absint (M.Map Loc AbsDomain)
+
 -- | Abstract domain model
 data AbsDomain = AbsDomain {
     absdomval :: M.Map Id (Ptr Pwaff),
