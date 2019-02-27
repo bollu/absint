@@ -59,6 +59,8 @@ loc2dUnion :: Loc -> AbsDomain -> Loc2AbsDomain -> IO Loc2AbsDomain
 loc2dUnion l dcur (Loc2AbsDomain l2d) = 
     case M.lookup l l2d of
         Just dprev -> do
+            dprev <- absdomainCopy dprev
+            dcur <- absdomainCopy dcur
             d' <- absdomUnion dcur dprev
             return $ Loc2AbsDomain $ M.insert l d' l2d
         Nothing -> return $ Loc2AbsDomain $ M.insert l dcur l2d
@@ -329,14 +331,15 @@ abstransterm ctx id2isl p _ (Done _) d = return []
 abstransterm ctx id2isl p bb (Br _ bb') d = do
     let s = absdomGetBB bb d
     s <- edgeConstrainOnLoopEnter ctx id2isl p bb' s
+    d <- absdomainCopy d
     d <- setCopy s >>= \s -> absdomUnionEdge bb bb' s d
     d <- setCopy s >>= \s -> absdomUnionBB bb' s d
-    putDocW 80 (pretty "\n\n" <> pretty d <> pretty "\n\n")
     return [(bb', d)]
 
 abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     vc <- pwaffCopy $ absdomGetVal d c
     let dbb  = absdomGetBB bb d
+    d <- absdomainCopy d
 
     -- true = -1
     vcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
@@ -351,7 +354,7 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     vcFalse <- edgeConstrainOnLoopEnter ctx id2isl p bbl vcFalse
     d <- setCopy vcFalse >>= \s -> absdomUnionEdge bb bbr s d
     d <- absdomUnionBB bbr vcFalse d
-
+    putStrLn "#### term: doml before###"
 
     doml <- setCopy $ absdomGetBB bbl d 
     dl <- absdomainCopy d >>= absdomRestrictValDomains doml
@@ -419,6 +422,7 @@ absintbb :: Ptr Ctx
     -> Loc2AbsDomain 
     -> IO Loc2AbsDomain
 absintbb ctx id2isl p dmempty bb l2d = do
+    putStrLn $ "\n########0:" ++ show (bbid bb) ++ "#######"
     putDocW 80 (pretty (progbbid2preds p))
     let preds = (progbbid2preds p) !!# (bbid bb)
     let pred_ds = map (\bb -> loc2dget l2d  bb) preds
@@ -445,10 +449,13 @@ absintbb ctx id2isl p dmempty bb l2d = do
     let t = bbterm bb
     bbid2d <- abstransterm ctx id2isl p (bbid bb) t (loc2dget l2d t)
     putStrLn "\n########2#######"
-    l2d <- foldM (\l2d (bbid, d) -> do
+    l2d <- foldM (\l2d (bbid', d) -> do
         let bbid2bb = progbbid2bb p
-        let bb' = bbid2bb !!# bbid
+        let bb' = bbid2bb !!# bbid'
         -- update at the location of the next bb
+        putStrLn $ 
+            ("\n########2:" ++ show (bbid bb) ++ "->>>" 
+            ++ show (bbid bb') ++ "#######")
         loc2dUnion (bbloc bb') d l2d 
         ) l2d bbid2d
         
@@ -652,6 +659,10 @@ edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [(Program, Env Int)]
 programs = [(passign, edefault)
+            , (passign, edefault)
+            , (passign, edefault)
+            , (passign, edefault)
+            , (passign, edefault)
             , (pif, edefault)
             -- , (ploop, edefault)
            ] 
