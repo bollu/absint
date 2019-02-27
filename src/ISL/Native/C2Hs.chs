@@ -310,6 +310,12 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Set'
   } -> `Maybe Bool' fromRawIslBool #}
 
+
+{#fun isl_set_is_subset as setIsSubset
+  { id `Ptr Set' 
+  , id `Ptr Set'
+  } -> `Maybe Bool' fromRawIslBool #}
+
 -- =================
 -- constraint
 

@@ -183,14 +183,17 @@ absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
 absintassign :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program
+    -> Ptr Set -- ^ Take, Conditions under which this assignment is active
     -> Assign
     -> AbsDomain
     -> IO AbsDomain
-absintassign ctx id2isl p a d = do
+absintassign ctx id2isl p dom a d = do
     let e = assignexpr a
     let id = assignid a
 
-    pwaff <- absintexpr ctx id2isl id e d
+    dom <- setCopy dom
+    pwaff <- absintexpr ctx id2isl id e d 
+    pwaff <- pwaffIntersectDomain pwaff dom
     return $ absdomSetVal id pwaff d
 
 -- | Abstract interpret terminators
@@ -227,6 +230,7 @@ absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     return d
 
 -- | take a disjoin union of two pwaffs
+-- | Take, Take -> Give
 pwaffUnion :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
 pwaffUnion pl pr = do
     dl <- pwaffDomain pl
@@ -234,10 +238,17 @@ pwaffUnion pl pr = do
     dintersect <- setIntersect dl dr
     deq <- pwaffEqSet pl pr
 
-    isEqOnCommon <- setIsSubset dintersect deq
+    Just isEqOnCommon <- setIsSubset dintersect deq
     if isEqOnCommon
     then  pwaffUnionAdd pl pr
-    else error $ "pwaffs are not equal on common domain"
+    else do 
+        putDocW 80 $ vcat $ 
+            [pretty "pl: " <> pretty pl
+            , pretty "pr: " <> pretty pl
+            , pretty "dintersect: " <> pretty dintersect
+            , pretty "deq: " <> pretty deq
+            , pretty "---\n"]
+        error $ "pwaffs are not equal on common domain"
 
     
 -- | Abstract interpret phi nodes
@@ -248,8 +259,8 @@ absintphi :: Ptr Ctx
     -> AbsDomain 
     -> IO AbsDomain
 absintphi cx id2isl p phi d = do
-    let pl =  absdomGetVal d (snd . phil $ phi)
-    let pr =  absdomGetVal d (snd . phir $ phi)
+    pl <-  pwaffCopy $ absdomGetVal d (snd . phil $ phi)
+    pr <-  pwaffCopy $ absdomGetVal d (snd . phir $ phi)
     pwaff <- pwaffUnion pl pr
     return $ absdomSetVal (phiid phi) pwaff d
 
@@ -262,12 +273,14 @@ absintbb :: Ptr Ctx
     -> AbsDomain 
     -> IO AbsDomain
 absintbb ctx id2isl p bb d = do
-    dphi <- foldM 
+    -- let dphi = d
+    d <- foldM 
         (\d phi -> absintphi ctx id2isl p phi d) d (bbphis bb)
-    dassign <- foldM 
-        (\d a -> absintassign ctx id2isl p a d) dphi (bbinsts bb) 
-    dterm <- absintterm ctx id2isl p (bbid bb) (bbterm bb) dassign
-    return dterm
+    d <- foldM 
+        (\d a -> let dom = absdomGetBB (bbid bb) d in
+            absintassign ctx id2isl p dom a d) d (bbinsts bb)
+    d <- absintterm ctx id2isl p (bbid bb) (bbterm bb) d
+    return d
 
 
     
