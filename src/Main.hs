@@ -702,7 +702,7 @@ edefault = envFromParamList [(Id "p", 1)]
 programs :: [(Program, Env Int)]
 programs = [(passign, edefault)
             , (pif, edefault)
-            -- , (ploop, edefault)
+            , (ploop, edefault)
            ] 
 
 -- | Main entry point that executes all programs
