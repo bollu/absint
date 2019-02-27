@@ -443,6 +443,20 @@ absintbb ctx id2isl p dmempty bb l2d = do
     l2d <- loc2dUnion (bbFirstInstLoc bb) d l2d
     putStrLn $ "\n########02:" ++ show (bbid bb) ++ "#######"
 
+
+    -- first abstract interpret each phi, forwarding the data
+    -- as expected
+    -- TODO: remove redundancy in code between phi and assign
+    l2d <- foldM 
+        (\l2d phi -> do
+            let d = loc2dget l2d phi
+            let dom = absdomGetBB (bbid bb) d
+            d' <- abstransphis ctx id2isl p phi d
+            -- set the value at the next location
+            l2d <- loc2dUnion (locincr (location phi)) d' l2d
+            return l2d
+        ) l2d (bbphis bb)
+
     -- now abstract interpret each instruction, forwarding the
     -- data as expected
     l2d <- foldM 
