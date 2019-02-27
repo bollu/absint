@@ -371,22 +371,29 @@ pwaffUnion :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
 pwaffUnion pl pr = do
     dl <- pwaffCopy pl >>= pwaffDomain 
     dr <- pwaffCopy pr >>= pwaffDomain 
-    dintersect <- setIntersect dl dr
+    dcommon <- setIntersect dl dr
     deq <- pwaffCopy pl >>= \pl -> pwaffCopy pr >>= \pr -> pwaffEqSet pl pr
 
-    Just isEqOnCommon <- setIsSubset dintersect deq
-    if isEqOnCommon
+    Just commonSubsetEq <- setIsSubset dcommon deq
+    Just commonEqualEq <- setIsEqual dcommon deq
+
+    
+    if commonSubsetEq
     then  do
         pl <- pwaffCopy pl
         pr <- pwaffCopy pr
-        pwaffUnionAdd pl pr
+        pwaffUnionMax pl pr
     else do 
+        dneq <- setCopy deq >>= setComplement 
         putDocW 80 $ vcat $ 
             [pretty "---"
             , pretty "pl: " <> pretty pl <> pretty "| dl: " <> pretty dl
             , pretty "pr: " <> pretty pr <> pretty "| dr: " <> pretty dr
-            , pretty "dintersect: " <> pretty dintersect
+            , pretty "dcommon: " <> pretty dcommon
             , pretty "deq: " <> pretty deq
+            , pretty "dNEQ: " <> pretty dneq
+            , pretty "commonEqualEq: " <> pretty commonEqualEq
+            , pretty "commonSubsetEq: " <> pretty commonSubsetEq
             , pretty "---\n"]
         error $ "pwaffs are not equal on common domain"
 
