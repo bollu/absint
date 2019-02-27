@@ -671,10 +671,6 @@ edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [(Program, Env Int)]
 programs = [(passign, edefault)
-            , (passign, edefault)
-            , (passign, edefault)
-            , (passign, edefault)
-            , (passign, edefault)
             , (pif, edefault)
             -- , (ploop, edefault)
            ] 
