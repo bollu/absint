@@ -46,9 +46,11 @@ newtype Loc2AbsDomain = Loc2AbsDomain (M.Map Loc AbsDomain) deriving (Show)
 instance Pretty Loc2AbsDomain where
     pretty (Loc2AbsDomain l2d) = pretty l2d
 
--- | Empty l2d
-loc2dempty :: Loc2AbsDomain
-loc2dempty = Loc2AbsDomain $ mempty
+-- | Initial loc2d
+loc2dinit :: Loc -- ^ location of the entry block
+    -> AbsDomain -- ^ initial abstract domain
+    -> Loc2AbsDomain
+loc2dinit l d = Loc2AbsDomain $ M.insert l d mempty
 
 -- | Union at a key in l2d
 loc2dUnion :: Loc -> AbsDomain -> Loc2AbsDomain -> IO Loc2AbsDomain
@@ -427,7 +429,7 @@ absint :: Program -> IO Loc2AbsDomain
 absint p = do
      (ctx, id2isl) <- newISLState p
      dmempty <- absDomainStart ctx id2isl p
-     absint_ ctx id2isl p dmempty loc2dempty
+     absint_ ctx id2isl p dmempty (loc2dinit (Loc (-1)) dmempty)
 
 
 gamma :: AbsDomain -> ConcreteDomain
