@@ -233,8 +233,8 @@ absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
 -- | Take, Take -> Give
 pwaffUnion :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
 pwaffUnion pl pr = do
-    dl <- pwaffDomain pl
-    dr <- pwaffDomain pr
+    dl <- pwaffCopy pl >>= pwaffDomain 
+    dr <- pwaffCopy pr >>= pwaffDomain 
     dintersect <- setIntersect dl dr
     deq <- pwaffEqSet pl pr
 
