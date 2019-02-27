@@ -236,7 +236,7 @@ pwaffUnion pl pr = do
     dl <- pwaffCopy pl >>= pwaffDomain 
     dr <- pwaffCopy pr >>= pwaffDomain 
     dintersect <- setIntersect dl dr
-    deq <- pwaffEqSet pl pr
+    deq <- pwaffCopy pl >>= \pl -> pwaffCopy pr >>= \pr -> pwaffEqSet pl pr
 
     Just isEqOnCommon <- setIsSubset dintersect deq
     if isEqOnCommon
@@ -246,8 +246,8 @@ pwaffUnion pl pr = do
         pwaffUnionAdd pl pr
     else do 
         putDocW 80 $ vcat $ 
-            [pretty "pl: " <> pretty pl
-            , pretty "pr: " <> pretty pl
+            [pretty "pl: " <> pretty pl <> pretty "| dl: " <> pretty dl
+            , pretty "pr: " <> pretty pr <> pretty "| dr: " <> pretty dr
             , pretty "dintersect: " <> pretty dintersect
             , pretty "deq: " <> pretty deq
             , pretty "---\n"]
@@ -315,27 +315,6 @@ gamma = undefined
 
 {-
 
-pLoop :: Program
-pLoop = runProgramBuilder $ do
-  entry <- buildNewBB "entry" Nothing 
-  loop <- buildNewBB "loop" (Just $ BBLoop [])
-  exit <- buildNewBB "exit" Nothing
-
-  focusBB entry
-  assign "x_entry" (EInt 1)
-
-  br loop
-
-  focusBB exit
-  done
-
-  focusBB loop
-  phi Philoop "x_loop" (entry, "x_entry") (loop, "x_next")
-
-  assign "x_loop_lt_5" ("x_loop" <. (EInt 5))
-  assign "x_next" ("x_loop" +. (EInt 1))
-
-  condbr "x_loop_lt_5" loop exit
 
 
 pNestedLoop :: Program
@@ -447,6 +426,28 @@ pif = runProgramBuilder $ do
   m2 <- phi Phicond "m2" (true, "xt") (false, "xf")
   done
 
+ploop :: Program
+ploop = runProgramBuilder $ do
+  entry <- buildNewBB "entry" Nothing 
+  loop <- buildNewBB "loop" (Just $ BBLoop [])
+  exit <- buildNewBB "exit" Nothing
+
+  focusBB entry
+  assign "one" $ (EInt 1)
+  assign "five" $ (EInt 5)
+  assign "x_entry" $ EId (Id "one")
+
+  br loop
+
+  focusBB exit
+  done
+
+  focusBB loop
+  phi Philoop "x_loop" (entry, "x_entry") (loop, "x_next")
+
+  assign "x_loop_lt_5" ("x_loop" <. "five")
+  assign "x_next" ("x_loop" +. "one")
+  condbr "x_loop_lt_5" loop exit
 
 -- 
 -- -- ========================
@@ -477,9 +478,14 @@ runProgram p e = do
 edefault :: Env Int
 edefault = envFromParamList [(Id "p", 1)]
 
+programs :: [(Program, Env Int)]
+programs = [(passign, edefault)
+            , (pif, edefault)
+            , (ploop, edefault)] 
+
 -- | Main entry point that executes all programs
 main :: IO ()
-main = for_ [(passign, edefault), (pif, edefault)] (\(p, e) -> do
+main = for_ programs (\(p, e) -> do
     runProgram  p e
     putStrLn "\n=========================")
 
