@@ -33,7 +33,9 @@ instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
   pretty m = 
     if M.null m 
        then pretty "emptymap" 
-       else (indent 1 (vcat $ [pretty "(" <> pretty k <+> pretty "->" <+> (pretty v) <> pretty ")" | (k, v) <- M.toList m]))
+       else (indent 4 (vcat $ [
+                vcat [pretty k <+> pretty "->", indent 4 $ (pretty v)]
+                | (k, v) <- M.toList m]))
 
 
 (!!#) :: HasCallStack => Ord k => Pretty k => Pretty v => M.Map k v -> k -> v

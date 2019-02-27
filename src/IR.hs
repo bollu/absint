@@ -173,6 +173,13 @@ bbGetLocs :: BB -> [Loc]
 bbGetLocs (BB _ _ loc phis insts term) = 
   [loc] ++ (map location phis) ++ (map location insts) ++ [location term]
 
+-- | get the location of the first instruction in the BB
+bbFirstInstLoc :: BB -> Loc
+bbFirstInstLoc bb = 
+    head $ (map location (bbphis bb)) ++ 
+            (map location (bbinsts bb)) ++ 
+             [location (bbterm bb)]
+
 bbGetIds :: BB -> [Id]
 bbGetIds (BB _ _ _ phis assigns _) = 
     map phiid phis ++ map assignid assigns
@@ -220,6 +227,19 @@ progbbid2nl (Program _ bbs) = M.fromList $ do
   case ty of
     Just (BBLoop bodies) -> return (bbid bb, NaturalLoop (bbid bb) bodies)
     Nothing -> []
+    
+
+-- | Map baic block ids to predecessors
+progbbid2preds :: Program -> M.Map BBId [BB]
+progbbid2preds p = 
+    let existing = M.fromListWith (++) $ (do 
+            bb <- progbbs p
+            bbn <- termnextbbs . bbterm $ bb
+            return $ (bbn, [bb]))
+        empty = M.fromList $ [(bbid bb, [])  | bb <- progbbs p]
+    in M.unionWith (++) existing empty
+
+    
 
 
 -- get the largest location

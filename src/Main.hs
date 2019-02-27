@@ -39,14 +39,77 @@ import Absdomain
 -- each location has an associated abstract domain.
 -- each location's abstract domain is the value that is held
 -- right after that location.
-newtype Absint = Absint (M.Map Loc AbsDomain)
+-- Data at a location is the value that is present *before* the isntruction
+-- is executed
+newtype Loc2AbsDomain = Loc2AbsDomain (M.Map Loc AbsDomain) deriving (Show)
 
+instance Pretty Loc2AbsDomain where
+    pretty (Loc2AbsDomain l2d) = pretty l2d
+
+-- | Empty l2d
+loc2dempty :: Loc2AbsDomain
+loc2dempty = Loc2AbsDomain $ mempty
+
+-- | Union at a key in l2d
+loc2dUnion :: Loc -> AbsDomain -> Loc2AbsDomain -> IO Loc2AbsDomain
+loc2dUnion l dcur (Loc2AbsDomain l2d) = 
+    case M.lookup l l2d of
+        Just dprev -> do
+            d' <- absdomUnion dcur dprev
+            return $ Loc2AbsDomain $ M.insert l d' l2d
+        Nothing -> return $ Loc2AbsDomain $ M.insert l dcur l2d
+
+-- | Get the absdomain at a located value
+loc2dget :: Located a => Loc2AbsDomain -> a -> AbsDomain
+loc2dget (Loc2AbsDomain l2d) a = l2d !!# (location a)
 -- | Abstract domain model
 data AbsDomain = AbsDomain {
     absdomval :: M.Map Id (Ptr Pwaff),
     absdomedge :: (M.Map (BBId, BBId) (Ptr Set)),
     absdombb :: M.Map BBId (Ptr Set)
 } deriving(Show)
+
+-- | Take a union of two maps under a monadic context
+-- | Assumes key space of 1 and 2 are equal
+mapsunionM :: (Ord k, Pretty k, Pretty v, Monad m) 
+    => (v -> v -> m v) 
+    -> M.Map k v 
+    -> M.Map k v 
+    -> m (M.Map k v)
+mapsunionM f m m' = do
+    let ks = M.keys m
+    foldM  (\mcur k -> do
+            let v = m !!# k
+            let v' = m' !!# k
+            vunion <- f v v'
+            return $ M.insert k vunion mcur
+        ) M.empty ks
+
+
+-- | Performs a pointwise union of pwaff over two maps.
+-- | Assumes key space of 1 and 2 are equal
+id2pwunion :: (Ord k, Pretty k)
+    => M.Map k (Ptr Pwaff) 
+    -> M.Map k (Ptr Pwaff) 
+    -> IO (M.Map k (Ptr Pwaff))
+id2pwunion = mapsunionM pwaffUnion
+
+-- | perform a pointwise union of sets over two maps.
+-- | Assumes key space of 1 and 2 are equal
+id2setunion :: (Ord k, Pretty k)
+    => M.Map k (Ptr Set)
+    -> M.Map k (Ptr Set)
+    -> IO (M.Map k (Ptr Set))
+id2setunion = mapsunionM setUnion
+
+-- | Union two values of the abstract domain
+absdomUnion :: AbsDomain -> AbsDomain -> IO AbsDomain
+absdomUnion d d' = do
+    domnew <- id2pwunion (absdomval d) (absdomval d')
+    edgenew <- id2setunion (absdomedge d) (absdomedge d')
+    bbnew <- id2setunion (absdombb d) (absdombb d')
+    return $ AbsDomain domnew edgenew bbnew
+
 
 -- | dom[id]
 absdomGetVal :: AbsDomain -> Id -> (Ptr Pwaff)
@@ -153,23 +216,23 @@ absDomainStart ctx id2isl p = do
     return $ AbsDomain dval dedge dbb
 
 -- Abstract interpret expressions
-absintexpr :: Ptr Ctx
+abstransexpr :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Id
     -> Expr
     -> AbsDomain
     -> IO (Ptr Pwaff)
-absintexpr ctx id2isl id (EId id') absdom = pwaffCopy (absdomGetVal absdom id')
+abstransexpr ctx id2isl id (EId id') absdom = pwaffCopy (absdomGetVal absdom id')
 
-absintexpr ctx id2isl _ (EInt i) _ = pwConst ctx id2isl i
+abstransexpr ctx id2isl _ (EInt i) _ = pwConst ctx id2isl i
 
-absintexpr ctx id2isl _ (EBinop Add id1 id2) absdom = do
+abstransexpr ctx id2isl _ (EBinop Add id1 id2) absdom = do
     pw1 <- pwaffCopy $ absdomGetVal absdom id1
     pw2 <- pwaffCopy $ absdomGetVal absdom id2
     pwaffAdd pw1 pw2
 
 
-absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
+abstransexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
     pw1 <- pwaffCopy $ absdomGetVal absdom id1
     pw2  <- pwaffCopy $ absdomGetVal absdom id2
     lt <- pwaffLtSet pw1 pw2
@@ -185,19 +248,19 @@ absintexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
 -- | Abstract interpret assignment expressions
 -- | TODO: code repetition of forwarding to BB. This should most likely
 -- | be the responsibility of the BB code.
-absintassign :: Ptr Ctx
+abstransassign :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program
     -> Ptr Set -- ^ Take, Conditions under which this assignment is active
     -> Assign
     -> AbsDomain
     -> IO AbsDomain
-absintassign ctx id2isl p dom a d = do
+abstransassign ctx id2isl p dom a d = do
     let e = assignexpr a
     let id = assignid a
 
     dom <- setCopy dom
-    pwaff <- absintexpr ctx id2isl id e d 
+    pwaff <- abstransexpr ctx id2isl id e d 
     pwaff <- pwaffIntersectDomain pwaff dom
     return $ absdomSetVal id pwaff d
 
@@ -231,23 +294,23 @@ edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
 
 
 -- | Abstract interpret terminators
-absintterm :: Ptr Ctx
+abstransterm :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program
     -> BBId -- ^ Current BBId
     -> Term
     -> AbsDomain
-    -> IO AbsDomain
-absintterm ctx id2isl p _ (Done _) d = return d
-absintterm ctx id2isl p bb (Br _ bb') d = do
+    -> IO [(BBId, AbsDomain)] -- ^ List of basic blocks and updated abstract domains
+abstransterm ctx id2isl p _ (Done _) d = return []
+abstransterm ctx id2isl p bb (Br _ bb') d = do
     let s = absdomGetBB bb d
     s <- edgeConstrainOnLoopEnter ctx id2isl p bb' s
     d <- setCopy s >>= \s -> absdomUnionEdge bb bb' s d
     d <- setCopy s >>= \s -> absdomUnionBB bb' s d
     putDocW 80 (pretty "\n\n" <> pretty d <> pretty "\n\n")
-    return d
+    return [(bb', d)]
 
-absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
+abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     vc <- pwaffCopy $ absdomGetVal d c
     let dbb  = absdomGetBB bb d
 
@@ -265,7 +328,7 @@ absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     d <- setCopy vcFalse >>= \s -> absdomUnionEdge bb bbr s d
     d <- absdomUnionBB bbr vcFalse d
 
-    return d
+    return $ [(bbl, d), (bbr, d)]
 
 -- | take a disjoin union of two pwaffs
 -- | Take, Take -> Give
@@ -302,13 +365,13 @@ absintEntryIntoLoopPhi :: Ptr Ctx
 absintEntryIntoLoopPhi ctx id2isl p bbid d = return d
     
 -- | Abstract interpret phi nodes
-absintphi :: Ptr Ctx
+abstransphis :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id) 
     -> Program 
     -> Phi 
     -> AbsDomain 
     -> IO AbsDomain
-absintphi cx id2isl p phi d = do
+abstransphis cx id2isl p phi d = do
     pl <-  pwaffCopy $ absdomGetVal d (snd . phil $ phi)
     pr <-  pwaffCopy $ absdomGetVal d (snd . phir $ phi)
     pwaff <- pwaffUnion pl pr
@@ -319,18 +382,33 @@ absintphi cx id2isl p phi d = do
 absintbb :: Ptr Ctx 
     -> OM.OrderedMap Id (Ptr ISLTy.Id) 
     -> Program 
+    -> AbsDomain -- ^ identity abstract domain
     -> BB 
-    -> AbsDomain 
-    -> IO AbsDomain
-absintbb ctx id2isl p bb d = do
-    -- let dphi = d
-    d <- foldM 
-        (\d phi -> absintphi ctx id2isl p phi d) d (bbphis bb)
-    d <- foldM 
-        (\d a -> let dom = absdomGetBB (bbid bb) d in
-            absintassign ctx id2isl p dom a d) d (bbinsts bb)
-    d <- absintterm ctx id2isl p (bbid bb) (bbterm bb) d
-    return d
+    -> Loc2AbsDomain 
+    -> IO Loc2AbsDomain
+absintbb ctx id2isl p dmempty bb l2d = do
+    putDocW 80 (pretty (progbbid2preds p))
+    let preds = (progbbid2preds p) !!# (bbid bb)
+    let pred_ds = map (\bb -> loc2dget l2d  bb) preds
+    -- create a union
+    d <- foldM absdomUnion dmempty pred_ds 
+    -- forward this to the first instruction in the bb
+    l2d <- loc2dUnion (bbFirstInstLoc bb) d l2d
+
+    -- now abstract interpret each instruction, forwarding the
+    -- data as expected
+    l2d <- foldM 
+        (\l2d a -> do
+            let d = loc2dget l2d a
+            let dom = absdomGetBB (bbid bb) d
+            d' <- abstransassign ctx id2isl p dom a d
+            -- set the value at the next location
+            l2d <- loc2dUnion (locincr (location a)) d' l2d
+            return l2d
+        ) l2d (bbinsts bb)
+    return l2d
+
+    -- | now abstract interpret the terminator
 
 
     
@@ -338,17 +416,18 @@ absintbb ctx id2isl p bb d = do
 absint_ :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program 
-    -> AbsDomain 
-    -> IO AbsDomain
-absint_ ctx id2isl p d = do
-    foldM (\d bb -> absintbb ctx id2isl p bb d) d (progbbs p)
+    -> AbsDomain -- ^ Identity abstract domain
+    -> Loc2AbsDomain 
+    -> IO Loc2AbsDomain
+absint_ ctx id2isl p dmempty l2d = do
+    foldM (\l2d bb -> absintbb ctx id2isl p dmempty bb l2d) l2d (progbbs p)
     
 
-absint :: Program -> IO AbsDomain
+absint :: Program -> IO Loc2AbsDomain
 absint p = do
      (ctx, id2isl) <- newISLState p
-     d <- absDomainStart ctx id2isl p
-     absint_ ctx id2isl p d
+     dmempty <- absDomainStart ctx id2isl p
+     absint_ ctx id2isl p dmempty loc2dempty
 
 
 gamma :: AbsDomain -> ConcreteDomain
