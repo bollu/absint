@@ -382,7 +382,8 @@ pwaffUnion pl pr = do
         pwaffUnionAdd pl pr
     else do 
         putDocW 80 $ vcat $ 
-            [pretty "pl: " <> pretty pl <> pretty "| dl: " <> pretty dl
+            [pretty "---"
+            , pretty "pl: " <> pretty pl <> pretty "| dl: " <> pretty dl
             , pretty "pr: " <> pretty pr <> pretty "| dr: " <> pretty dr
             , pretty "dintersect: " <> pretty dintersect
             , pretty "deq: " <> pretty deq
@@ -407,11 +408,15 @@ abstransphis :: Ptr Ctx
     -> AbsDomain 
     -> IO AbsDomain
 abstransphis cx id2isl p phi d = do
+    putDocW 80 (pretty d)
     pl <-  pwaffCopy $ absdomGetVal d (snd . phil $ phi)
     pr <-  pwaffCopy $ absdomGetVal d (snd . phir $ phi)
     pwaff <- pwaffUnion pl pr
     return $ absdomSetVal (phiid phi) pwaff d
 
+
+foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
+foldM1 f (a:as) = foldM f a as
 
 -- | Abstract interpret basic blocks
 absintbb :: Ptr Ctx 
@@ -423,13 +428,20 @@ absintbb :: Ptr Ctx
     -> IO Loc2AbsDomain
 absintbb ctx id2isl p dmempty bb l2d = do
     putStrLn $ "\n########0:" ++ show (bbid bb) ++ "#######"
-    putDocW 80 (pretty (progbbid2preds p))
+    -- putDocW 80 (pretty (progbbid2preds p))
     let preds = (progbbid2preds p) !!# (bbid bb)
     let pred_ds = map (\bb -> loc2dget l2d  bb) preds
-    -- create a union
-    d <- foldM absdomUnion dmempty pred_ds 
+
+    putDocW 80 (vcat (map (\d -> vcat [pretty "vvv",pretty d, pretty "^^^"]) pred_ds))
+    -- create a union.
+    -- HACK: special case for entry BB
+    d <- if null pred_ds
+        then return dmempty
+        else foldM1 absdomUnion pred_ds 
+    putStrLn $ "\n########01:" ++ show (bbid bb) ++ "#######"
     -- forward this to the first instruction in the bb
     l2d <- loc2dUnion (bbFirstInstLoc bb) d l2d
+    putStrLn $ "\n########02:" ++ show (bbid bb) ++ "#######"
 
     -- now abstract interpret each instruction, forwarding the
     -- data as expected
