@@ -150,8 +150,8 @@ bbExecCollecting sem bbid2nl bbid2loc bb csem = let
 
 programExecCollecting :: Ord a => Pretty a => Semantics a -> Program -> Collecting a -> Collecting a
 programExecCollecting sem p@(Program _ bbs) csem = 
-  let bbid2loc = M.map bbloc (programBBId2BB p) 
-      bbid2nl = programBBId2nl p
+  let bbid2loc = M.map bbloc (progbbid2bb p) 
+      bbid2nl = progbbid2nl p
    in foldl (\csem bb -> bbExecCollecting sem bbid2nl bbid2loc bb csem) csem bbs
 
 

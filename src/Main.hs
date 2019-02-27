@@ -196,6 +196,35 @@ absintassign ctx id2isl p dom a d = do
     pwaff <- pwaffIntersectDomain pwaff dom
     return $ absdomSetVal id pwaff d
 
+
+
+-- | If edge enters a loop, constrain it to set (loopvar = 0)
+edgeConstrainOnLoopEnter :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> BBId -- ^ entering bbid
+    -> Ptr Set -- ^ current conditions
+    -> IO (Ptr Set)
+edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
+    let bbid2nl = progbbid2nl p
+    case bbid2nl M.!? bbid of
+        Nothing -> return s
+        Just nl -> do
+            putDocW 80 (pretty "#NATURAL LOOP: " <> pretty nl <> pretty "\n")
+            putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
+            -- dim of the loop
+            let lid = id2isl OM.! (nl2loopid nl)
+            Just ldim <- findDimById s IslDimSet lid
+            -- set dim of loop = 0
+            c <- getSpace s >>= localSpaceFromSpace >>= 
+                constraintAllocEquality 
+            c <- constraintSetCoefficient c IslDimSet ldim 1
+            s <- setCopy s >>= \s -> setAddConstraint s c
+            putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
+            return s
+
+
+
 -- | Abstract interpret terminators
 absintterm :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
@@ -207,8 +236,10 @@ absintterm :: Ptr Ctx
 absintterm ctx id2isl p _ (Done _) d = return d
 absintterm ctx id2isl p bb (Br _ bb') d = do
     let s = absdomGetBB bb d
+    s <- edgeConstrainOnLoopEnter ctx id2isl p bb' s
     d <- setCopy s >>= \s -> absdomUnionEdge bb bb' s d
     d <- setCopy s >>= \s -> absdomUnionBB bb' s d
+    putDocW 80 (pretty "\n\n" <> pretty d <> pretty "\n\n")
     return d
 
 absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
@@ -218,12 +249,14 @@ absintterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     -- true = -1
     vcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
     vcTrue <- setCopy dbb >>= \dbb -> vcTrue `setIntersect` dbb
+    vcTrue <- edgeConstrainOnLoopEnter ctx id2isl p bbl vcTrue
     d <- setCopy vcTrue >>= \s -> absdomUnionEdge bb bbl s d
     d <- absdomUnionBB bbl vcTrue d
 
 
     vcFalse <- setCopy vcTrue >>= setComplement
     vcFalse <- setCopy dbb >>= \dbb -> vcFalse `setIntersect` dbb
+    vcFalse <- edgeConstrainOnLoopEnter ctx id2isl p bbl vcFalse
     d <- setCopy vcFalse >>= \s -> absdomUnionEdge bb bbr s d
     d <- absdomUnionBB bbr vcFalse d
 

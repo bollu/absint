@@ -125,7 +125,7 @@ bbExec sem (BB bbid bbty _ phis insts term) (Env venv lenv pcprev) =
 programExec :: Pretty a => Semantics a -> Program -> Env a -> Env a
 programExec sem p@(Program _ bbs) env@(Env _ _ pc) = 
   let bbid2bb :: M.Map BBId BB
-      bbid2bb = programBBId2BB p
+      bbid2bb = progbbid2bb p
   in
     case pc of
       PCDone -> env

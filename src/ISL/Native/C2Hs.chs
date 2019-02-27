@@ -336,9 +336,23 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , id `CInt'
   } -> `Ptr Constraint' id #}
 
+
+
+{#fun isl_constraint_set_coefficient_si as constraintSetCoefficient
+  { id `Ptr Constraint'
+  , fromDimType `DimType'
+  , fromIntegral `Int'
+  , fromIntegral `Int'
+  } -> `Ptr Constraint' id #}
+
 {#fun isl_constraint_set_constant_si as constraintSetConstantSi
   { id `Ptr Constraint'
   , id `CInt'
+  } -> `Ptr Constraint' id #}
+
+{#fun isl_constraint_set_constant_si as constraintSetConstant
+  { id `Ptr Constraint'
+  , fromIntegral `Int'
   } -> `Ptr Constraint' id #}
 
 {#fun isl_basic_set_add_constraint as basicSetAddConstraint

@@ -153,6 +153,8 @@ instance Located BB where
   location (BB _ _ loc _ _ _) = loc
 
 
+bbid2loopid :: BBId -> Id
+bbid2loopid = Id . unBBId
 
 bbModifyInsts :: ([Assign] -> [Assign]) -> BB -> BB
 bbModifyInsts f (BB id ty loc phis insts term) = 
@@ -198,7 +200,7 @@ progids p = progparams p `S.union` (S.fromList (progbbs p >>= bbGetIds))
 
 -- | Virtual induction variables in the program
 progvivs :: Program -> S.Set Id
-progvivs p = S.fromList $ map (Id . unBBId . nlheader) (prognls p)
+progvivs p = S.fromList $ map (bbid2loopid . nlheader) (prognls p)
 
 -- | Edges in the program
 progedges :: Program -> [(BBId, BBId)]
@@ -206,13 +208,13 @@ progedges p = progbbs p >>= bbedges
 
 -- Create a map, mapping basic block IDs to basic blocks
 -- for the given program
-programBBId2BB :: Program -> M.Map BBId BB
-programBBId2BB (Program _ bbs) = 
+progbbid2bb :: Program -> M.Map BBId BB
+progbbid2bb (Program _ bbs) = 
   foldl (\m bb -> M.insert (bbid bb) bb m) M.empty bbs
 
 -- | Mapping from basic header IDs to natural loops
-programBBId2nl :: Program -> M.Map BBId NaturalLoop
-programBBId2nl (Program _ bbs) = M.fromList $ do
+progbbid2nl :: Program -> M.Map BBId NaturalLoop
+progbbid2nl (Program _ bbs) = M.fromList $ do
   bb <- bbs
   let ty = bbty bb
   case ty of
@@ -238,6 +240,9 @@ data NaturalLoop =
 instance Pretty NaturalLoop where
   pretty (NaturalLoop header body) = 
     pretty "natural loop" <+> pretty header <+> pretty body
+
+nl2loopid :: NaturalLoop -> Id
+nl2loopid = bbid2loopid . nlheader
 
 
 -- Return if the natural loop contains the basic block
