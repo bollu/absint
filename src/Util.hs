@@ -43,8 +43,8 @@ instance (Pretty k, Pretty v) => Pretty (M.Map k v) where
   case M.lookup k m of
     Just v -> v
     Nothing -> error . docToString $  
-                pretty "missing key: " <+> pretty k <+> 
-                  pretty "in map: " <+> pretty m
+                vcat [pretty "==", pretty "* missing key: ", pretty k,
+                  pretty "* in map: ", pretty m]
 
 
 -- Helper to repeat till fixpoint
