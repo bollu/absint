@@ -408,18 +408,28 @@ absintEntryIntoLoopPhi :: Ptr Ctx
 absintEntryIntoLoopPhi ctx id2isl p bbid d = return d
     
 -- | Abstract interpret phi nodes
-abstransphis :: Ptr Ctx
+abstransphi :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id) 
     -> Program 
+    -> Loc2AbsDomain  -- is not mutated, used to pull values
     -> Phi 
-    -> AbsDomain 
+    -> AbsDomain
     -> IO AbsDomain
-abstransphis cx id2isl p phi d = do
-    putDocW 80 (pretty d)
-    pl <-  pwaffCopy $ absdomGetVal d (snd . phil $ phi)
-    pr <-  pwaffCopy $ absdomGetVal d (snd . phir $ phi)
-    pwaff <- pwaffUnion pl pr
-    return $ absdomSetVal (phiid phi) pwaff d
+abstransphi cx id2isl p l2d phi d = do
+    let bbid2bb = progbbid2bb p
+
+    let bbl =  bbid2bb !!# (fst . phil $ phi)
+    let idl =  (snd . phil $ phi)
+    let dl = loc2dget l2d bbl 
+    let vl = absdomGetVal dl idl
+
+    let bbr =  bbid2bb !!# (fst . phir $ phi)
+    let idr =  (snd . phir $ phi)
+    let dr = loc2dget l2d bbr
+    let vr = absdomGetVal dr idr
+
+    v <- (pwaffUnion vl vr)
+    return $ absdomSetVal (phiid phi) v d
 
 
 foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
@@ -439,16 +449,15 @@ absintbb ctx id2isl p dmempty bb l2d = do
     let preds = (progbbid2preds p) !!# (bbid bb)
     let pred_ds = map (\bb -> loc2dget l2d  bb) preds
 
-    putDocW 80 (vcat (map (\d -> vcat [pretty "vvv",pretty d, pretty "^^^"]) pred_ds))
+    putDocW 80 (vcat (map (\(pred, d) -> 
+        vcat [pretty $ "vvv" ++ (show . bbid $ pred) ++ "vvv",pretty d, pretty "^^^"]) (zip preds pred_ds)))
     -- create a union.
     -- HACK: special case for entry BB
     d <- if null pred_ds
         then return dmempty
         else foldM1 absdomUnion pred_ds 
-    putStrLn $ "\n########01:" ++ show (bbid bb) ++ "#######"
     -- forward this to the first instruction in the bb
     l2d <- loc2dUnion (bbFirstInstLoc bb) d l2d
-    putStrLn $ "\n########02:" ++ show (bbid bb) ++ "#######"
 
 
     -- first abstract interpret each phi, forwarding the data
@@ -458,7 +467,7 @@ absintbb ctx id2isl p dmempty bb l2d = do
         (\l2d phi -> do
             let d = loc2dget l2d phi
             let dom = absdomGetBB (bbid bb) d
-            d' <- abstransphis ctx id2isl p phi d
+            d' <- abstransphi ctx id2isl p l2d phi d
             -- set the value at the next location
             l2d <- loc2dUnion (locincr (location phi)) d' l2d
             return l2d
