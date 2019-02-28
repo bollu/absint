@@ -431,12 +431,12 @@ absdomTransferOnLoopBackedge ctx id2isl p (bbidfrom, bbidto) d = do
         let lid = id2isl OM.! (nl2loopid nl)
         foldM (\d phi -> do
                 let vidr = snd . phir  $ phi
-                pw <- pwaffCopy $  absdomGetVal d vidr
+                pw <- pwaffCopy $ absdomGetVal d vidr
                 -- Increment the dimension of the loop, so we get the effect
                 -- at the next loop iteration
                 pw <- pwaffIncrParamDimension ctx id2isl (nl2loopid nl) pw
                 -- NOTE: this is *destructive* and overwrites the previous values
-                return $ absdomSetVal (phiid phi) pw d
+                return $ absdomSetVal vidr pw d
 
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
     else return d
@@ -533,7 +533,15 @@ abstransphi cx id2isl p phi d = do
     vl <- pwaffCopy $ absdomGetVal d idl 
     vr <- pwaffCopy $ absdomGetVal d idr 
 
+    putStrLn "vvv"
+    putDocW 80 $ pretty phi
+    putDocW 80 $ pretty d
+    putStrLn "===="
+    putDocW 80 $ pretty vl
+    putStrLn "===="
+    putDocW 80 $ pretty vr
     v <- (pwaffUnion vl vr)
+    putStrLn "^^^"
     return $ absdomSetVal (phiid phi) v d
 
 
@@ -612,7 +620,7 @@ absint p = do
      putDocW 80 (pretty dmempty)
 
      l2d <- loc2dinit (Loc (-1)) dmempty
-     l2ds <- repeatTillFixDebugTraceM 2 (==) (absint_ ctx id2isl p dmempty) l2d
+     l2ds <- repeatTillFixDebugTraceM 10 (==) (absint_ ctx id2isl p dmempty) l2d
      forM_ l2ds (putDocW 80 . pretty)
      return $ last l2ds
 
