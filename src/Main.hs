@@ -432,6 +432,8 @@ absdomTransferOnLoopBackedge ctx id2isl p (bbidfrom, bbidto) d = do
         foldM (\d phi -> do
                 let vidr = snd . phir  $ phi
                 pw <- pwaffCopy $  absdomGetVal d vidr
+                -- Increment the dimension of the loop, so we get the effect
+                -- at the next loop iteration
                 pw <- pwaffIncrParamDimension ctx id2isl (nl2loopid nl) pw
                 -- NOTE: this is *destructive* and overwrites the previous values
                 return $ absdomSetVal (phiid phi) pw d
