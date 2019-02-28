@@ -41,7 +41,7 @@ import Absdomain
 -- | right after that location.
 -- | Data at a location is the value that is present *after* the isntruction
 -- | is executed
-newtype Loc2AbsDomain = Loc2AbsDomain (M.Map Loc AbsDomain) deriving (Show)
+newtype Loc2AbsDomain = Loc2AbsDomain (M.Map Loc AbsDomain) deriving (Show, Eq)
 
 instance Pretty Loc2AbsDomain where
     pretty (Loc2AbsDomain l2d) = pretty l2d
@@ -76,7 +76,7 @@ data AbsDomain = AbsDomain {
     absdomval :: M.Map Id (Ptr Pwaff),
     absdomedge :: (M.Map (BBId, BBId) (Ptr Set)),
     absdombb :: M.Map BBId (Ptr Set)
-} deriving(Show)
+} deriving(Show, Eq)
 
 absdomainCopy :: AbsDomain -> IO AbsDomain
 absdomainCopy d = do
@@ -315,32 +315,59 @@ abstransassign ctx id2isl p dom a d = do
     return $ absdomSetVal id pwaff d
 
 
+isEdgeBackedge :: Program -> (BBId, BBId) -> Bool
+isEdgeBackedge p (bbidfrom, bbidto) = do
+    case progbbid2nl p M.!? bbidto of
+        Nothing -> False
+        Just nl -> bbidfrom `S.member` nlbody nl || bbidfrom == nlheader nl
+
 
 -- | If edge enters a loop, constrain it to set (loopvar = 0)
 edgeConstrainOnLoopEnter :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Program
-    -> BBId -- ^ entering bbid
+    -> (BBId, BBId) -- ^ Edge
     -> Ptr Set -- ^ current conditions
     -> IO (Ptr Set)
-edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
+edgeConstrainOnLoopEnter ctx id2isl p (bbidfrom, bbidto) s = do
     let bbid2nl = progbbid2nl p
-    case bbid2nl M.!? bbid of
+    case bbid2nl M.!? bbidto of
         Nothing -> return s
-        Just nl -> do
-            -- putDocW 80 (pretty "#NATURAL LOOP: " <> 
-            --    pretty nl <> pretty "\n")
-            -- putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
-            -- dim of the loop
-            let lid = id2isl OM.! (nl2loopid nl)
-            Just ldim <- findDimById s IslDimSet lid
-            -- set dim of loop = 0
-            c <- getSpace s >>= localSpaceFromSpace >>= 
-                constraintAllocEquality 
-            c <- constraintSetCoefficient c IslDimSet ldim 1
-            s <- setCopy s >>= \s -> setAddConstraint s c
-            -- putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
-            return s
+        Just nl -> 
+            -- |edge is part of loop, so this is a backedge. Nothing to
+            -- | constrain. This is taken care of absdomBumpOnLoopEdge
+            if bbidfrom `S.member` (nlbody nl) || bbidfrom == nlheader nl
+            then return s
+            else do
+                -- find the loop ID, and then the corresponding ISL id of the variable
+                let lid = id2isl OM.! (nl2loopid nl)
+                Just ldim <- findDimById s IslDimSet lid
+                -- set dim of loop = 0
+                c <- getSpace s >>= localSpaceFromSpace >>= 
+                    constraintAllocEquality 
+                c <- constraintSetCoefficient c IslDimSet ldim 1
+                s <- setCopy s >>= \s -> setAddConstraint s c
+                -- putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
+                return s
+
+    
+
+absdomTransferOnLoopBackedge :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> (BBId, BBId) -- ^ Edge
+    -> AbsDomain -- ^ current conditions
+    -> IO AbsDomain
+absdomTransferOnLoopBackedge ctx id2islid p (bbidfrom, bbidto) d = do
+    return d
+-- foldM (\phi -> do
+--         -- ID of the right value
+--         let vidr = snd . phir  $ phi
+--         -- transfer the value of vidr into phi
+--       ) (bbphis bbto)
+
+
+
 
 
 -- | Abstract interpret terminators
@@ -354,7 +381,7 @@ abstransterm :: Ptr Ctx
 abstransterm ctx id2isl p _ (Done _) d = return []
 abstransterm ctx id2isl p bb (Br _ bb') d = do
     let s = absdomGetBB bb d
-    s <- edgeConstrainOnLoopEnter ctx id2isl p bb' s
+    s <- edgeConstrainOnLoopEnter ctx id2isl p (bb, bb') s
     d <- absdomainCopy d >>= absdomRestrictValDomains s
     d <- absdomUnionBB bb' s d
     return [(bb', d)]
@@ -367,11 +394,11 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     -- true = -1
     setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
     setcTrue <- setCopy dbb >>= \dbb -> setcTrue `setIntersect` dbb
-    setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p bbl setcTrue
+    setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbl) setcTrue
 
     setcFalse <- setCopy setcTrue >>= setComplement
     setcFalse <- setCopy dbb >>= \dbb -> setcFalse `setIntersect` dbb
-    setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p bbr setcFalse
+    setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbr) setcFalse
 
     -- domr <- setCopy $ absdomGetBB bbr d
     dtrue <- absdomainCopy d >>= absdomRestrictValDomains setcTrue
@@ -498,20 +525,21 @@ absint_ :: Ptr Ctx
     -> IO Loc2AbsDomain
 absint_ ctx id2isl p dmempty l2d = do
     foldM (\l2d bb -> absintbb ctx id2isl p dmempty bb l2d) l2d (progbbs p)
+
+
+
     
 
 absint :: Program -> IO Loc2AbsDomain
 absint p = do
      (ctx, id2isl) <- newISLState p
-     print "XX"
      dmempty <- absDomainStart ctx id2isl p
-     print "YY'"
      putDocW 80 (pretty dmempty)
 
-     print "YY"
      l2d <- loc2dinit (Loc (-1)) dmempty
-     print "ZZ"
-     absint_ ctx id2isl p dmempty l2d
+     l2ds <- repeatTillFixDebugTraceM 1 (==) (absint_ ctx id2isl p dmempty) l2d
+     forM_ l2ds (putDocW 80 . pretty)
+     return $ last l2ds
 
 
 gamma :: AbsDomain -> ConcreteDomain
@@ -694,8 +722,8 @@ edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [(Program, Env Int)]
 programs = [-- (passign, edefault)
-            (pif, edefault)
-            , (ploop, edefault)
+            -- (pif, edefault)
+            (ploop, edefault)
            ] 
 
 -- | Main entry point that executes all programs
