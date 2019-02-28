@@ -51,9 +51,7 @@ loc2dinit :: Loc -- ^ location of the entry block
     -> AbsDomain -- ^ initial abstract domain
     -> IO (Loc2AbsDomain)
 loc2dinit l d = do
-    print "AA"
     d <- absdomainCopy d
-    print "BB"
     return $ Loc2AbsDomain $ M.insert l d mempty
 
 -- | Union at a key in l2d
@@ -64,6 +62,11 @@ loc2dUnion a d (Loc2AbsDomain l2d) =
         Just dprev -> do
             dprev <- absdomainCopy dprev
             d <- absdomainCopy d
+
+            -- putDocW 80 $ pretty "\n===location:" <> pretty l <> 
+            --     pretty "\n1.\n" <> pretty dprev <> 
+            --     pretty "\n2.\n" <> pretty d <> 
+            --     pretty "\n===\n"
             d' <- absdomUnion d dprev
             return $ Loc2AbsDomain $ M.insert l d' l2d
         Nothing -> return $ Loc2AbsDomain $ M.insert l d l2d
@@ -121,7 +124,9 @@ id2setunion = mapsunionM setUnion
 -- | Union two values of the abstract domain
 absdomUnion :: AbsDomain -> AbsDomain -> IO AbsDomain
 absdomUnion d d' = do
+    putStrLn "before absdomunion"
     domnew <- id2pwunion (absdomval d) (absdomval d')
+    putStrLn "after absdomunion"
     edgenew <- id2setunion (absdomedge d) (absdomedge d')
     bbnew <- id2setunion (absdombb d) (absdombb d')
     return $ AbsDomain domnew edgenew bbnew
@@ -139,7 +144,9 @@ absdomSetVal_ id pwaff d =
 absdomUnionVal :: Id -> Ptr Pwaff -> AbsDomain -> IO AbsDomain
 absdomUnionVal id pwaff d = do
     let pwcur = absdomGetVal d id
+    putStrLn "before absdom union val"
     pw' <- pwaffUnion pwaff pwcur
+    putStrLn "after absdom union val"
     return $ absdomSetVal_ id pw' d
     
 
@@ -353,10 +360,8 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     n <- ndim pw IslDimParam
     Just ixid <- findDimById pw IslDimIn islid 
 
-    putDocW  80 $ pretty "! pw: " <> pretty pw <> pretty "\n"
     -- [v1, v2, ... vloop = N] -> [VAL]
     pwmap <- pwaffCopy pw >>= mapFromPwaff
-    putDocW  80 $ pretty "! map: " <> pretty pwmap <> pretty "\n"
 
     domain <- pwaffGetDomainSpace pw >>= setUniverse
 
@@ -372,13 +377,11 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     c <- constraintSetCoefficient c IslDimOut ixid (-1)
     c <- constraintSetConstant c (1)
     incrmap <- mapAddConstraint incrmap c
-    putDocW  80 $ pretty "! map incr: " <> pretty incrmap <> pretty "\n"
 
     pwmap <- mapApplyDomain  pwmap incrmap
-    putDocW  80 $ pretty "! final map: " <> pretty pwmap <> pretty "\n"
 
     pw <- pwaffFromMap pwmap
-    putDocW  80 $ pretty "! final pw: " <> pretty pw <> pretty "\n"
+    putDocW 80 $ pretty "\n||| pwaff: " <> pretty pw <> pretty "|||||\n"
     return pw
     -- pws <- MR.forM [0..n] (\i -> do
     --     let id = (OM.keys id2isl) !! i
@@ -417,7 +420,7 @@ absdomTransferOnLoopBackedge ctx id2isl p (bbidfrom, bbidto) d = do
                 -- at the next loop iteration
                 pw <- pwaffIncrParamDimension ctx id2isl (nl2loopid nl) pw
                 -- NOTE: this is *destructive* and overwrites the previous values
-                absdomUnionVal vidr pw d
+                absdomUnionVal (phiid phi) pw d
 
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
     else return d
@@ -440,7 +443,6 @@ pwaffRestrictParamDimension ctx id2isl id val pw = do
     s <-  setAddConstraint s c
 
     pw <- pwaffIntersectDomain pw s
-    putDocW 80 $ pretty "pwaffIntersectDomain: " <> pretty pw <> pretty "\n"
     return pw
     
 
@@ -452,17 +454,22 @@ absdomTransferOnLoopEnter :: Ptr Ctx
     -> AbsDomain -- ^ current conditions
     -> IO AbsDomain
 absdomTransferOnLoopEnter ctx id2isl p (bbidfrom, bbidto) d = do
-    if isEdgeBackedge p (bbidfrom, bbidto)
+    if isEdgeEnteringLoop p (bbidfrom, bbidto)
     then do
         let nl = progbbid2nl p !!# bbidto
         let lid = id2isl OM.! (nl2loopid nl)
-        foldM (\d phi -> do
+        d <- foldM (\d phi -> do
                 let vidl = snd . phil  $ phi
                 pw <- pwaffCopy $ absdomGetVal d vidl
                 pw <- pwaffRestrictParamDimension ctx id2isl (nl2loopid nl) 0 pw
-                absdomUnionVal vidl pw d
+
+                absdomUnionVal (phiid phi) pw d
 
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
+        -- putDocW 80 $ pretty "===\ntransfer on loop enter (" <> 
+        --     pretty bbidfrom <> pretty "->" <> pretty bbidto <> pretty ")\n"  <> 
+        --     pretty d <> pretty "\n===\n"
+        return d
     else return d
 
 -- | Abstract interpret terminators
@@ -507,6 +514,11 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     dfalse <- absdomTransferOnLoopEnter ctx id2isl p (bb, bbr) dfalse
     dfalse <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bbr) dfalse
 
+    putDocW 80 $ pretty "\n====\nAbstranstern" <> 
+        pretty (bb, bbl, bbr) <> pretty "\n" <>
+        pretty "true:\n" <> pretty dtrue <> pretty "\n----\n" <>
+        pretty "false:\n" <> pretty dfalse <> pretty "\n=====\n"
+
     return $ [(bbl, dtrue), (bbr, dfalse)]
 
 -- | take a disjoin union of two pwaffs
@@ -530,7 +542,7 @@ pwaffUnion pl pr = do
     else do 
         dneq <- setCopy deq >>= setComplement 
         putDocW 80 $ vcat $ 
-            [pretty "---"
+            [pretty "\n---"
             , pretty "pl: " <> pretty pl <> pretty "| dl: " <> pretty dl
             , pretty "pr: " <> pretty pr <> pretty "| dr: " <> pretty dr
             , pretty "dcommon: " <> pretty dcommon
@@ -551,23 +563,17 @@ abstransphi :: Ptr Ctx
     -> AbsDomain
     -> IO AbsDomain
 abstransphi cx id2isl p phi d = do
+    case (phity phi) of
+        Philoop -> return d
+        Phicond -> do
+            let idl =  snd . phil $ phi
+            let idr =  snd . phir $ phi
+            -- domain from the left hand
+            vl <- pwaffCopy $ absdomGetVal d idl 
+            vr <- pwaffCopy $ absdomGetVal d idr 
 
-    let idl =  snd . phil $ phi
-    let idr =  snd . phir $ phi
-    -- domain from the left hand
-    vl <- pwaffCopy $ absdomGetVal d idl 
-    vr <- pwaffCopy $ absdomGetVal d idr 
-
-    putStrLn "\nvvv\n"
-    putDocW 80 $ pretty phi <> pretty "\n"
-    putDocW 80 $ pretty d <> pretty "\n"
-    putStrLn "\n====\n"
-    putDocW 80 $ pretty vl <> pretty "\n"
-    putStrLn "\n====\n"
-    putDocW 80 $ pretty vr <> pretty "\n"
-    v <- (pwaffUnion vl vr)
-    putStrLn "\n^^^\n"
-    absdomUnionVal (phiid phi) v d
+            v <- (pwaffUnion vl vr)
+            absdomUnionVal (phiid phi) v d
 
 
 foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
@@ -582,7 +588,6 @@ absintbb :: Ptr Ctx
     -> Loc2AbsDomain 
     -> IO Loc2AbsDomain
 absintbb ctx id2isl p dmempty bb l2d = do
-    putStrLn $ "\n########0:" ++ show (bbid bb) ++ "#######"
 
     -- first abstract interpret each phi, forwarding the data
     -- as expected
@@ -645,8 +650,8 @@ absint p = do
      putDocW 80 (pretty dmempty)
 
      l2d <- loc2dinit (Loc (-1)) dmempty
-     l2ds <- repeatTillFixDebugTraceM 10 (==) (absint_ ctx id2isl p dmempty) l2d
-     forM_ l2ds (putDocW 80 . pretty)
+     l2ds <- repeatTillFixDebugTraceM 2 (==) (absint_ ctx id2isl p dmempty) l2d
+     -- forM_ l2ds (\l2d -> putDocW 80 $  pretty "\n==\n" <> pretty l2d <> pretty "==\n")
      return $ last l2ds
 
 
