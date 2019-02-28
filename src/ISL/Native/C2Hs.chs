@@ -237,6 +237,14 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Map', 
     id `Ptr Map' } -> `Ptr Map' id #}
 
+
+{#fun isl_map_apply_domain as mapApplyDomain
+  { id `Ptr Map', 
+    id `Ptr Map' } -> `Ptr Map' id #}
+
+
+{#fun isl_map_identity as mapIdentity { id `Ptr Space' } -> `Ptr Map' id #}
+
 -- __isl_give isl_map *isl_map_move_dims(__isl_take isl_map *map,
 -- 	enum isl_dim_type dst_type, unsigned dst_pos,
 -- 	enum isl_dim_type src_type, unsigned src_pos, unsigned n);

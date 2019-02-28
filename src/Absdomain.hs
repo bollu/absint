@@ -179,6 +179,10 @@ instance Pretty (Ptr Space) where
     pretty s = pretty $ (Unsafe.unsafePerformIO (spaceToStr s))
 
 
+instance Pretty (Ptr Map) where
+    pretty s = pretty $ (Unsafe.unsafePerformIO (mapToStr s))
+
+
 -- abstract environments
 type AbsVEnv = LatticeMap Id (Ptr Pwaff)
 

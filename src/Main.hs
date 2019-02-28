@@ -370,21 +370,49 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     let islid = id2isl OM.! id
     -- ID of the parametric dimension to be incremented
     n <- ndim pw IslDimParam
-    Just ixid <- findDimById pw IslDimParam islid 
-    pws <- MR.forM [0..n] (\i -> do
-        let id = (OM.keys id2isl) !! i
-        if i == ixid
-        then do
-            pwcur <- pwVar ctx id2isl id
-            pwone <- pwConst ctx id2isl 1
-            pwaffAdd pwcur pwone
-        else pwVar ctx id2isl id)
+    Just ixid <- findDimById pw IslDimIn islid 
 
-    sp <- pwaffGetSpace pw
-    -- TODO: work on fixing this function
-    pw_multi <- toListPwaff ctx pws >>= multipwaffFromPwaffList sp
-    pw <- pwaffPullbackMultipwaff pw pw_multi
+    putDocW  80 $ pretty "! pw: " <> pretty pw <> pretty "\n"
+    -- [v1, v2, ... vloop = N] -> [VAL]
+    pwmap <- pwaffCopy pw >>= mapFromPwaff
+    putDocW  80 $ pretty "! map: " <> pretty pwmap <> pretty "\n"
+
+    domain <- pwaffGetDomainSpace pw >>= setUniverse
+
+    -- [v1, v2, ... vloop] -> [v1', v2', ... vloop']
+    incrmap <- setCopy domain >>= 
+        \d -> setCopy domain >>= 
+            \d' -> mapFromDomainAndRange d d'
+
+    -- [vloop' = vloop + 1]
+    c <- getSpace incrmap >>= localSpaceFromSpace >>= 
+        constraintAllocEquality 
+    c <- constraintSetCoefficient c IslDimIn ixid (1)
+    c <- constraintSetCoefficient c IslDimOut ixid (-1)
+    c <- constraintSetConstant c (1)
+    incrmap <- mapAddConstraint incrmap c
+    putDocW  80 $ pretty "! map incr: " <> pretty incrmap <> pretty "\n"
+
+    pwmap <- mapApplyDomain  pwmap incrmap
+    putDocW  80 $ pretty "! final map: " <> pretty pwmap <> pretty "\n"
+
+    pw <- pwaffFromMap pwmap
+    putDocW  80 $ pretty "! final pw: " <> pretty pw <> pretty "\n"
     return pw
+    -- pws <- MR.forM [0..n] (\i -> do
+    --     let id = (OM.keys id2isl) !! i
+    --     if i == ixid
+    --     then do
+    --         pwcur <- pwVar ctx id2isl id
+    --         pwone <- pwConst ctx id2isl 1
+    --         pwaffAdd pwcur pwone
+    --     else pwVar ctx id2isl id)
+
+    -- sp <- pwaffGetSpace pw
+    -- -- TODO: work on fixing this function
+    -- pw_multi <- toListPwaff ctx pws >>= multipwaffFromPwaffList sp
+    -- pw <- pwaffPullbackMultipwaff pw pw_multi
+    -- return pw
 
 
     
