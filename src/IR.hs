@@ -229,9 +229,10 @@ progGetBB curid p = head . filter ((curid ==) . bbid) . progbbs $ p
 programEntryId :: Program -> BBId
 programEntryId (Program _ (entry:_)) = bbid entry
 
--- | IDs listed in the program
-progids :: Program -> S.Set Id
-progids p = progparams p `S.union` (S.fromList (progbbs p >>= bbGetIds))
+-- | IDs of variables in the program, *no* parameters
+progvarids :: Program -> S.Set Id
+progvarids p = (S.fromList (progbbs p >>= bbGetIds))
+
 
 -- | Virtual induction variables in the program
 progvivs :: Program -> S.Set Id

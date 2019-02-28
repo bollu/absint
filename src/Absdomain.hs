@@ -177,13 +177,4 @@ instance Pretty (Ptr Set) where
 -- abstract environments
 type AbsVEnv = LatticeMap Id (Ptr Pwaff)
 
--- construct a pwnan on the n-dimensional space
-pwnan :: Ptr Ctx -> Ptr Space -> IO (Ptr Pwaff)
-pwnan ctx s = do
-    ls <- spaceCopy s >>= localSpaceFromSpace
-    emptyset <- setEmpty s
-
-    pwaff <- pwaffInt ctx ls 0 -- affValOnDomain ls 0 >>= pwaffFromAff
-    pwaff <- pwaffIntersectDomain pwaff emptyset
-    return pwaff
 

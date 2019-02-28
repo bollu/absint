@@ -196,7 +196,7 @@ newISLState :: Program -> IO (Ptr Ctx, OM.OrderedMap Id (Ptr ISLTy.Id))
 newISLState p = do
     ctx <- ctxAlloc
     islAbortOnError ctx
-    let ids = S.toList (progids p) ++ S.toList (progvivs p)
+    let ids = S.toList $ (progparams p) `S.union` (progvarids p) `S.union`  (progvivs p)
     islids <- OM.fromList  <$> for ids (\id -> (id, ) <$> idAlloc ctx (show id))
 
     return $ (ctx, islids)
@@ -209,11 +209,25 @@ pwVar ctx id2isl id = do
   affVarOnDomain ls IslDimSet ix >>= pwaffFromAff
 
 
+-- | Create a pwaff that takes on the value of the variable
+
+
 -- | Create a constant pwaff
 pwConst :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Int -> IO (Ptr Pwaff)
 pwConst ctx id2isl i = do
     ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace 
     pwaffInt ctx ls i
+
+
+-- construct a pwnan on the n-dimensional space
+pwnan :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id)  -> IO (Ptr Pwaff)
+pwnan ctx id2isl = do
+    ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace
+    emptyset <- absSetSpace ctx id2isl >>= setEmpty
+
+    pwaff <- pwaffInt ctx ls 0
+    pwaff <- pwaffIntersectDomain pwaff emptyset
+    return pwaff
 
 -- Initial abstract domain
 absDomainStart :: Ptr Ctx 
@@ -221,9 +235,15 @@ absDomainStart :: Ptr Ctx
     ->  Program 
     -> IO AbsDomain
 absDomainStart ctx id2isl p = do
-    dval <- M.fromList <$> 
-        for (S.toList (progids p))
+    dparams <- M.fromList <$> 
+        for (S.toList (progparams p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
+
+    dvals <- M.fromList <$>
+        for (S.toList (progvarids p))
+            (\id -> (pwnan ctx id2isl) >>= \pw -> return (id, pw))
+
+    let dvals = M.union dvals dparams
 
     let edges = progedges p
     dedge <- M.fromList <$> for edges
@@ -238,7 +258,7 @@ absDomainStart ctx id2isl p = do
             else do 
                 s <- absSetSpace ctx id2isl >>= setEmpty
                 return (bbid bb, s))
-    return $ AbsDomain dval dedge dbb
+    return $ AbsDomain dvals dedge dbb
 
 -- Abstract interpret expressions
 abstransexpr :: Ptr Ctx
@@ -424,8 +444,7 @@ abstransphi cx id2isl p phi d = do
     vr <- pwaffCopy $ absdomGetVal d idr 
 
     v <- (pwaffUnion vl vr)
-    return d
-    -- return $ absdomSetVal (phiid phi) v d
+    return $ absdomSetVal (phiid phi) v d
 
 
 foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
