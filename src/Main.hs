@@ -165,6 +165,7 @@ absdomUnionBB bb s d = do
     return $ d { absdombb = M.insert bb s' (absdombb d) }
 
 
+
 -- restrict the domain of all values
 absdomRestrictValDomains :: Ptr Set -> AbsDomain  -> IO AbsDomain
 absdomRestrictValDomains s d = do
@@ -366,28 +367,20 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     d <- absdomainCopy d
 
     -- true = -1
-    vcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
-    vcTrue <- setCopy dbb >>= \dbb -> vcTrue `setIntersect` dbb
-    vcTrue <- edgeConstrainOnLoopEnter ctx id2isl p bbl vcTrue
-    d <- setCopy vcTrue >>= \s -> absdomUnionEdge bb bbl s d
-    d <- absdomUnionBB bbl vcTrue d
+    setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
+    setcTrue <- setCopy dbb >>= \dbb -> setcTrue `setIntersect` dbb
 
+    setcFalse <- setCopy setcTrue >>= setComplement
+    setcFalse <- setCopy dbb >>= \dbb -> setcFalse `setIntersect` dbb
 
-    vcFalse <- setCopy vcTrue >>= setComplement
-    vcFalse <- setCopy dbb >>= \dbb -> vcFalse `setIntersect` dbb
-    vcFalse <- edgeConstrainOnLoopEnter ctx id2isl p bbl vcFalse
-    d <- setCopy vcFalse >>= \s -> absdomUnionEdge bb bbr s d
-    d <- absdomUnionBB bbr vcFalse d
-    putStrLn "#### term: doml before###"
+    -- domr <- setCopy $ absdomGetBB bbr d
+    dtrue <- absdomainCopy d >>= absdomRestrictValDomains setcTrue
+    dtrue <- absdomUnionBB  bbl setcTrue dtrue
 
-    doml <- setCopy $ absdomGetBB bbl d 
-    dl <- absdomainCopy d >>= absdomRestrictValDomains doml
+    dfalse <- absdomainCopy d >>= absdomRestrictValDomains setcFalse
+    dfalse <- absdomUnionBB  bbr setcFalse dfalse
 
-
-    domr <- setCopy $ absdomGetBB bbr d
-    dr <- absdomainCopy d >>= absdomRestrictValDomains domr
-
-    return $ [(bbl, dl), (bbr, dr)]
+    return $ [(bbl, dtrue), (bbr, dfalse)]
 
 -- | take a disjoin union of two pwaffs
 -- | Take, Take -> Give
@@ -703,14 +696,18 @@ runProgram p e = do
     absenv <- absint p
     putDocW 80 (pretty absenv)
 
+    putStrLn "***program***"
+    putDocW 80 (pretty p)
+    putStrLn ""
+
 -- | Default environment we start with
 edefault :: Env Int
 edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [(Program, Env Int)]
-programs = [(passign, edefault)
-            , (pif, edefault)
-            -- , (ploop, edefault)
+programs = [-- (passign, edefault)
+            (pif, edefault)
+            -- (ploop, edefault)
            ] 
 
 -- | Main entry point that executes all programs
