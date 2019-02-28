@@ -132,9 +132,16 @@ absdomGetVal :: AbsDomain -> Id -> (Ptr Pwaff)
 absdomGetVal d id = absdomval d !!# id
 
 -- | dom[id <- v]
-absdomSetVal :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
-absdomSetVal id pwaff d = 
+absdomSetVal_ :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
+absdomSetVal_ id pwaff d = 
     d { absdomval =  M.insert id pwaff (absdomval d) }
+
+absdomUnionVal :: Id -> Ptr Pwaff -> AbsDomain -> IO AbsDomain
+absdomUnionVal id pwaff d = do
+    let pwcur = absdomGetVal d id
+    pw' <- pwaffUnion pwaff pwcur
+    return $ absdomSetVal_ id pw' d
+    
 
 
 absdomSetEdge_ :: BBId -> BBId -> Ptr Set -> AbsDomain -> AbsDomain
@@ -312,7 +319,7 @@ abstransassign ctx id2isl p dom a d = do
     dom <- setCopy dom
     pwaff <- abstransexpr ctx id2isl id e d 
     pwaff <- pwaffIntersectDomain pwaff dom
-    return $ absdomSetVal id pwaff d
+    absdomUnionVal id pwaff d
 
 
 -- | The to basic block is the header of the natural loop and the
@@ -332,32 +339,6 @@ isEdgeEnteringLoop p (bbidfrom, bbidto) = do
         Nothing -> False
         Just nl -> 
             not $ bbidfrom `S.member` nlbody nl || bbidfrom == nlheader nl
-
-
--- | If edge enters a loop, constrain it to set (loopvar = 0)
-edgeConstrainOnLoopEnter :: Ptr Ctx
-    -> OM.OrderedMap Id (Ptr ISLTy.Id)
-    -> Program
-    -> (BBId, BBId) -- ^ Edge
-    -> Ptr Set -- ^ current conditions
-    -> IO (Ptr Set)
-edgeConstrainOnLoopEnter ctx id2isl p (bbidfrom, bbidto) s = 
-    if isEdgeEnteringLoop p (bbidfrom, bbidto)
-    then do 
-        -- find the loop ID, and then the corresponding ISL id of the variable
-        -- If it is not a backedge, the bbid to 
-        let nl = progbbid2nl p !!# bbidto
-        let lid = id2isl OM.! (nl2loopid nl)
-        Just ldim <- findDimById s IslDimSet lid
-        -- set dim of loop = 0
-        c <- getSpace s >>= localSpaceFromSpace >>= 
-            constraintAllocEquality 
-        c <- constraintSetCoefficient c IslDimSet ldim 1
-        s <- setCopy s >>= \s -> setAddConstraint s c
-        -- putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
-        return s
-    else return s
-
 
 -- | Increment the given *parameter* dimension by 1
 -- | TODO: use this function
@@ -436,11 +417,53 @@ absdomTransferOnLoopBackedge ctx id2isl p (bbidfrom, bbidto) d = do
                 -- at the next loop iteration
                 pw <- pwaffIncrParamDimension ctx id2isl (nl2loopid nl) pw
                 -- NOTE: this is *destructive* and overwrites the previous values
-                return $ absdomSetVal vidr pw d
+                absdomUnionVal vidr pw d
 
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
     else return d
 
+pwaffRestrictParamDimension :: Ptr Ctx 
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Id -- ^ dimension to be restricted
+    -> Int -- ^ value to restrict to
+    -> Ptr Pwaff
+    -> IO (Ptr Pwaff)
+pwaffRestrictParamDimension ctx id2isl id val pw = do
+    let islid = id2isl OM.! id
+    Just ix <- findDimById pw IslDimIn islid
+
+    s <- pwaffCopy pw >>= pwaffDomain 
+    c <- getSpace s >>= localSpaceFromSpace >>= 
+        constraintAllocEquality 
+    c <- constraintSetCoefficient c IslDimSet ix 1
+    c <- constraintSetConstant c val
+    s <-  setAddConstraint s c
+
+    pw <- pwaffIntersectDomain pw s
+    putDocW 80 $ pretty "pwaffIntersectDomain: " <> pretty pw <> pretty "\n"
+    return pw
+    
+
+-- | Restrict values from the left to a phi on a forward edge
+absdomTransferOnLoopEnter :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> (BBId, BBId) -- ^ Edge
+    -> AbsDomain -- ^ current conditions
+    -> IO AbsDomain
+absdomTransferOnLoopEnter ctx id2isl p (bbidfrom, bbidto) d = do
+    if isEdgeBackedge p (bbidfrom, bbidto)
+    then do
+        let nl = progbbid2nl p !!# bbidto
+        let lid = id2isl OM.! (nl2loopid nl)
+        foldM (\d phi -> do
+                let vidl = snd . phil  $ phi
+                pw <- pwaffCopy $ absdomGetVal d vidl
+                pw <- pwaffRestrictParamDimension ctx id2isl (nl2loopid nl) 0 pw
+                absdomUnionVal vidl pw d
+
+              ) d (bbphis $ (progbbid2bb p) !!# bbidto)
+    else return d
 
 -- | Abstract interpret terminators
 abstransterm :: Ptr Ctx
@@ -453,9 +476,9 @@ abstransterm :: Ptr Ctx
 abstransterm ctx id2isl p _ (Done _) d = return []
 abstransterm ctx id2isl p bb (Br _ bb') d = do
     let s = absdomGetBB bb d
-    s <- edgeConstrainOnLoopEnter ctx id2isl p (bb, bb') s
     d <- absdomainCopy d >>= absdomRestrictValDomains s
     d <- absdomUnionBB bb' s d
+    d <- absdomTransferOnLoopEnter ctx id2isl p (bb, bb') d
     d <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bb') d
     return [(bb', d)]
 
@@ -467,19 +490,21 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     -- true = -1
     setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
     setcTrue <- setCopy dbb >>= \dbb -> setcTrue `setIntersect` dbb
-    setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbl) setcTrue
+    -- setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbl) setcTrue
 
     setcFalse <- setCopy setcTrue >>= setComplement
     setcFalse <- setCopy dbb >>= \dbb -> setcFalse `setIntersect` dbb
-    setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbr) setcFalse
+    -- setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbr) setcFalse
 
     -- domr <- setCopy $ absdomGetBB bbr d
     dtrue <- absdomainCopy d >>= absdomRestrictValDomains setcTrue
     dtrue <- absdomUnionBB  bbl setcTrue dtrue
+    dtrue <- absdomTransferOnLoopEnter ctx id2isl p (bb, bbl) dtrue
     dtrue <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bbl) dtrue
 
     dfalse <- absdomainCopy d >>= absdomRestrictValDomains setcFalse
     dfalse <- absdomUnionBB  bbr setcFalse dfalse
+    dfalse <- absdomTransferOnLoopEnter ctx id2isl p (bb, bbr) dfalse
     dfalse <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bbr) dfalse
 
     return $ [(bbl, dtrue), (bbr, dfalse)]
@@ -533,16 +558,16 @@ abstransphi cx id2isl p phi d = do
     vl <- pwaffCopy $ absdomGetVal d idl 
     vr <- pwaffCopy $ absdomGetVal d idr 
 
-    putStrLn "vvv"
-    putDocW 80 $ pretty phi
-    putDocW 80 $ pretty d
-    putStrLn "===="
-    putDocW 80 $ pretty vl
-    putStrLn "===="
-    putDocW 80 $ pretty vr
+    putStrLn "\nvvv\n"
+    putDocW 80 $ pretty phi <> pretty "\n"
+    putDocW 80 $ pretty d <> pretty "\n"
+    putStrLn "\n====\n"
+    putDocW 80 $ pretty vl <> pretty "\n"
+    putStrLn "\n====\n"
+    putDocW 80 $ pretty vr <> pretty "\n"
     v <- (pwaffUnion vl vr)
-    putStrLn "^^^"
-    return $ absdomSetVal (phiid phi) v d
+    putStrLn "\n^^^\n"
+    absdomUnionVal (phiid phi) v d
 
 
 foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
