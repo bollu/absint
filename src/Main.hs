@@ -166,7 +166,7 @@ absdomUnionBB bb s d = do
 
 
 
--- restrict the domain of all values
+-- restrict the domain of all values. Keep set
 absdomRestrictValDomains :: Ptr Set -> AbsDomain  -> IO AbsDomain
 absdomRestrictValDomains s d = do
     absdomval' <- traverse 
@@ -343,7 +343,6 @@ edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
             return s
 
 
-
 -- | Abstract interpret terminators
 abstransterm :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
@@ -356,9 +355,8 @@ abstransterm ctx id2isl p _ (Done _) d = return []
 abstransterm ctx id2isl p bb (Br _ bb') d = do
     let s = absdomGetBB bb d
     s <- edgeConstrainOnLoopEnter ctx id2isl p bb' s
-    d <- absdomainCopy d
-    d <- setCopy s >>= \s -> absdomUnionEdge bb bb' s d
-    d <- setCopy s >>= \s -> absdomUnionBB bb' s d
+    d <- absdomainCopy d >>= absdomRestrictValDomains s
+    d <- absdomUnionBB bb' s d
     return [(bb', d)]
 
 abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
@@ -369,9 +367,11 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     -- true = -1
     setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
     setcTrue <- setCopy dbb >>= \dbb -> setcTrue `setIntersect` dbb
+    setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p bbl setcTrue
 
     setcFalse <- setCopy setcTrue >>= setComplement
     setcFalse <- setCopy dbb >>= \dbb -> setcFalse `setIntersect` dbb
+    setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p bbr setcFalse
 
     -- domr <- setCopy $ absdomGetBB bbr d
     dtrue <- absdomainCopy d >>= absdomRestrictValDomains setcTrue
@@ -415,14 +415,6 @@ pwaffUnion pl pr = do
         error $ "pwaffs are not equal on common domain"
 
 
--- | update abstact domain if we are entering into a loop phi node
-absintEntryIntoLoopPhi :: Ptr Ctx
-    -> OM.OrderedMap Id (Ptr ISLTy.Id)
-    -> Program
-    -> BBId
-    -> AbsDomain
-    -> IO AbsDomain
-absintEntryIntoLoopPhi ctx id2isl p bbid d = return d
     
 -- | Abstract interpret phi nodes
 abstransphi :: Ptr Ctx
@@ -456,10 +448,6 @@ absintbb :: Ptr Ctx
     -> IO Loc2AbsDomain
 absintbb ctx id2isl p dmempty bb l2d = do
     putStrLn $ "\n########0:" ++ show (bbid bb) ++ "#######"
-    -- putDocW 80 (pretty (progbbid2preds p))
-    let preds = (progbbid2preds p) !!# (bbid bb)
-    let pred_ds = map (\bb -> loc2dget l2d  bb) preds
-
 
     -- first abstract interpret each phi, forwarding the data
     -- as expected
@@ -707,7 +695,7 @@ edefault = envFromParamList [(Id "p", 1)]
 programs :: [(Program, Env Int)]
 programs = [-- (passign, edefault)
             (pif, edefault)
-            -- (ploop, edefault)
+            , (ploop, edefault)
            ] 
 
 -- | Main entry point that executes all programs
