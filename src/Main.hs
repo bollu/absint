@@ -51,7 +51,9 @@ loc2dinit :: Loc -- ^ location of the entry block
     -> AbsDomain -- ^ initial abstract domain
     -> IO (Loc2AbsDomain)
 loc2dinit l d = do
+    print "AA"
     d <- absdomainCopy d
+    print "BB"
     return $ Loc2AbsDomain $ M.insert l d mempty
 
 -- | Union at a key in l2d
@@ -239,11 +241,12 @@ absDomainStart ctx id2isl p = do
         for (S.toList (progparams p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
 
-    dvals <- M.fromList <$>
+    dvars <- M.fromList <$>
         for (S.toList (progvarids p))
             (\id -> (pwnan ctx id2isl) >>= \pw -> return (id, pw))
 
-    let dvals = M.union dvals dparams
+    let dvals = dvars `M.union` dparams
+
 
     let edges = progedges p
     dedge <- M.fromList <$> for edges
@@ -519,8 +522,14 @@ absint_ ctx id2isl p dmempty l2d = do
 absint :: Program -> IO Loc2AbsDomain
 absint p = do
      (ctx, id2isl) <- newISLState p
+     print "XX"
      dmempty <- absDomainStart ctx id2isl p
+     print "YY'"
+     putDocW 80 (pretty dmempty)
+
+     print "YY"
      l2d <- loc2dinit (Loc (-1)) dmempty
+     print "ZZ"
      absint_ ctx id2isl p dmempty l2d
 
 
@@ -700,7 +709,7 @@ edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [(Program, Env Int)]
 programs = [(passign, edefault)
-            , (pif, edefault)
+            -- , (pif, edefault)
             -- , (ploop, edefault)
            ] 
 
