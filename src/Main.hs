@@ -581,7 +581,7 @@ absint p = do
      putDocW 80 (pretty dmempty)
 
      l2d <- loc2dinit (Loc (-1)) dmempty
-     l2ds <- repeatTillFixDebugTraceM 1 (==) (absint_ ctx id2isl p dmempty) l2d
+     l2ds <- repeatTillFixDebugTraceM 2 (==) (absint_ ctx id2isl p dmempty) l2d
      forM_ l2ds (putDocW 80 . pretty)
      return $ last l2ds
 
