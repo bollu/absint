@@ -474,9 +474,9 @@ absintbb ctx id2isl p dmempty bb l2d = do
     l2d <- foldM 
         (\l2d phi -> do
             -- state is the state that is on top
-            let d = loc2dget l2d bb
+            let d = loc2dget l2d (bbGetPrevLoc bb phi)
             d' <- abstransphi ctx id2isl p phi d
-            -- l2d <- loc2dUnion phi d' l2d
+            l2d <- loc2dUnion phi d' l2d
             return l2d
         ) l2d (bbphis bb)
 
@@ -709,7 +709,7 @@ edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [(Program, Env Int)]
 programs = [(passign, edefault)
-            -- , (pif, edefault)
+            , (pif, edefault)
             -- , (ploop, edefault)
            ] 
 
