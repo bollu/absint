@@ -36,11 +36,11 @@ import Collectingsem
 import Absdomain
 
 
--- each location has an associated abstract domain.
--- each location's abstract domain is the value that is held
--- right after that location.
--- Data at a location is the value that is present *before* the isntruction
--- is executed
+-- | each location has an associated abstract domain.
+-- | each location's abstract domain is the value that is held
+-- | right after that location.
+-- | Data at a location is the value that is present *after* the isntruction
+-- | is executed
 newtype Loc2AbsDomain = Loc2AbsDomain (M.Map Loc AbsDomain) deriving (Show)
 
 instance Pretty Loc2AbsDomain where
@@ -55,15 +55,16 @@ loc2dinit l d = do
     return $ Loc2AbsDomain $ M.insert l d mempty
 
 -- | Union at a key in l2d
-loc2dUnion :: Loc -> AbsDomain -> Loc2AbsDomain -> IO Loc2AbsDomain
-loc2dUnion l dcur (Loc2AbsDomain l2d) = 
+loc2dUnion :: Located a => a -> AbsDomain -> Loc2AbsDomain -> IO Loc2AbsDomain
+loc2dUnion a d (Loc2AbsDomain l2d) = 
+    let l = location a in
     case M.lookup l l2d of
         Just dprev -> do
             dprev <- absdomainCopy dprev
-            dcur <- absdomainCopy dcur
-            d' <- absdomUnion dcur dprev
+            d <- absdomainCopy d
+            d' <- absdomUnion d dprev
             return $ Loc2AbsDomain $ M.insert l d' l2d
-        Nothing -> return $ Loc2AbsDomain $ M.insert l dcur l2d
+        Nothing -> return $ Loc2AbsDomain $ M.insert l d l2d
 
 -- | Get the absdomain at a located value
 loc2dget :: Located a => Loc2AbsDomain -> a -> AbsDomain
@@ -303,9 +304,9 @@ edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
     case bbid2nl M.!? bbid of
         Nothing -> return s
         Just nl -> do
-            putDocW 80 (pretty "#NATURAL LOOP: " <> 
-                pretty nl <> pretty "\n")
-            putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
+            -- putDocW 80 (pretty "#NATURAL LOOP: " <> 
+            --    pretty nl <> pretty "\n")
+            -- putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
             -- dim of the loop
             let lid = id2isl OM.! (nl2loopid nl)
             Just ldim <- findDimById s IslDimSet lid
@@ -314,7 +315,7 @@ edgeConstrainOnLoopEnter ctx id2isl p bbid s = do
                 constraintAllocEquality 
             c <- constraintSetCoefficient c IslDimSet ldim 1
             s <- setCopy s >>= \s -> setAddConstraint s c
-            putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
+            -- putDocW 80 (pretty "#SET" <> pretty s <> pretty "\n")
             return s
 
 
@@ -371,7 +372,7 @@ pwaffUnion :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
 pwaffUnion pl pr = do
     dl <- pwaffCopy pl >>= pwaffDomain 
     dr <- pwaffCopy pr >>= pwaffDomain 
-    dcommon <- setIntersect dl dr
+    dcommon <- setCopy dl >>= \dl -> setCopy dr >>= \dr -> setIntersect dl dr
     deq <- pwaffCopy pl >>= \pl -> pwaffCopy pr >>= \pr -> pwaffEqSet pl pr
 
     Just commonSubsetEq <- setIsSubset dcommon deq
@@ -411,25 +412,20 @@ absintEntryIntoLoopPhi ctx id2isl p bbid d = return d
 abstransphi :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id) 
     -> Program 
-    -> Loc2AbsDomain  -- is not mutated, used to pull values
     -> Phi 
     -> AbsDomain
     -> IO AbsDomain
-abstransphi cx id2isl p l2d phi d = do
-    let bbid2bb = progbbid2bb p
+abstransphi cx id2isl p phi d = do
 
-    let bbl =  bbid2bb !!# (fst . phil $ phi)
-    let idl =  (snd . phil $ phi)
-    let dl = loc2dget l2d bbl 
-    let vl = absdomGetVal dl idl
-
-    let bbr =  bbid2bb !!# (fst . phir $ phi)
-    let idr =  (snd . phir $ phi)
-    let dr = loc2dget l2d bbr
-    let vr = absdomGetVal dr idr
+    let idl =  snd . phil $ phi
+    let idr =  snd . phir $ phi
+    -- domain from the left hand
+    vl <- pwaffCopy $ absdomGetVal d idl 
+    vr <- pwaffCopy $ absdomGetVal d idr 
 
     v <- (pwaffUnion vl vr)
-    return $ absdomSetVal (phiid phi) v d
+    return d
+    -- return $ absdomSetVal (phiid phi) v d
 
 
 foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
@@ -449,27 +445,16 @@ absintbb ctx id2isl p dmempty bb l2d = do
     let preds = (progbbid2preds p) !!# (bbid bb)
     let pred_ds = map (\bb -> loc2dget l2d  bb) preds
 
-    putDocW 80 (vcat (map (\(pred, d) -> 
-        vcat [pretty $ "vvv" ++ (show . bbid $ pred) ++ "vvv",pretty d, pretty "^^^"]) (zip preds pred_ds)))
-    -- create a union.
-    -- HACK: special case for entry BB
-    d <- if null pred_ds
-        then return dmempty
-        else foldM1 absdomUnion pred_ds 
-    -- forward this to the first instruction in the bb
-    l2d <- loc2dUnion (bbFirstInstLoc bb) d l2d
-
 
     -- first abstract interpret each phi, forwarding the data
     -- as expected
     -- TODO: remove redundancy in code between phi and assign
     l2d <- foldM 
         (\l2d phi -> do
-            let d = loc2dget l2d phi
-            let dom = absdomGetBB (bbid bb) d
-            d' <- abstransphi ctx id2isl p l2d phi d
-            -- set the value at the next location
-            l2d <- loc2dUnion (locincr (location phi)) d' l2d
+            -- state is the state that is on top
+            let d = loc2dget l2d bb
+            d' <- abstransphi ctx id2isl p phi d
+            -- l2d <- loc2dUnion phi d' l2d
             return l2d
         ) l2d (bbphis bb)
 
@@ -477,31 +462,26 @@ absintbb ctx id2isl p dmempty bb l2d = do
     -- data as expected
     l2d <- foldM 
         (\l2d a -> do
-            let d = loc2dget l2d a
-            let dom = absdomGetBB (bbid bb) d
-            d' <- abstransassign ctx id2isl p dom a d
+            let d = loc2dget l2d (bbGetPrevLoc bb a)
+            let bbdom = absdomGetBB (bbid bb) d
+            d' <- abstransassign ctx id2isl p bbdom a d
             -- set the value at the next location
-            l2d <- loc2dUnion (locincr (location a)) d' l2d
+            l2d <- loc2dUnion a d' l2d
             return l2d
         ) l2d (bbinsts bb)
 
-    putStrLn "\n########1#######"
+
     -- | now abstract interpret the terminator, updating
     -- | the states of everyone after us.
     let t = bbterm bb
-    bbid2d <- abstransterm ctx id2isl p (bbid bb) t (loc2dget l2d t)
-    putStrLn "\n########2#######"
+    bbid2d <- abstransterm ctx id2isl p (bbid bb) t (loc2dget l2d (bbGetPrevLoc bb t))
     l2d <- foldM (\l2d (bbid', d) -> do
         let bbid2bb = progbbid2bb p
         let bb' = bbid2bb !!# bbid'
         -- update at the location of the next bb
-        putStrLn $ 
-            ("\n########2:" ++ show (bbid bb) ++ "->>>" 
-            ++ show (bbid bb') ++ "#######")
         loc2dUnion (bbloc bb') d l2d 
         ) l2d bbid2d
         
-    putStrLn "\n########4#######"
     return l2d
 
 
@@ -702,7 +682,7 @@ edefault = envFromParamList [(Id "p", 1)]
 programs :: [(Program, Env Int)]
 programs = [(passign, edefault)
             , (pif, edefault)
-            , (ploop, edefault)
+            -- , (ploop, edefault)
            ] 
 
 -- | Main entry point that executes all programs

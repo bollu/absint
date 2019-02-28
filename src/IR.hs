@@ -8,8 +8,10 @@ import qualified Data.Set as S
 import qualified Control.Monad.State as ST
 import qualified Data.Map.Strict as M
 import qualified OrderedMap as OM
+import Data.List (elemIndex)
+import Control.Monad(guard)
 import Util
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromJust)
 
 -- Identifiers
 newtype Id = Id String deriving(Eq, Ord)
@@ -64,6 +66,9 @@ pcinit = Loc 0
 
 class Located a where
   location :: a -> Loc
+
+instance Located Loc where
+    location = id
 
 data BBId = BBId { unBBId :: String } deriving(Eq, Ord, Show)
 instance Pretty BBId where
@@ -172,6 +177,29 @@ bbModifyTerm f (BB id ty loc phis insts term) =
 bbGetLocs :: BB -> [Loc]
 bbGetLocs (BB _ _ loc phis insts term) = 
   [loc] ++ (map location phis) ++ (map location insts) ++ [location term]
+
+-- | Get the location before a given location in the basic block
+bbGetPrevLoc :: Located a => BB -> a -> Loc
+bbGetPrevLoc bb a = 
+    let l = location a
+        ls = bbGetLocs bb
+        mix = elemIndex l ls
+    in fromJust $ do 
+        ix <- mix 
+        guard (ix > 0)
+        return $ ls !! (ix - 1)
+
+
+-- | Get the location right after a given location in the basic block
+bbGetNextLoc :: Located a => BB -> a -> Loc
+bbGetNextLoc bb a = 
+    let l = location a
+        ls = bbGetLocs bb
+        mix = elemIndex l ls
+    in fromJust $ do 
+        ix <- mix 
+        guard (ix + 1 < length ls)
+        return $ ls !! (ix + 1)
 
 -- | get the location of the first instruction in the BB
 bbFirstInstLoc :: BB -> Loc
