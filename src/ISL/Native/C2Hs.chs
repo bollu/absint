@@ -440,6 +440,11 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
   { id `Ptr Space', id `Ptr Space' } -> `Ptr Space' id #}
 
 
+{#fun isl_space_to_str as spaceToStr
+  { id `Ptr Space'
+  } -> `String' #}
+
+
 -- =================
 -- local space
 {#fun isl_local_space_add_dims as localSpaceAddDims
