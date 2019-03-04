@@ -60,6 +60,12 @@ loc2dUnion a d (Loc2AbsDomain l2d) =
     let l = location a in
     case M.lookup l l2d of
         Just dprev -> do
+            --- putStrLn "before loc2dunion"
+            --- putStrLn "vvvvvvvvvvv"
+            --- putDocW 80 $ pretty dprev
+            --- putStrLn "\n============"
+            --- putDocW 80 $ pretty d
+            --- putStrLn "\n^^^^^^^^^^^"
             dprev <- absdomainCopy dprev
             d <- absdomainCopy d
 
@@ -68,8 +74,14 @@ loc2dUnion a d (Loc2AbsDomain l2d) =
             --     pretty "\n2.\n" <> pretty d <> 
             --     pretty "\n===\n"
             d' <- absdomUnion d dprev
+            putStrLn "after loc2dunion"
             return $ Loc2AbsDomain $ M.insert l d' l2d
         Nothing -> return $ Loc2AbsDomain $ M.insert l d l2d
+
+-- | Get the absdomain at a located value, and nothing if unable to
+-- | find anything
+loc2dgetmaybe :: Located a => Loc2AbsDomain -> a -> Maybe AbsDomain
+loc2dgetmaybe(Loc2AbsDomain l2d) a = l2d M.!? (location a) 
 
 -- | Get the absdomain at a located value
 loc2dget :: Located a => Loc2AbsDomain -> a -> AbsDomain
@@ -176,6 +188,14 @@ absdomUnionBB :: BBId -> Ptr Set -> AbsDomain -> IO AbsDomain
 absdomUnionBB bb s d = do
     let scur = absdomGetBB bb d
     s' <- setUnion s scur
+    return $ d { absdombb = M.insert bb s' (absdombb d) }
+
+
+-- | dom[bb] = dom[bb] U s
+absdomIntersectBB :: BBId -> Ptr Set -> AbsDomain -> IO AbsDomain
+absdomIntersectBB bb s d = do
+    let scur = absdomGetBB bb d
+    s' <- setIntersect s scur
     return $ d { absdombb = M.insert bb s' (absdombb d) }
 
 
@@ -381,7 +401,6 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     pwmap <- mapApplyDomain  pwmap incrmap
 
     pw <- pwaffFromMap pwmap
-    putDocW 80 $ pretty "\n||| pwaff: " <> pretty pw <> pretty "|||||\n"
     return pw
     -- pws <- MR.forM [0..n] (\i -> do
     --     let id = (OM.keys id2isl) !! i
@@ -398,8 +417,37 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     -- pw <- pwaffPullbackMultipwaff pw pw_multi
     -- return pw
 
+setIncrParamDimension :: Ptr Ctx 
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Id -- ^ dimension to be incremented
+    -> Ptr Set
+    -> IO (Ptr Set)
+setIncrParamDimension ctx id2isl id s = do
+    let islid = id2isl OM.! id
+    -- ID of the parametric dimension to be incremented
+    n <- ndim s IslDimSet
+    Just ixid <- findDimById s IslDimSet islid 
 
-    
+
+    domain <- setCopy s >>= setGetSpace  >>= setUniverse
+
+    -- [v1, v2, ... vloop] -> [v1', v2', ... vloop']
+    incrmap <- setCopy domain >>= 
+        \d -> setCopy domain >>= 
+            \d' -> mapFromDomainAndRange d d'
+
+    -- [vloop' = vloop + 1]
+    c <- getSpace incrmap >>= localSpaceFromSpace >>= 
+        constraintAllocEquality 
+    c <- constraintSetCoefficient c IslDimIn ixid (1)
+    c <- constraintSetCoefficient c IslDimOut ixid (-1)
+    c <- constraintSetConstant c (1)
+    incrmap <- mapAddConstraint incrmap c
+
+    setApply s incrmap
+
+
+
 
 -- | Transfer values from the right to the phi on a backedge
 absdomTransferOnLoopBackedge :: Ptr Ctx
@@ -420,27 +468,52 @@ absdomTransferOnLoopBackedge ctx id2isl p (bbidfrom, bbidto) d = do
                 -- at the next loop iteration
                 pw <- pwaffIncrParamDimension ctx id2isl (nl2loopid nl) pw
                 -- NOTE: this is *destructive* and overwrites the previous values
-                absdomUnionVal (phiid phi) pw d
+                d <- absdomUnionVal (phiid phi) pw d
 
+
+                s <- setCopy $ absdomGetBB bbidto d
+                putDocW 80 $ pretty "setIncrParamDimension(before):" <> pretty s  <> pretty "\n"
+                s <-  setIncrParamDimension ctx id2isl (nl2loopid nl) s
+                putDocW 80 $ pretty "setIncrParamDimension(after):" <> pretty s  <> pretty "\n"
+                d <- absdomUnionBB bbidto s d 
+                return d
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
     else return d
 
-pwaffRestrictParamDimension :: Ptr Ctx 
+
+setSetParamDimension :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Id -- ^ dimension to be restricted
     -> Int -- ^ value to restrict to
-    -> Ptr Pwaff
-    -> IO (Ptr Pwaff)
-pwaffRestrictParamDimension ctx id2isl id val pw = do
+    -> Ptr Set
+    -> IO (Ptr Set)
+setSetParamDimension ctx id2isl id val s = do
     let islid = id2isl OM.! id
-    Just ix <- findDimById pw IslDimIn islid
+    putDocW 80 $ pretty "---\n"
+    putDocW 80  $ pretty "id: " <> pretty id <> pretty "\n"
+    putDocW 80  $ pretty "islid: " <> pretty islid <> pretty "\n"
+    putDocW 80  $ pretty "s: " <> pretty s <> pretty "\n"
+    putDocW 80 $ pretty "---\n"
+    Just ix <- findDimById s IslDimSet islid
 
-    s <- pwaffCopy pw >>= pwaffDomain 
     c <- getSpace s >>= localSpaceFromSpace >>= 
         constraintAllocEquality 
     c <- constraintSetCoefficient c IslDimSet ix 1
     c <- constraintSetConstant c val
     s <-  setAddConstraint s c
+    return s
+
+pwaffSetParamDimension :: Ptr Ctx 
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Id -- ^ dimension to be restricted
+    -> Int -- ^ value to restrict to
+    -> Ptr Pwaff
+    -> IO (Ptr Pwaff)
+pwaffSetParamDimension ctx id2isl id val pw = do
+    s <- pwaffCopy pw >>= 
+        pwaffGetDomainSpace >>= 
+        setUniverse >>= 
+        setSetParamDimension ctx id2isl id val
 
     pw <- pwaffIntersectDomain pw s
     return pw
@@ -461,9 +534,12 @@ absdomTransferOnLoopEnter ctx id2isl p (bbidfrom, bbidto) d = do
         d <- foldM (\d phi -> do
                 let vidl = snd . phil  $ phi
                 pw <- pwaffCopy $ absdomGetVal d vidl
-                pw <- pwaffRestrictParamDimension ctx id2isl (nl2loopid nl) 0 pw
+                pw <- pwaffSetParamDimension ctx id2isl (nl2loopid nl) 0 pw
+                d <- absdomUnionVal (phiid phi) pw d
 
-                absdomUnionVal (phiid phi) pw d
+                s <-  setSetParamDimension ctx id2isl (nl2loopid nl) 0 (absdomGetBB bbidto d)
+                d <- absdomIntersectBB bbidto s d 
+                return d
 
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
         -- putDocW 80 $ pretty "===\ntransfer on loop enter (" <> 
@@ -490,16 +566,17 @@ abstransterm ctx id2isl p bb (Br _ bb') d = do
     return [(bb', d)]
 
 abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
-    vc <- pwaffCopy $ absdomGetVal d c
     let dbb  = absdomGetBB bb d
     d <- absdomainCopy d
 
     -- true = -1
+    vc <- pwaffCopy $ absdomGetVal d c
     setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
     setcTrue <- setCopy dbb >>= \dbb -> setcTrue `setIntersect` dbb
     -- setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbl) setcTrue
 
-    setcFalse <- setCopy setcTrue >>= setComplement
+    vc <- pwaffCopy $ absdomGetVal d c
+    setcFalse <- (pwConst ctx id2isl (0)) >>= pwaffEqSet vc 
     setcFalse <- setCopy dbb >>= \dbb -> setcFalse `setIntersect` dbb
     -- setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbr) setcFalse
 
@@ -514,10 +591,12 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     dfalse <- absdomTransferOnLoopEnter ctx id2isl p (bb, bbr) dfalse
     dfalse <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bbr) dfalse
 
-    putDocW 80 $ pretty "\n====\nAbstranstern" <> 
-        pretty (bb, bbl, bbr) <> pretty "\n" <>
-        pretty "true:\n" <> pretty dtrue <> pretty "\n----\n" <>
-        pretty "false:\n" <> pretty dfalse <> pretty "\n=====\n"
+    -- putDocW 80 $ pretty "\n====\nAbstransterm" <> 
+    --     pretty (bb, bbl, bbr) <> pretty "\n" <>
+    --     pretty "true:\n" <> pretty dtrue <> pretty "\n----\n" <>
+    --     pretty "false:\n" <> pretty dfalse <> 
+    --     pretty "\ndbb: " <> pretty dbb <> pretty "\n" <>
+    --     pretty "\n=====\n"
 
     return $ [(bbl, dtrue), (bbr, dfalse)]
 
@@ -543,8 +622,11 @@ pwaffUnion pl pr = do
         dneq <- setCopy deq >>= setComplement 
         putDocW 80 $ vcat $ 
             [pretty "\n---"
-            , pretty "pl: " <> pretty pl <> pretty "| dl: " <> pretty dl
-            , pretty "pr: " <> pretty pr <> pretty "| dr: " <> pretty dr
+            , pretty "pl: " <> pretty pl
+            , pretty "dl: " <> pretty dl
+            , pretty "pr: " <> pretty pr
+            , pretty "-----"
+            , pretty "dr: " <> pretty dr
             , pretty "dcommon: " <> pretty dcommon
             , pretty "deq: " <> pretty deq
             , pretty "dNEQ: " <> pretty dneq
@@ -597,7 +679,9 @@ absintbb ctx id2isl p dmempty bb l2d = do
             -- state is the state that is on top
             let d = loc2dget l2d (bbGetPrevLoc bb phi)
             d' <- abstransphi ctx id2isl p phi d
+            putStrLn "before phi fold"
             l2d <- loc2dUnion phi d' l2d
+            putStrLn "after phi fold"
             return l2d
         ) l2d (bbphis bb)
 
@@ -607,9 +691,19 @@ absintbb ctx id2isl p dmempty bb l2d = do
         (\l2d a -> do
             let d = loc2dget l2d (bbGetPrevLoc bb a)
             let bbdom = absdomGetBB (bbid bb) d
+            let dAtAssign = loc2dgetmaybe l2d a
             d' <- abstransassign ctx id2isl p bbdom a d
             -- set the value at the next location
+            putStrLn "before assign fold"
+            putDocW 80 $ pretty "----\n"
+            putDocW 80 $ pretty d <> pretty "\n"
+            putDocW 80 $ pretty "\n********" <> pretty a <> pretty "*******\n"
+            putDocW 80 $ pretty d' <> pretty "\n"
+            putDocW 80 $ pretty "*** Old: ***\n"
+            putDocW 80 $ pretty dAtAssign
+            putDocW 80 $ pretty "\n----"
             l2d <- loc2dUnion a d' l2d
+            putStrLn "after assign fold"
             return l2d
         ) l2d (bbinsts bb)
 
@@ -622,7 +716,10 @@ absintbb ctx id2isl p dmempty bb l2d = do
         let bbid2bb = progbbid2bb p
         let bb' = bbid2bb !!# bbid'
         -- update at the location of the next bb
-        loc2dUnion (bbloc bb') d l2d 
+        putStrLn "before term fold"
+        l2d <- loc2dUnion (bbloc bb') d l2d 
+        putStrLn "after term fold"
+        return l2d
         ) l2d bbid2d
         
     return l2d
