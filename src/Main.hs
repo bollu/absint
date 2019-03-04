@@ -326,7 +326,7 @@ abstransexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
 
     pwf <- (pwConst ctx id2isl 0)
     pwf <- setComplement lt >>= pwaffIntersectDomain pwf
-    pwaffUnionAdd pwt pwf
+    pwaffUnionMax pwt pwf
     
 
 -- | Abstract interpret assignment expressions
@@ -747,7 +747,7 @@ absint p = do
      putDocW 80 (pretty dmempty)
 
      l2d <- loc2dinit (Loc (-1)) dmempty
-     l2ds <- repeatTillFixDebugTraceM 2 (==) (absint_ ctx id2isl p dmempty) l2d
+     l2ds <- repeatTillFixDebugTraceM 10 (==) (absint_ ctx id2isl p dmempty) l2d
      -- forM_ l2ds (\l2d -> putDocW 80 $  pretty "\n==\n" <> pretty l2d <> pretty "==\n")
      return $ last l2ds
 
