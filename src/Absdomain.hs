@@ -170,10 +170,14 @@ constraintEqualityForSpaced set = do
 -- Abstract interpretation
 -- =======================
 instance Pretty (Ptr Pwaff) where
-    pretty pw = pretty $ (Unsafe.unsafePerformIO (pwaffCoalesce pw >>= pwaffToStr))
+    pretty pw = pretty $ 
+        (Unsafe.unsafePerformIO 
+            (pwaffCopy pw >>= pwaffCoalesce >>= pwaffToStr))
 
 instance Pretty (Ptr Set) where
-    pretty s = pretty $ (Unsafe.unsafePerformIO (setCoalesce s >>= setToStr))
+    pretty s = pretty $ 
+        (Unsafe.unsafePerformIO 
+            (setCopy s >>= setCoalesce >>= setCoalesce >>= setToStr))
 
 instance Pretty (Ptr Space) where
     pretty s = pretty $ (Unsafe.unsafePerformIO (spaceToStr s))
