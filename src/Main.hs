@@ -636,6 +636,17 @@ pwaffUnion pl pr = do
         error $ "pwaffs are not equal on common domain"
 
 
+-- | Accelerate a program
+accelProgram :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> AbsDomain
+    -> IO AbsDomain
+accelProgram ctx id2isl p d = do
+    -- Step 1. get symbolic information of everything
+    -- Step 2. accelerate till fixpoint.
+    -- TODO: finish this.
+
     
 -- | Abstract interpret phi nodes
 abstransphi :: Ptr Ctx
