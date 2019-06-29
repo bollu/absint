@@ -646,6 +646,7 @@ accelProgram ctx id2isl p d = do
     -- Step 1. get symbolic information of everything
     -- Step 2. accelerate till fixpoint.
     -- TODO: finish this.
+    return d
 
     
 -- | Abstract interpret phi nodes

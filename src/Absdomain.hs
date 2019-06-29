@@ -43,7 +43,7 @@ mapAddUnnamedDim m dt mislid = do
     m <- mapAddDims m dt 1
     m <- case mislid of 
           Nothing -> return m
-          Just islid -> mapSetDimId m dt ndim islid
+          Just islid -> mapSetDimId m dt (fromIntegral ndim) islid
     return (m, fromIntegral ndim)
       
 pwaffFromMap :: Ptr Map -> IO (Ptr Pwaff)

@@ -192,7 +192,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_set_dim_id as mapSetDimId
   { id `Ptr Map'
   , fromDimType `DimType'
-  , id `CUInt'
+  , fromIntegral `CInt'
   , id `Ptr Id'
   } -> `Ptr Map' id #}
 
@@ -201,7 +201,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Map' } -> `Ptr Space' id #}
 
 {#fun isl_map_dim as mapDim
-  { id `Ptr Map', fromDimType `DimType' } -> `CInt' id #}
+  { id `Ptr Map', fromDimType `DimType' } -> `CUInt' fromIntegral #}
 
 
 {#fun isl_map_get_dim_id as mapGetDimId
