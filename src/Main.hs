@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+
 module Main where
 import qualified Debug.Trace as Trace
 import qualified Data.Map.Strict as M
@@ -34,6 +35,7 @@ import Lattice
 import Util
 import Collectingsem
 import Absdomain
+import UI
 
 
 -- | each location has an associated abstract domain.
@@ -952,5 +954,6 @@ programs = [-- (passign, edefault)
 main :: IO ()
 main = for_ programs (\(p, e) -> do
     runProgram  p e
+    renderProgram p (const 1)
     putStrLn "\n=========================")
 

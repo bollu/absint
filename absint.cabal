@@ -45,10 +45,15 @@ extra-source-files:  CHANGELOG.md, README.md
 -- Constraint on the version of Cabal needed to build this package.
 cabal-version:       >=1.10
 
+-- Brick needs threaded RTS
+ghc-options: -threaded
 
 executable absint
   -- .hs or .lhs file containing the Main module.
   main-is:             Main.hs
+
+  -- Brick needs threaded RTS
+  ghc-options: -threaded
 
   -- Modules included in this executable, other than Main.
   other-modules: 
@@ -65,6 +70,7 @@ executable absint
     , Lattice
     , Collectingsem
     , Absdomain
+    , UI
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -77,6 +83,8 @@ executable absint
                       , inline-c
                       , template-haskell
                       , text
+                      , brick
+                      , vty
 
 
   build-tools: c2hs >= 0.19.1
