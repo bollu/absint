@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 module Lattice where
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
@@ -19,7 +21,6 @@ class Lattice a where
 qcLatticeJoinCommutes :: (Eq a, Lattice a) => a -> a -> Bool
 qcLatticeJoinCommutes a b = a `ljoin` b == b `ljoin` a
 
-
 qcLatticeJoinAssoc :: (Eq a, Lattice a) => a -> a -> a -> Bool
 qcLatticeJoinAssoc a b c =
     (a `ljoin` b) `ljoin` c == a `ljoin` (b `ljoin` c)
@@ -29,6 +30,9 @@ qcLatticeJoinIdempotent a = a `ljoin` a == a
 
 qcLatticeJoinUnit :: (Eq a, Lattice a) => a -> Bool
 qcLatticeJoinUnit a  = a `ljoin` lbot == a
+
+qcLatticeJoinOrd :: (Ord a, Lattice a) => a -> a -> Bool
+qcLatticeJoinOrd a b = (a <= ljoin a b) && (b <= ljoin a b)
 
 -- A map based representation of a function (a -> b), which on partial
 -- missing keys returns _|_
@@ -83,3 +87,14 @@ instance Lattice a => Semigroup (LUnion a) where
 
 instance Lattice a => Monoid (LUnion a) where
     mempty = LUnion $ lbot
+
+-- | Witness a galois connection.
+class GaloisConnection a b | a -> b, b -> a where
+    abstract :: a -> b
+    concrete :: b -> a
+
+qcGaloisConnectionLowerLift:: (Ord a, GaloisConnection a b) => a -> Bool
+qcGaloisConnectionLowerLift a = a <= (concrete . abstract $ a)
+
+qcGaloisConnectionLiftLower :: (Ord b, GaloisConnection a b) => b -> Bool
+qcGaloisConnectionLiftLower b = (abstract . concrete $ b) == b
