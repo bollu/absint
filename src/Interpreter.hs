@@ -128,7 +128,28 @@ aiBB ai bb bbid2bb s =
         st = aiTerm ai (bbterm bb) bbid2bb  si
     in st
 
+-- | Abstract interpret the whole program once.
+aiProgramOnce :: Lattice a => AI a -> Program -> AbsState a -> AbsState a
+aiProgramOnce ai p s =
+ let bbs = progbbs p
+     bbid2bb = progbbid2bb p
+ in foldl (\s bb -> aiBB ai bb bbid2bb s) s bbs
 
-aiProgram :: AI a -> Program -> AbsState a
-aiProgram = undefined
+-- | Run AI N times, or till fixpoint is reached, whichever is earlier
+aiProgramN :: (Eq a, Lattice a) => Int  -- ^ times to run
+           -> AI a
+           -> Program
+           -> AbsState a
+           -> AbsState a
+aiProgramN 0 _ _ s = s
+aiProgramN n ai p s =
+  let s' =  aiProgramOnce ai p s
+  in if s == s' then s' else aiProgramN (n-1) ai p s'
+
+-- | perform AI till fixpoint
+aiProgramFix :: (Lattice a, Eq a) => AI a ->
+    Program -> AbsState a -> AbsState a
+aiProgramFix ai p s =
+    let s' = aiProgramOnce ai p s
+     in if s == s' then s' else aiProgramOnce ai p s'
 
