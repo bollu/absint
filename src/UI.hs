@@ -14,6 +14,7 @@ import Brick.Widgets.Core
   , str
   )
 import qualified Brick.Widgets.Center as C
+import qualified Brick.Widgets.Border as B
 import qualified Brick.Widgets.Edit as E
 import qualified Brick.AttrMap as A
 import qualified Brick.Focus as F
@@ -30,7 +31,7 @@ type N = ()
 instance L.Splittable [] where
   splitAt = PreludeList.splitAt
 
-newtype S = S { l :: L.GenericList () [] String }
+data S = S { l :: L.GenericList () [] String, niters :: Int, curiter :: Int }
 
 phiflatten :: Phi -> String
 phiflatten = show
@@ -49,10 +50,17 @@ bbflatten bb =
   [termflatten (bbterm bb)]
 
 pflatten :: Program -> [String]
-pflatten p = concatMap bbflatten (progbbs p)
+pflatten p =  (concatMap bbflatten (progbbs p)) >>= replicate 10
 
 initS :: Program ->  S
-initS p = S (L.list  () (pflatten p) 2)
+initS p = S {
+  l = (L.list  () (pflatten p) 1)
+  , niters = 10
+  , curiter = 0
+}
+
+drawiters :: S -> Widget N
+drawiters s = str $ "iter: " ++ show (curiter s) ++ "/" ++ show (niters s)
 
 draw :: S -> [Widget N]
 draw s = 
@@ -60,7 +68,7 @@ draw s =
      -- | render :: Bool -> e -> Widget N
      render True e = str $ "->" ++ e 
      render False e = str $ "  " ++e 
- in [L.renderList render hasFocus (l s)]
+ in [drawiters s <=> B.border (vLimit 5 (L.renderList render hasFocus (l s)))]
 
 chooseCursor :: S -> [CursorLocation N] -> Maybe (CursorLocation N)
 chooseCursor _ [] = Nothing
@@ -70,7 +78,7 @@ handleEvent :: S -> BrickEvent N e -> EventM N (Next S)
 handleEvent s (VtyEvent (V.EvKey V.KEsc [])) = halt s
 handleEvent s (VtyEvent e) = do
   l' <- L.handleListEvent e (l s) 
-  continue $ S l'
+  continue $ s {l = l'}
 
 startEvent :: S -> EventM N S
 startEvent s = return s
