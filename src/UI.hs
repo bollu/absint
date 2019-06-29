@@ -2,6 +2,7 @@ module UI(renderProgram) where
 import IR
 
 import Brick
+import Graphics.Vty.Attributes (defAttr)
 import qualified Graphics.Vty as V
 import qualified Brick.Main as M
 import qualified Brick.Types as T
@@ -17,20 +18,76 @@ import qualified Brick.Widgets.Edit as E
 import qualified Brick.AttrMap as A
 import qualified Brick.Focus as F
 import qualified Brick.Widgets.ProgressBar as P
-import Brick.Util (on)
+import qualified Brick.Widgets.List as L
+import qualified Data.List as PreludeList(splitAt)
 
 import Brick.Util (on)
 
-newtype S = S ()
+import Brick.Util (on)
 
-initS :: S
-initS = S ()
+type N = ()
 
-app :: App S e ()
-app = simpleApp $ P.progressBar (Just "progress") 0.5
+instance L.Splittable [] where
+  splitAt = PreludeList.splitAt
+
+newtype S = S { l :: L.GenericList () [] String }
+
+phiflatten :: Phi -> String
+phiflatten = show
+
+assignflatten :: Assign -> String
+assignflatten a = show a
+
+termflatten :: Term -> String
+termflatten t = show t
+
+bbflatten :: BB -> [String]
+bbflatten bb = 
+  [show $ bbid bb] ++ 
+  map phiflatten (bbphis bb) ++ 
+  map assignflatten (bbinsts bb) ++ 
+  [termflatten (bbterm bb)]
+
+pflatten :: Program -> [String]
+pflatten p = concatMap bbflatten (progbbs p)
+
+initS :: Program ->  S
+initS p = S (L.list  () (pflatten p) 2)
+
+draw :: S -> [Widget N]
+draw s = 
+ let hasFocus = True
+     -- | render :: Bool -> e -> Widget N
+     render focus e = str e 
+ in [L.renderList render hasFocus (l s)]
+
+chooseCursor :: S -> [CursorLocation N] -> Maybe (CursorLocation N)
+chooseCursor _ [] = Nothing
+chooseCursor _ (x:xs) = Just x
+
+
+handleEvent :: S -> BrickEvent N e -> EventM N (Next S)
+handleEvent s (VtyEvent (V.EvKey V.KEsc [])) = halt s
+handleEvent s _ = continue s
+
+startEvent :: S -> EventM N S
+startEvent s = return s
+
+
+mkAttrMap :: S -> AttrMap
+mkAttrMap s = attrMap defAttr []
+
+app :: App S e N
+app = App {
+  appDraw = draw
+  , appChooseCursor = chooseCursor
+  , appHandleEvent = handleEvent
+  , appStartEvent = startEvent
+  , appAttrMap = mkAttrMap
+}
 
 renderProgram :: Program -> (Loc -> a) -> IO ()
 renderProgram p f = do
-    s <- defaultMain app initS 
+    s <- defaultMain app (initS p)
     return ()
 

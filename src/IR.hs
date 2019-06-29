@@ -79,11 +79,14 @@ data Assign = Assign {
     assignloc :: !Loc,
     assignid :: !Id,
     assignexpr :: !Expr
-}deriving(Eq, Ord, Show)
+}deriving(Eq, Ord)
 
 instance Pretty Assign where
   pretty (Assign pc id expr) =
     pretty pc <+> pretty id <+> equals <+> pretty expr
+
+instance Show Assign where
+  show (Assign pc id expr) = show pc ++ " " ++ show id ++ " =  " ++ show expr
 
 instance Located Assign where
   location (Assign loc _ _) = loc
