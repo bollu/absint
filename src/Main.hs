@@ -954,6 +954,6 @@ programs = [-- (passign, edefault)
 main :: IO ()
 main = for_ programs (\(p, e) -> do
     runProgram  p e
-    renderProgram p (const 1)
+    render p (const 1)
     putStrLn "\n=========================")
 
