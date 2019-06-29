@@ -201,11 +201,11 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Map' } -> `Ptr Space' id #}
 
 {#fun isl_map_dim as mapDim
-  { id `Ptr Map', fromDimType `DimType' } -> `CUInt' id #}
+  { id `Ptr Map', fromDimType `DimType' } -> `CInt' id #}
 
 
 {#fun isl_map_get_dim_id as mapGetDimId
-  { id `Ptr Map', fromDimType `DimType', id `CUInt'} -> `Ptr Id' id #}
+  { id `Ptr Map', fromDimType `DimType', id  `CUInt'} -> `Ptr Id' id #}
 
 {#fun isl_map_domain_product as mapDomainProduct
   { id `Ptr Map', id `Ptr Map'} -> `Ptr Map' id #}
@@ -411,7 +411,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 
 {#fun isl_space_dim as spaceDim_
-  { id `Ptr Space', fromDimType `DimType' } -> `CUInt' id #}
+  { id `Ptr Space', fromDimType `DimType' } -> `CInt' id #}
 
 spaceDim :: Ptr Space -> DimType -> IO Int
 spaceDim sp dt = fromIntegral <$> spaceDim_ sp dt 
