@@ -13,7 +13,7 @@ import Data.List (intercalate, nub)
 import Data.Semigroup
 import qualified Control.Monad.State as ST
 import qualified Control.Monad.Reader as MR
-import Data.Foldable 
+import Data.Foldable
 import Data.Traversable (sequenceA, for)
 import Control.Applicative
 import Data.Text.Prettyprint.Doc
@@ -22,7 +22,7 @@ import Data.Text.Prettyprint.Doc.Util
 import Control.Exception (assert)
 import Data.Maybe (catMaybes, fromJust)
 import ISL.Native.C2Hs
-import ISL.Native.Types (DimType(..), 
+import ISL.Native.Types (DimType(..),
   Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
 import qualified ISL.Native.Types as ISLTy (Id)
 import Foreign.Ptr
@@ -31,6 +31,7 @@ import qualified Control.Monad (join)
 import IR
 import Opsem
 import Lattice
+import Interpreter
 import Util
 import Collectingsem
 import Absdomain
@@ -56,7 +57,7 @@ loc2dinit l d = do
 
 -- | Union at a key in l2d
 loc2dUnion :: Located a => a -> AbsDomain -> Loc2AbsDomain -> IO Loc2AbsDomain
-loc2dUnion a d (Loc2AbsDomain l2d) = 
+loc2dUnion a d (Loc2AbsDomain l2d) =
     let l = location a in
     case M.lookup l l2d of
         Just dprev -> do
@@ -69,9 +70,9 @@ loc2dUnion a d (Loc2AbsDomain l2d) =
             dprev <- absdomainCopy dprev
             d <- absdomainCopy d
 
-            -- putDocW 80 $ pretty "\n===location:" <> pretty l <> 
-            --     pretty "\n1.\n" <> pretty dprev <> 
-            --     pretty "\n2.\n" <> pretty d <> 
+            -- putDocW 80 $ pretty "\n===location:" <> pretty l <>
+            --     pretty "\n1.\n" <> pretty dprev <>
+            --     pretty "\n2.\n" <> pretty d <>
             --     pretty "\n===\n"
             d' <- absdomUnion d dprev
             putStrLn "after loc2dunion"
@@ -81,11 +82,13 @@ loc2dUnion a d (Loc2AbsDomain l2d) =
 -- | Get the absdomain at a located value, and nothing if unable to
 -- | find anything
 loc2dgetmaybe :: Located a => Loc2AbsDomain -> a -> Maybe AbsDomain
-loc2dgetmaybe(Loc2AbsDomain l2d) a = l2d M.!? (location a) 
+loc2dgetmaybe(Loc2AbsDomain l2d) a = l2d M.!? (location a)
 
 -- | Get the absdomain at a located value
 loc2dget :: Located a => Loc2AbsDomain -> a -> AbsDomain
 loc2dget (Loc2AbsDomain l2d) a = l2d !!# (location a)
+
+
 -- | Abstract domain model
 data AbsDomain = AbsDomain {
     absdomval :: M.Map Id (Ptr Pwaff),
@@ -95,17 +98,17 @@ data AbsDomain = AbsDomain {
 
 absdomainCopy :: AbsDomain -> IO AbsDomain
 absdomainCopy d = do
-    vals <- traverse pwaffCopy (absdomval d) 
-    bbs <- traverse setCopy (absdombb d) 
-    edges <- traverse setCopy (absdomedge d) 
+    vals <- traverse pwaffCopy (absdomval d)
+    bbs <- traverse setCopy (absdombb d)
+    edges <- traverse setCopy (absdomedge d)
     return $ AbsDomain vals edges bbs
 
 -- | Take a union of two maps under a monadic context
 -- | Assumes key space of 1 and 2 are equal
-mapsunionM :: (Ord k, Pretty k, Pretty v, Monad m) 
-    => (v -> v -> m v) 
-    -> M.Map k v 
-    -> M.Map k v 
+mapsunionM :: (Ord k, Pretty k, Pretty v, Monad m)
+    => (v -> v -> m v)
+    -> M.Map k v
+    -> M.Map k v
     -> m (M.Map k v)
 mapsunionM f m m' = do
     let ks = M.keys m
@@ -120,8 +123,8 @@ mapsunionM f m m' = do
 -- | Performs a pointwise union of pwaff over two maps.
 -- | Assumes key space of 1 and 2 are equal
 id2pwunion :: (Ord k, Pretty k)
-    => M.Map k (Ptr Pwaff) 
-    -> M.Map k (Ptr Pwaff) 
+    => M.Map k (Ptr Pwaff)
+    -> M.Map k (Ptr Pwaff)
     -> IO (M.Map k (Ptr Pwaff))
 id2pwunion = mapsunionM pwaffUnion
 
@@ -150,7 +153,7 @@ absdomGetVal d id = absdomval d !!# id
 
 -- | dom[id <- v]
 absdomSetVal_ :: Id -> Ptr Pwaff -> AbsDomain -> AbsDomain
-absdomSetVal_ id pwaff d = 
+absdomSetVal_ id pwaff d =
     d { absdomval =  M.insert id pwaff (absdomval d) }
 
 absdomUnionVal :: Id -> Ptr Pwaff -> AbsDomain -> IO AbsDomain
@@ -160,11 +163,11 @@ absdomUnionVal id pwaff d = do
     pw' <- pwaffUnion pwaff pwcur
     putStrLn "after absdom union val"
     return $ absdomSetVal_ id pw' d
-    
+
 
 
 absdomSetEdge_ :: BBId -> BBId -> Ptr Set -> AbsDomain -> AbsDomain
-absdomSetEdge_ bb bb' set d = 
+absdomSetEdge_ bb bb' set d =
     d { absdomedge = M.insert (bb, bb') set (absdomedge d) }
 
 
@@ -203,9 +206,9 @@ absdomIntersectBB bb s d = do
 -- restrict the domain of all values. Keep set
 absdomRestrictValDomains :: Ptr Set -> AbsDomain  -> IO AbsDomain
 absdomRestrictValDomains s d = do
-    absdomval' <- traverse 
+    absdomval' <- traverse
         (\pw -> do
-            s <- setCopy s 
+            s <- setCopy s
             pw <- pwaffCopy pw
             pwaffIntersectDomain pw s)
         (absdomval d)
@@ -213,7 +216,7 @@ absdomRestrictValDomains s d = do
 
 
 instance Pretty AbsDomain where
-    pretty d = 
+    pretty d =
         vcat [pretty "Val:", indent 1 $ pretty (absdomval d),
               pretty "BB:", indent 1 $ pretty (absdombb d),
               pretty "Edge:", indent 1 $ pretty (absdomedge d)]
@@ -223,7 +226,7 @@ instance Pretty AbsDomain where
 absSetSpace :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> IO (Ptr Space)
 absSetSpace ctx id2isl = do
     s <- spaceSetAlloc ctx 0 (length id2isl)
-    s <- OM.foldMWithIx s id2isl 
+    s <- OM.foldMWithIx s id2isl
         (\s ix _ islid -> idCopy islid >>= setDimId s IslDimSet ix)
     return s
 
@@ -252,7 +255,7 @@ pwVar ctx id2isl id = do
 -- | Create a constant pwaff
 pwConst :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Int -> IO (Ptr Pwaff)
 pwConst ctx id2isl i = do
-    ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace 
+    ls <- absSetSpace ctx id2isl >>= localSpaceFromSpace
     pwaffInt ctx ls i
 
 
@@ -267,12 +270,12 @@ pwnan ctx id2isl = do
     return pwaff
 
 -- Initial abstract domain
-absDomainStart :: Ptr Ctx 
-    -> OM.OrderedMap Id (Ptr ISLTy.Id) 
-    ->  Program 
+absDomainStart :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    ->  Program
     -> IO AbsDomain
 absDomainStart ctx id2isl p = do
-    dparams <- M.fromList <$> 
+    dparams <- M.fromList <$>
         for (S.toList (progparams p))
             (\id -> (pwVar ctx id2isl id) >>= \pw -> return (id, pw))
 
@@ -293,7 +296,7 @@ absDomainStart ctx id2isl p = do
             then do
                 s <- absSetSpace ctx id2isl >>= setUniverse
                 return (bbid bb, s)
-            else do 
+            else do
                 s <- absSetSpace ctx id2isl >>= setEmpty
                 return (bbid bb, s))
     return $ AbsDomain dvals dedge dbb
@@ -305,7 +308,7 @@ abstransexpr :: Ptr Ctx
     -> Expr
     -> AbsDomain
     -> IO (Ptr Pwaff)
-abstransexpr ctx id2isl id (EId id') absdom = 
+abstransexpr ctx id2isl id (EId id') absdom =
     pwaffCopy (absdomGetVal absdom id')
 
 abstransexpr ctx id2isl _ (EInt i) _ = pwConst ctx id2isl i
@@ -327,7 +330,7 @@ abstransexpr ctx id2isl _ (EBinop Lt id1 id2) absdom = do
     pwf <- (pwConst ctx id2isl 0)
     pwf <- setComplement lt >>= pwaffIntersectDomain pwf
     pwaffUnionMax pwt pwf
-    
+
 
 -- | Abstract interpret assignment expressions
 -- | TODO: code repetition of forwarding to BB. This should most likely
@@ -344,7 +347,7 @@ abstransassign ctx id2isl p dom a d = do
     let id = assignid a
 
     dom <- setCopy dom
-    pwaff <- abstransexpr ctx id2isl id e d 
+    pwaff <- abstransexpr ctx id2isl id e d
     pwaff <- pwaffIntersectDomain pwaff dom
     absdomUnionVal id pwaff d
 
@@ -355,7 +358,7 @@ isEdgeBackedge :: Program -> (BBId, BBId) -> Bool
 isEdgeBackedge p (bbidfrom, bbidto) = do
     case progbbid2nl p M.!? bbidto of
         Nothing -> False
-        Just nl -> 
+        Just nl ->
             (bbidfrom `S.member` nlbody nl || bbidfrom == nlheader nl)
 
 -- | the to basic block is the header of a natural loop, and the from
@@ -364,12 +367,12 @@ isEdgeEnteringLoop :: Program -> (BBId, BBId) -> Bool
 isEdgeEnteringLoop p (bbidfrom, bbidto) = do
     case progbbid2nl p M.!? bbidto of
         Nothing -> False
-        Just nl -> 
+        Just nl ->
             not $ bbidfrom `S.member` nlbody nl || bbidfrom == nlheader nl
 
 -- | Increment the given *parameter* dimension by 1
 -- | TODO: use this function
-pwaffIncrParamDimension :: Ptr Ctx 
+pwaffIncrParamDimension :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Id -- ^ dimension to be incremented
     -> Ptr Pwaff
@@ -378,7 +381,7 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     let islid = id2isl OM.! id
     -- ID of the parametric dimension to be incremented
     n <- ndim pw IslDimParam
-    Just ixid <- findDimById pw IslDimIn islid 
+    Just ixid <- findDimById pw IslDimIn islid
 
     -- [v1, v2, ... vloop = N] -> [VAL]
     pwmap <- pwaffCopy pw >>= mapFromPwaff
@@ -386,13 +389,13 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     domain <- pwaffGetDomainSpace pw >>= setUniverse
 
     -- [v1, v2, ... vloop] -> [v1', v2', ... vloop']
-    incrmap <- setCopy domain >>= 
-        \d -> setCopy domain >>= 
+    incrmap <- setCopy domain >>=
+        \d -> setCopy domain >>=
             \d' -> mapFromDomainAndRange d d'
 
     -- [vloop' = vloop + 1]
-    c <- getSpace incrmap >>= localSpaceFromSpace >>= 
-        constraintAllocEquality 
+    c <- getSpace incrmap >>= localSpaceFromSpace >>=
+        constraintAllocEquality
     c <- constraintSetCoefficient c IslDimIn ixid (1)
     c <- constraintSetCoefficient c IslDimOut ixid (-1)
     c <- constraintSetConstant c (1)
@@ -417,7 +420,7 @@ pwaffIncrParamDimension ctx id2isl id pw = do
     -- pw <- pwaffPullbackMultipwaff pw pw_multi
     -- return pw
 
-setIncrParamDimension :: Ptr Ctx 
+setIncrParamDimension :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Id -- ^ dimension to be incremented
     -> Ptr Set
@@ -426,19 +429,19 @@ setIncrParamDimension ctx id2isl id s = do
     let islid = id2isl OM.! id
     -- ID of the parametric dimension to be incremented
     n <- ndim s IslDimSet
-    Just ixid <- findDimById s IslDimSet islid 
+    Just ixid <- findDimById s IslDimSet islid
 
 
     domain <- setCopy s >>= setGetSpace  >>= setUniverse
 
     -- [v1, v2, ... vloop] -> [v1', v2', ... vloop']
-    incrmap <- setCopy domain >>= 
-        \d -> setCopy domain >>= 
+    incrmap <- setCopy domain >>=
+        \d -> setCopy domain >>=
             \d' -> mapFromDomainAndRange d d'
 
     -- [vloop' = vloop + 1]
-    c <- getSpace incrmap >>= localSpaceFromSpace >>= 
-        constraintAllocEquality 
+    c <- getSpace incrmap >>= localSpaceFromSpace >>=
+        constraintAllocEquality
     c <- constraintSetCoefficient c IslDimIn ixid (1)
     c <- constraintSetCoefficient c IslDimOut ixid (-1)
     c <- constraintSetConstant c (1)
@@ -475,7 +478,7 @@ absdomTransferOnLoopBackedge ctx id2isl p (bbidfrom, bbidto) d = do
                 putDocW 80 $ pretty "setIncrParamDimension(before):" <> pretty s  <> pretty "\n"
                 s <-  setIncrParamDimension ctx id2isl (nl2loopid nl) s
                 putDocW 80 $ pretty "setIncrParamDimension(after):" <> pretty s  <> pretty "\n"
-                d <- absdomUnionBB bbidto s d 
+                d <- absdomUnionBB bbidto s d
                 return d
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
     else return d
@@ -496,28 +499,28 @@ setSetParamDimension ctx id2isl id val s = do
     putDocW 80 $ pretty "---\n"
     Just ix <- findDimById s IslDimSet islid
 
-    c <- getSpace s >>= localSpaceFromSpace >>= 
-        constraintAllocEquality 
+    c <- getSpace s >>= localSpaceFromSpace >>=
+        constraintAllocEquality
     c <- constraintSetCoefficient c IslDimSet ix 1
     c <- constraintSetConstant c val
     s <-  setAddConstraint s c
     return s
 
-pwaffSetParamDimension :: Ptr Ctx 
+pwaffSetParamDimension :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
     -> Id -- ^ dimension to be restricted
     -> Int -- ^ value to restrict to
     -> Ptr Pwaff
     -> IO (Ptr Pwaff)
 pwaffSetParamDimension ctx id2isl id val pw = do
-    s <- pwaffCopy pw >>= 
-        pwaffGetDomainSpace >>= 
-        setUniverse >>= 
+    s <- pwaffCopy pw >>=
+        pwaffGetDomainSpace >>=
+        setUniverse >>=
         setSetParamDimension ctx id2isl id val
 
     pw <- pwaffIntersectDomain pw s
     return pw
-    
+
 
 -- | Restrict values from the left to a phi on a forward edge
 absdomTransferOnLoopEnter :: Ptr Ctx
@@ -538,12 +541,12 @@ absdomTransferOnLoopEnter ctx id2isl p (bbidfrom, bbidto) d = do
                 d <- absdomUnionVal (phiid phi) pw d
 
                 s <-  setSetParamDimension ctx id2isl (nl2loopid nl) 0 (absdomGetBB bbidto d)
-                d <- absdomIntersectBB bbidto s d 
+                d <- absdomIntersectBB bbidto s d
                 return d
 
               ) d (bbphis $ (progbbid2bb p) !!# bbidto)
-        -- putDocW 80 $ pretty "===\ntransfer on loop enter (" <> 
-        --     pretty bbidfrom <> pretty "->" <> pretty bbidto <> pretty ")\n"  <> 
+        -- putDocW 80 $ pretty "===\ntransfer on loop enter (" <>
+        --     pretty bbidfrom <> pretty "->" <> pretty bbidto <> pretty ")\n"  <>
         --     pretty d <> pretty "\n===\n"
         return d
     else return d
@@ -556,8 +559,8 @@ abstransterm :: Ptr Ctx
     -> Term
     -> AbsDomain
     -> IO [(BBId, AbsDomain)] -- ^ List of basic blocks and updated abstract domains
-abstransterm ctx id2isl p _ (Done _) d = return []
-abstransterm ctx id2isl p bb (Br _ bb') d = do
+abstransterm ctx id2isl p _ (Done _ _) d = return []
+abstransterm ctx id2isl p bb (Br _ _ bb') d = do
     let s = absdomGetBB bb d
     d <- absdomainCopy d >>= absdomRestrictValDomains s
     d <- absdomUnionBB bb' s d
@@ -565,18 +568,18 @@ abstransterm ctx id2isl p bb (Br _ bb') d = do
     d <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bb') d
     return [(bb', d)]
 
-abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
+abstransterm ctx id2isl p bb (BrCond _ _ c bbl bbr) d = do
     let dbb  = absdomGetBB bb d
     d <- absdomainCopy d
 
     -- true = -1
     vc <- pwaffCopy $ absdomGetVal d c
-    setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc 
+    setcTrue <- (pwConst ctx id2isl (-1)) >>= pwaffEqSet vc
     setcTrue <- setCopy dbb >>= \dbb -> setcTrue `setIntersect` dbb
     -- setcTrue <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbl) setcTrue
 
     vc <- pwaffCopy $ absdomGetVal d c
-    setcFalse <- (pwConst ctx id2isl (0)) >>= pwaffEqSet vc 
+    setcFalse <- (pwConst ctx id2isl (0)) >>= pwaffEqSet vc
     setcFalse <- setCopy dbb >>= \dbb -> setcFalse `setIntersect` dbb
     -- setcFalse <- edgeConstrainOnLoopEnter  ctx id2isl p (bb, bbr) setcFalse
 
@@ -591,10 +594,10 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
     dfalse <- absdomTransferOnLoopEnter ctx id2isl p (bb, bbr) dfalse
     dfalse <- absdomTransferOnLoopBackedge ctx id2isl p (bb, bbr) dfalse
 
-    -- putDocW 80 $ pretty "\n====\nAbstransterm" <> 
+    -- putDocW 80 $ pretty "\n====\nAbstransterm" <>
     --     pretty (bb, bbl, bbr) <> pretty "\n" <>
     --     pretty "true:\n" <> pretty dtrue <> pretty "\n----\n" <>
-    --     pretty "false:\n" <> pretty dfalse <> 
+    --     pretty "false:\n" <> pretty dfalse <>
     --     pretty "\ndbb: " <> pretty dbb <> pretty "\n" <>
     --     pretty "\n=====\n"
 
@@ -604,23 +607,23 @@ abstransterm ctx id2isl p bb (BrCond _ c bbl bbr) d = do
 -- | Take, Take -> Give
 pwaffUnion :: Ptr Pwaff -> Ptr Pwaff -> IO (Ptr Pwaff)
 pwaffUnion pl pr = do
-    dl <- pwaffCopy pl >>= pwaffDomain 
-    dr <- pwaffCopy pr >>= pwaffDomain 
+    dl <- pwaffCopy pl >>= pwaffDomain
+    dr <- pwaffCopy pr >>= pwaffDomain
     dcommon <- setCopy dl >>= \dl -> setCopy dr >>= \dr -> setIntersect dl dr
     deq <- pwaffCopy pl >>= \pl -> pwaffCopy pr >>= \pr -> pwaffEqSet pl pr
 
     Just commonSubsetEq <- setIsSubset dcommon deq
     Just commonEqualEq <- setIsEqual dcommon deq
 
-    
+
     if commonSubsetEq
     then  do
         pl <- pwaffCopy pl
         pr <- pwaffCopy pr
         pwaffUnionMax pl pr
-    else do 
-        dneq <- setCopy deq >>= setComplement 
-        putDocW 80 $ vcat $ 
+    else do
+        dneq <- setCopy deq >>= setComplement
+        putDocW 80 $ vcat $
             [pretty "\n---"
             , pretty "pl: " <> pretty pl
             , pretty "dl: " <> pretty dl
@@ -648,12 +651,12 @@ accelProgram ctx id2isl p d = do
     -- TODO: finish this.
     return d
 
-    
+
 -- | Abstract interpret phi nodes
 abstransphi :: Ptr Ctx
-    -> OM.OrderedMap Id (Ptr ISLTy.Id) 
-    -> Program 
-    -> Phi 
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
+    -> Phi
     -> AbsDomain
     -> IO AbsDomain
 abstransphi cx id2isl p phi d = do
@@ -663,8 +666,8 @@ abstransphi cx id2isl p phi d = do
             let idl =  snd . phil $ phi
             let idr =  snd . phir $ phi
             -- domain from the left hand
-            vl <- pwaffCopy $ absdomGetVal d idl 
-            vr <- pwaffCopy $ absdomGetVal d idr 
+            vl <- pwaffCopy $ absdomGetVal d idl
+            vr <- pwaffCopy $ absdomGetVal d idr
 
             v <- (pwaffUnion vl vr)
             absdomUnionVal (phiid phi) v d
@@ -674,19 +677,19 @@ foldM1 :: Monad m => (a -> a -> m a) -> [a] -> m a
 foldM1 f (a:as) = foldM f a as
 
 -- | Abstract interpret basic blocks
-absintbb :: Ptr Ctx 
-    -> OM.OrderedMap Id (Ptr ISLTy.Id) 
-    -> Program 
+absintbb :: Ptr Ctx
+    -> OM.OrderedMap Id (Ptr ISLTy.Id)
+    -> Program
     -> AbsDomain -- ^ identity abstract domain
-    -> BB 
-    -> Loc2AbsDomain 
+    -> BB
+    -> Loc2AbsDomain
     -> IO Loc2AbsDomain
 absintbb ctx id2isl p dmempty bb l2d = do
 
     -- first abstract interpret each phi, forwarding the data
     -- as expected
     -- TODO: remove redundancy in code between phi and assign
-    l2d <- foldM 
+    l2d <- foldM
         (\l2d phi -> do
             -- state is the state that is on top
             let d = loc2dget l2d (bbGetPrevLoc bb phi)
@@ -699,7 +702,7 @@ absintbb ctx id2isl p dmempty bb l2d = do
 
     -- now abstract interpret each instruction, forwarding the
     -- data as expected
-    l2d <- foldM 
+    l2d <- foldM
         (\l2d a -> do
             let d = loc2dget l2d (bbGetPrevLoc bb a)
             let bbdom = absdomGetBB (bbid bb) d
@@ -729,28 +732,25 @@ absintbb ctx id2isl p dmempty bb l2d = do
         let bb' = bbid2bb !!# bbid'
         -- update at the location of the next bb
         putStrLn "before term fold"
-        l2d <- loc2dUnion (bbloc bb') d l2d 
+        l2d <- loc2dUnion (bbloc bb') d l2d
         putStrLn "after term fold"
         return l2d
         ) l2d bbid2d
-        
+
     return l2d
 
 
-    
+
 -- perform the abstract interpretation for one iteration
 absint_ :: Ptr Ctx
     -> OM.OrderedMap Id (Ptr ISLTy.Id)
-    -> Program 
+    -> Program
     -> AbsDomain -- ^ Identity abstract domain
-    -> Loc2AbsDomain 
+    -> Loc2AbsDomain
     -> IO Loc2AbsDomain
 absint_ ctx id2isl p dmempty l2d = do
     foldM (\l2d bb -> absintbb ctx id2isl p dmempty bb l2d) l2d (progbbs p)
 
-
-
-    
 
 absint :: Program -> IO Loc2AbsDomain
 absint p = do
@@ -779,7 +779,7 @@ gamma = undefined
 
 pNestedLoop :: Program
 pNestedLoop = runProgramBuilder $ do
-  entry <- buildNewBB "entry" Nothing 
+  entry <- buildNewBB "entry" Nothing
   loop1 <- buildNewBB "loop" (Just $ BBLoop [])
   loop2 <- buildNewBB "loop2" (Just $ BBLoop [])
   exit <- buildNewBB "exit" Nothing
@@ -810,7 +810,7 @@ pNestedLoop = runProgramBuilder $ do
 
 pAdjacentLoop :: Program
 pAdjacentLoop = runProgramBuilder $ do
-  entry <- buildNewBB "entry" Nothing 
+  entry <- buildNewBB "entry" Nothing
   loop1 <- buildNewBB "loop" (Just $ BBLoop [])
   loop1_to_loop2 <- buildNewBB "loop1_to_loop2" (Just $ BBLoop [])
   loop2 <- buildNewBB "loop2" (Just $ BBLoop [])
@@ -864,7 +864,7 @@ pif = runProgramBuilder $ do
   false <- buildNewBB "false" Nothing
   merge <- buildNewBB "merge" Nothing
   p <- param "p"
-  
+
 
   focusBB entry
   assign "two" $ EInt 2
@@ -888,7 +888,7 @@ pif = runProgramBuilder $ do
 
 ploop :: Program
 ploop = runProgramBuilder $ do
-  entry <- buildNewBB "entry" Nothing 
+  entry <- buildNewBB "entry" Nothing
   loop <- buildNewBB "loop" (Just . BBLoop . S.fromList $ [])
   exit <- buildNewBB "exit" Nothing
 
@@ -909,7 +909,7 @@ ploop = runProgramBuilder $ do
   assign "x_next" ("x_loop" +. "one")
   condbr "x_loop_lt_5" loop exit
 
--- 
+--
 -- -- ========================
 -- -- CHOOSE YOUR PROGRAM HERE
 -- -- ========================
@@ -946,7 +946,7 @@ programs :: [(Program, Env Int)]
 programs = [-- (passign, edefault)
             -- (pif, edefault)
             (ploop, edefault)
-           ] 
+           ]
 
 -- | Main entry point that executes all programs
 main :: IO ()

@@ -6,152 +6,80 @@ import Data.Text.Prettyprint.Doc.Util
 import qualified Data.Set as S
 import qualified Data.Map as M
 import qualified Data.Map.Merge.Strict as M
+import Test.QuickCheck
 import Util
 
--- Lattice theory
--- ==============
--- top = join of all elements
-class SemiJoin a where
-  join :: a -> a -> a
-  top :: a
+class Lattice a where
+  lbot :: a
+  ltop :: a
+  ljoin :: a -> a -> a
+  lmeet :: a -> a -> a
 
--- bottom = meet of all elements 
-class SemiMeet a where
-  meet :: a -> a -> a
-  bottom :: a
-
-class (SemiJoin a, SemiMeet a) => Lattice a
-
-instance SemiJoin a => SemiJoin (Maybe a) where
-  top = Just top
-
-  join Nothing a = a
-  join a Nothing = a
-  join (Just a) (Just b) = Just (join a b)
-
-instance SemiMeet a => SemiMeet (Maybe a) where
-  bottom = Nothing
-
-  meet Nothing _ = Nothing
-  meet _ Nothing = Nothing
-  meet (Just a) (Just b) = Just (meet a b)
-
-instance (SemiJoin a, SemiJoin b) => SemiJoin (a, b) where
-  top = (top, top)
-  join (a, b) (a', b') = (a `join` a', b `join` b')
-
-instance (SemiMeet a, SemiMeet b) => SemiMeet (a, b) where
-  bottom = (bottom, bottom)
-  meet (a, b) (a', b') = (a `meet` a', b `meet` b')
-
-instance (Lattice a, Lattice b) => Lattice (a, b)
-
-data LiftedLattice a = LL !a | LLBot | LLTop deriving(Eq, Ord, Functor)
-
-instance Pretty a => Pretty (LiftedLattice a) where
-  pretty (LL a) = pretty a
-  pretty LLBot = pretty "_|_"
-  pretty LLTop = pretty "T"
-
-instance Eq a => SemiJoin (LiftedLattice a) where
-  top = LLTop
-
-  join LLBot a = a
-  join a LLBot = a
-  join LLTop _ = LLTop
-  join _ LLTop = LLTop
-  join (LL a) (LL b) = if a == b then LL a else LLTop
-
-instance Eq a => SemiMeet (LiftedLattice a) where
-  bottom = LLBot
-
-  meet LLBot _ = LLBot
-  meet _ LLBot = LLBot
-  meet a LLTop = a
-  meet LLTop a = a
-  meet (LL a) (LL b) = if a == b then LL a else LLBot
-
-instance Eq a => Lattice (LiftedLattice a)
+-- | quickCheck properties of union.
+qcLatticeJoinCommutes :: (Eq a, Lattice a) => a -> a -> Bool
+qcLatticeJoinCommutes a b = a `ljoin` b == b `ljoin` a
 
 
+qcLatticeJoinAssoc :: (Eq a, Lattice a) => a -> a -> a -> Bool
+qcLatticeJoinAssoc a b c =
+    (a `ljoin` b) `ljoin` c == a `ljoin` (b `ljoin` c)
 
-liftLL2 :: (a -> b -> c) -> LiftedLattice a -> LiftedLattice b -> LiftedLattice c
-liftLL2 f LLTop _ = LLTop
-liftLL2 f _ LLTop = LLTop
-liftLL2 f LLBot _ = LLBot
-liftLL2 f _ LLBot  = LLBot
-liftLL2 f (LL a) (LL b) = LL (f a b)
+qcLatticeJoinIdempotent :: (Eq a, Lattice a) => a -> Bool
+qcLatticeJoinIdempotent a = a `ljoin` a == a
 
-instance Show a => Show (LiftedLattice a) where
-  show LLBot = "_|_"
-  show LLTop = "T"
-  show (LL a) = show a
-
-
--- Create a LatticeMap with one element
-(~>) :: Ord k => k -> v -> LatticeMap k v
-(~>) k v = lminsert k v lmempty 
-
-
--- Adjoin a top element 
-data ToppedLattice a = TLTop | TL !a deriving (Eq, Ord, Functor)
-
-instance Show a => Show (ToppedLattice a) where
-  show TLTop = "T"
-  show (TL a) = show a
-
-data BottomedLattice a = TLBot | TB !a deriving(Eq, Ord, Functor)
-
-instance Show a => Show (BottomedLattice a) where
-  show TLBot = "_|_"
-  show (TB a) = show a
-
+qcLatticeJoinUnit :: (Eq a, Lattice a) => a -> Bool
+qcLatticeJoinUnit a  = a `ljoin` lbot == a
 
 -- A map based representation of a function (a -> b), which on partial
 -- missing keys returns _|_
 data LatticeMap k v = LM !(M.Map k v)  deriving (Eq, Ord, Functor)
 
--- Insert a regular value into a lattice map
-lminsert :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
-lminsert k v (LM m) = LM $ M.insert k v m
+instance (Ord k, Arbitrary k, Arbitrary v) =>
+    Arbitrary (LatticeMap k v) where
+        arbitrary = lmfromlist <$> arbitrary
 
--- pointwise produce of two lattice maps
--- If a value is missing in either lattice, put a bottom in its place
-lmproduct :: (SemiMeet v, SemiMeet w, Ord k) => LatticeMap k v -> LatticeMap k w -> LatticeMap k (v, w)
-lmproduct (LM m) (LM m') = let
-  missingm' = M.mapMissing (\k w -> bottom)
-  missingm =  M.mapMissing (\k v -> bottom)
-  merger = M.zipWithMatched (\k tx ty -> (tx, ty))
-  in LM $ M.merge missingm' missingm merger m m'
 
-adjust :: Ord k => k -> (v -> v) -> LatticeMap k v -> LatticeMap k v
-adjust k f (LM m) = LM $ M.adjust f k m
+lmInsert :: (Ord k, Lattice v) => k -> v ->  LatticeMap k v ->  LatticeMap k v
+lmInsert k v (LM lm) =
+  let vold = case lm M.!? k of
+                Nothing -> lbot
+                Just v' -> v'
+  in LM $ M.insert k (ljoin v vold) lm
 
-(!!#!) :: (Ord k, SemiMeet v) => LatticeMap k v -> k -> v
-(!!#!) (LM m) k = case m M.!? k of
+
+(#!) :: (Ord k, Lattice v) => LatticeMap k v -> k -> v
+(#!) (LM m) k = case m M.!? k of
                    Just v -> v
-                   Nothing -> bottom
-
-
-(!!#?) :: Ord k => LatticeMap k v -> k -> Maybe v
-(!!#?) (LM m) k = m M.!? k 
+                   Nothing -> lbot
 
 lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
 lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]
 
-lmempty :: LatticeMap k v 
+lmempty :: LatticeMap k v
 lmempty = LM $ M.empty
 
 lmtolist :: Ord k => LatticeMap k v -> [(k, v)]
 lmtolist (LM m) = M.toList m
 
+instance (Ord k, Lattice v) => Lattice (LatticeMap k v) where
+  lbot = LM $ M.empty
+  ltop =  error "hard to define top for latticemap without knowing universe"
+  ljoin (LM kv) kv' =
+     foldl (\kv' (k, v)  -> lmInsert k v kv')  kv' (M.toList kv)
+  lmeet =  error "hard to define meet"
+
 instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (LatticeMap k v) where
-  show (LM m) = show $ [(k, m !!# k) | k <- M.keys m]
+  show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
 
 
 instance (Ord k, Pretty k, Pretty v) => Pretty (LatticeMap k v) where
   pretty (LM m) =  pretty m -- vcat $ [pretty k <+> pretty "->" <+> pretty (m !!# k) | k <- M.keys m]
 
-instance SemiMeet v => SemiMeet (LatticeMap k v) where
-  bottom = LM M.empty
-  meet _ _ = error "TODO: define meet"
+-- | a union combinator  for monoid on lattice
+newtype LUnion a = LUnion { unLUnion :: a } deriving(Eq, Ord, Show)
+
+instance Lattice a => Semigroup (LUnion a) where
+    (LUnion a) <> (LUnion a') = LUnion $ ljoin a a'
+
+instance Lattice a => Monoid (LUnion a) where
+    mempty = LUnion $ lbot
