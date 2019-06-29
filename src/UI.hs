@@ -43,7 +43,7 @@ termflatten t = show t
 
 bbflatten :: BB -> [String]
 bbflatten bb = 
-  [show $ bbid bb] ++ 
+  [show (bbloc bb) ++ " " ++ show(bbid bb)] ++ 
   map phiflatten (bbphis bb) ++ 
   map assignflatten (bbinsts bb) ++ 
   [termflatten (bbterm bb)]
@@ -58,17 +58,19 @@ draw :: S -> [Widget N]
 draw s = 
  let hasFocus = True
      -- | render :: Bool -> e -> Widget N
-     render focus e = str e 
+     render True e = str $ "->" ++ e 
+     render False e = str $ "  " ++e 
  in [L.renderList render hasFocus (l s)]
 
 chooseCursor :: S -> [CursorLocation N] -> Maybe (CursorLocation N)
 chooseCursor _ [] = Nothing
 chooseCursor _ (x:xs) = Just x
 
-
 handleEvent :: S -> BrickEvent N e -> EventM N (Next S)
 handleEvent s (VtyEvent (V.EvKey V.KEsc [])) = halt s
-handleEvent s _ = continue s
+handleEvent s (VtyEvent e) = do
+  l' <- L.handleListEvent e (l s) 
+  continue $ S l'
 
 startEvent :: S -> EventM N S
 startEvent s = return s
