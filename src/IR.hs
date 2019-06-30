@@ -70,6 +70,7 @@ class Located a where
 instance Located Loc where
     location = id
 
+
 type BBId = Id
 
 -- Instructions
@@ -77,28 +78,35 @@ data Assign = Assign {
     assignloc :: !Loc,
     assignid :: !Id,
     assignexpr :: !Expr
-}deriving(Eq, Ord, Show)
+}deriving(Eq, Ord)
 
 instance Pretty Assign where
   pretty (Assign pc id expr) =
     pretty pc <+> pretty id <+> equals <+> pretty expr
 
+instance Show Assign where
+  show (Assign pc id expr) = show pc ++ " " ++ show id ++ " =  " ++ show expr
+
 instance Located Assign where
   location (Assign loc _ _) = loc
 
 -- Phi nodes
-data Phity = Philoop | Phicond deriving(Eq, Ord, Show)
+data Phity = Philoop | Phicond deriving(Eq, Ord)
+
+instance Show Phity where
+  show (Philoop) = "loop"
+  show (Phicond) = "cond"
+
 instance Pretty Phity where
-  pretty (Philoop) = pretty "loop"
-  pretty (Phicond) = pretty "cond"
+  pretty = pretty . show
 
 data Phi = Phi {
     philoc :: !Loc,
     phity :: Phity,
     phiid :: Id,
     phil :: (BBId, Id),
-    phir :: (BBId, Id)
-} deriving(Eq, Ord, Show)
+    phir :: (BBId, Id) 
+} deriving(Eq, Ord)
 
 instance Located Phi where
   location (Phi loc ty _ _ _) = loc
@@ -107,6 +115,11 @@ instance Pretty Phi where
   pretty (Phi loc ty id l r) =
     pretty loc <+> pretty "phi" <+> pretty ty <+>
       pretty id <+> equals <+> pretty l <+> pretty r
+
+instance Show Phi where
+  show (Phi loc ty id l r) = 
+    show loc ++  " phi " ++ show ty ++
+      " " ++ show id ++ " = " ++ show l ++ " " ++ show r
 
 -- Terminator instruction
 data Term = Br !Loc BBId BBId

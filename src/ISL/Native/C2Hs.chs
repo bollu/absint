@@ -411,7 +411,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 
 {#fun isl_space_dim as spaceDim_
-  { id `Ptr Space', fromDimType `DimType' } -> `CInt' id #}
+  { id `Ptr Space', fromDimType `DimType' } -> `CInt' fromIntegral #}
 
 spaceDim :: Ptr Space -> DimType -> IO Int
 spaceDim sp dt = fromIntegral <$> spaceDim_ sp dt 
