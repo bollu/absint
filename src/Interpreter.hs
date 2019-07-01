@@ -39,6 +39,7 @@ data AI a = AI {
       -> BBId  -- ^  bbid of successor
       -> AbsDom a -- ^ abstract domain to use
       -> a
+  , aiStartState :: AbsState a -- ^ Starting state of the AI
 }
 
 
@@ -151,4 +152,20 @@ aiProgramFix :: (Lattice a, Eq a) => AI a ->
 aiProgramFix ai p s =
     let s' = aiProgramOnce ai p s
      in if s == s' then s' else aiProgramOnce ai p s'
+
+
+-- | Run AI N times, or till fixpoint is reached, and return
+-- the entire trace. Returns iterations in ascending order.
+-- head = 0th iteration
+-- last = nth iteration
+-- Usually invoked as (aiProgramTraceN 100 ai p (aiStartState ai))
+aiProgramNTrace :: (Eq a, Lattice a) => Int  -- ^ times to run
+           -> AI a
+           -> Program
+           -> AbsState a
+           -> [AbsState a]
+aiProgramNTrace 0 _ _ s = [s]
+aiProgramNTrace n ai p s =
+  let s' =  aiProgramOnce ai p s
+  in if s == s' then [s'] else aiProgramNTrace (n-1) ai p s' ++ [s']
 

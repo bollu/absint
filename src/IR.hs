@@ -249,6 +249,7 @@ data Program = Program { progparams :: S.Set Id, progbbs :: [BB]  } deriving(Eq)
 progGetBB :: BBId -> Program -> BB
 progGetBB curid p = head . filter ((curid ==) . bbid) . progbbs $ p
 
+
 -- | get the entry basic block ID
 programEntryId :: Program -> BBId
 programEntryId (Program _ (entry:_)) = bbid entry

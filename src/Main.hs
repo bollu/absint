@@ -32,12 +32,12 @@ import qualified Control.Monad (join)
 import IR
 import Opsem
 import Lattice
-import Interpreter
+import qualified Interpreter
 import Util
 import Collectingsem
 import Absdomain
 import UI
-
+import qualified PolySCEV
 
 -- | each location has an associated abstract domain.
 -- | each location's abstract domain is the value that is held
@@ -950,10 +950,14 @@ programs = [-- (passign, edefault)
             (ploop, edefault)
            ]
 
+
 -- | Main entry point that executes all programs
 main :: IO ()
 main = for_ programs (\(p, e) -> do
-    runProgram  p e
-    render p (\iter l id -> "[i:" <> show iter <> " l:" <> show l <> " " <> show id <> "]")
+    ai <- PolySCEV.mkAI p
+    let trace = Interpreter.aiProgramNTrace 10 ai p
+                  (Interpreter.aiStartState ai)
+    render p (\(Iteration iter) l id -> (trace !! iter) #! l #! id)
+        (Iteration (length trace - 1))
     putStrLn "\n=========================")
 

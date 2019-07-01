@@ -1,6 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-module UI(UI.render, Iteration) where
+module UI(UI.render, Iteration(..)) where
 import IR
 
 import Brick
@@ -65,20 +65,20 @@ mkUINodeTerm x =  UINode (location x) Nothing (show x)
 
 mkUINodeBB :: BB -> [UINode]
 mkUINodeBB bb =
-  [UINode (location bb) (Just . name $ bb) ((show . unID . bbid $ bb) <> ":")] ++ 
-  map mkUINodeGeneric (bbphis bb) ++ 
-  map mkUINodeGeneric (bbinsts bb) ++ 
+  [UINode (location bb) (Just . name $ bb) ((show . unID . bbid $ bb) <> ":")] ++
+  map mkUINodeGeneric (bbphis bb) ++
+  map mkUINodeGeneric (bbinsts bb) ++
   [mkUINodeTerm (bbterm bb)]
 
 mkUINodeProgram :: Program -> [UINode]
 mkUINodeProgram p =
   concatMap mkUINodeBB (progbbs p)
 
-initS :: Show a => Program ->  (Iteration -> Loc -> Id -> a) -> S a
-initS p f = S {
+initS :: Show a => Program ->  (Iteration -> Loc -> Id -> a) -> Iteration -> S a
+initS p f niters = S {
   l = (L.list  () (mkUINodeProgram p) 3)
   -- | Total number of iterations.
-  , niters = 10
+  , niters = niters
   -- | Current iteration.
   , curiter = 0
   -- | Currently selected location.
@@ -99,7 +99,7 @@ drawSelectedPtr True = str "->"
 
 -- | Draw the code window
 drawcode :: Show a => S a -> Widget N
-drawcode S{..} = 
+drawcode S{..} =
  let
      hasFocus = True
      -- | render :: Bool -> e -> Widget N
@@ -122,14 +122,14 @@ handleEvent :: S a -> BrickEvent N e -> EventM N (Next (S a))
 handleEvent s (VtyEvent (V.EvKey V.KEsc [])) = halt s
 handleEvent s (VtyEvent (V.EvKey (V.KChar 'q') [])) = halt s
 
-handleEvent s@S{..} (VtyEvent (V.EvKey V.KLeft [])) = 
+handleEvent s@S{..} (VtyEvent (V.EvKey V.KLeft [])) =
     continue $ s { curiter = max (curiter - 1) 0 }
-handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'h') [])) = 
+handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'h') [])) =
     continue $ s { curiter = max (curiter - 1) 0 }
 
-handleEvent s@S{..} (VtyEvent (V.EvKey V.KRight [])) = 
+handleEvent s@S{..} (VtyEvent (V.EvKey V.KRight [])) =
     continue $ s { curiter = min (curiter + 1) niters }
-handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'l') [])) = 
+handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'l') [])) =
     continue $ s { curiter = max (curiter - 1) 0 }
 
 handleEvent s (VtyEvent e) = do
@@ -165,8 +165,9 @@ app = App {
 -- | Function exposed to outside world that render the TUI
 render :: Show a => Program
   -> (Iteration -> Loc -> Id -> a)
+  -> Iteration
   -> IO ()
-render p info = do
-    s <- defaultMain app (initS p info)
+render p info niters = do
+    s <- defaultMain app (initS p info niters)
     return ()
 
