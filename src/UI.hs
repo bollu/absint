@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
-module UI(UI.render) where
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+module UI(UI.render, Iteration) where
 import IR
 
 import Brick
@@ -28,6 +29,8 @@ import Brick.Util (on)
 
 import Brick.Util (on)
 
+newtype Iteration = Iteration Int deriving(Eq, Ord, Show, Num)
+
 type N = ()
 
 instance L.Splittable [] where
@@ -42,16 +45,17 @@ instance Located UINode where
 
 
 drawUINode :: Show a => (Id -> a) -> UINode -> (Widget N)
-drawUINode id2a (UINode _ Nothing rhs) = padBottom (Pad 1) $ padTop (Pad 1) $  str rhs
+drawUINode id2a (UINode _ Nothing rhs) =
+  padBottom (Pad 1) $ padTop (Pad 1) $  str rhs
 drawUINode id2a (UINode _ (Just id) rhs) =
   padBottom (Pad 1) $ (str . show . id2a $ id)  <=>  str rhs
 
 
 data S a = S { l :: L.GenericList () [] UINode
-             , niters :: Int
-             , curiter :: Int
+             , niters :: Iteration
+             , curiter :: Iteration
              , curloc :: Loc
-             , locid2a :: Loc -> Id -> a }
+             , info :: Iteration -> Loc -> Id -> a }
 
 
 mkUINodeGeneric :: (Show a, Located a, IR.Named a) => a -> UINode
@@ -70,7 +74,7 @@ mkUINodeProgram :: Program -> [UINode]
 mkUINodeProgram p =
   concatMap mkUINodeBB (progbbs p)
 
-initS :: Show a => Program ->  (Loc -> Id -> a) -> S a
+initS :: Show a => Program ->  (Iteration -> Loc -> Id -> a) -> S a
 initS p f = S {
   l = (L.list  () (mkUINodeProgram p) 3)
   -- | Total number of iterations.
@@ -79,8 +83,8 @@ initS p f = S {
   , curiter = 0
   -- | Currently selected location.
   , curloc = startloc
-  -- | Function mapping location and identifier to value.
-  , locid2a = f
+  -- | Function mapping iteration, location, and identifier to a value
+  ,info = f
 }
 
 -- | Top bar that draws number of iterations
@@ -99,7 +103,8 @@ drawcode S{..} =
  let
      hasFocus = True
      -- | render :: Bool -> e -> Widget N
-     render selected e = drawSelectedPtr selected <+> drawUINode (locid2a curloc) e
+     render selected e = drawSelectedPtr selected <+>
+                         drawUINode (info curiter  curloc) e
       -- | Find a way to find out if this has focus
      in B.border (vLimit 30 (L.renderList render hasFocus l))
 
@@ -156,11 +161,12 @@ app = App {
   , appAttrMap = mkAttrMap
 }
 
+
 -- | Function exposed to outside world that render the TUI
 render :: Show a => Program
-  -> (Loc -> Id -> a)
+  -> (Iteration -> Loc -> Id -> a)
   -> IO ()
-render p f = do
-    s <- defaultMain app (initS p f)
+render p info = do
+    s <- defaultMain app (initS p info)
     return ()
 

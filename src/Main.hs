@@ -954,6 +954,6 @@ programs = [-- (passign, edefault)
 main :: IO ()
 main = for_ programs (\(p, e) -> do
     runProgram  p e
-    render p (\l id -> "[" <>show l <> " " <> show id <> "]")
+    render p (\iter l id -> "[i:" <> show iter <> " l:" <> show l <> " " <> show id <> "]")
     putStrLn "\n=========================")
 
