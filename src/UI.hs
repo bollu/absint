@@ -3,6 +3,7 @@ module UI(UI.render) where
 import IR
 
 import Brick
+import Data.Maybe(fromMaybe)
 import Graphics.Vty.Attributes (defAttr)
 import qualified Graphics.Vty as V
 import qualified Brick.Main as M
@@ -32,60 +33,86 @@ type N = ()
 instance L.Splittable [] where
   splitAt = PreludeList.splitAt
 
-data S a = S { l :: L.GenericList () [] (Widget N), niters :: Int, curiter :: Int, loc2a :: Loc -> a }
+-- | A UI Node has a location, possibly an ID, and a string of what is to be
+-- printed
+data UINode = UINode Loc (Maybe Id) String
+
+instance Located UINode where
+  location (UINode loc _ _) = loc
 
 
-renderphi :: Show a => (Loc -> a) ->  Phi -> Widget N
-renderphi loc2a a = padLeft (Pad 4) $ padBottom (Pad 1) $ (str . show . loc2a . location $ a) <=> (str . show $ a)
+drawUINode :: Show a => (Id -> a) -> UINode -> (Widget N)
+drawUINode id2a (UINode _ Nothing rhs) = padBottom (Pad 1) $ padTop (Pad 1) $  str rhs
+drawUINode id2a (UINode _ (Just id) rhs) =
+  padBottom (Pad 1) $ (str . show . id2a $ id)  <=>  str rhs
 
-renderassign :: Show a => (Loc -> a) -> Assign -> Widget N
-renderassign loc2a x = padLeft (Pad 4) $padBottom (Pad 1) $ (str . show . loc2a . location $ x) <=> (str . show $ x)
 
-renderterm :: Show a => (Loc -> a) -> Term -> Widget N
-renderterm loc2a x =  padLeft (Pad 4) $padBottom (Pad 1) $ (str . show . loc2a . location $ x) <=> (str . show $ x)
+data S a = S { l :: L.GenericList () [] UINode
+             , niters :: Int
+             , curiter :: Int
+             , curloc :: Loc
+             , locid2a :: Loc -> Id -> a }
 
-renderbb :: Show a => (Loc -> a) -> BB -> [Widget N]
-renderbb loc2a bb = 
-  [padBottom (Pad 1) $ (str . show . loc2a . bbloc $ bb) <=> str (show (bbloc bb) ++ " " ++ show(bbid bb))] ++ 
-  map (renderphi loc2a) (bbphis bb) ++ 
-  map (renderassign loc2a) (bbinsts bb) ++ 
-  [renderterm loc2a (bbterm bb)]
 
-renderprogram :: Show a => (Loc -> a) -> Program -> [Widget N]
-renderprogram loc2a p =  (concatMap (renderbb loc2a) (progbbs p))
+mkUINodeGeneric :: (Show a, Located a, IR.Named a) => a -> UINode
+mkUINodeGeneric x =  UINode (location x) (Just . name $ x) (show x)
 
-initS :: Show a => Program ->  (Loc -> a) -> S a
-initS p loc2a = S {
-  l = (L.list  () (renderprogram loc2a p) 3)
+mkUINodeTerm x =  UINode (location x) Nothing (show x)
+
+mkUINodeBB :: BB -> [UINode]
+mkUINodeBB bb =
+  [UINode (location bb) (Just . name $ bb) ((show . unID . bbid $ bb) <> ":")] ++ 
+  map mkUINodeGeneric (bbphis bb) ++ 
+  map mkUINodeGeneric (bbinsts bb) ++ 
+  [mkUINodeTerm (bbterm bb)]
+
+mkUINodeProgram :: Program -> [UINode]
+mkUINodeProgram p =
+  concatMap mkUINodeBB (progbbs p)
+
+initS :: Show a => Program ->  (Loc -> Id -> a) -> S a
+initS p f = S {
+  l = (L.list  () (mkUINodeProgram p) 3)
+  -- | Total number of iterations.
   , niters = 10
+  -- | Current iteration.
   , curiter = 0
-  , loc2a = loc2a
+  -- | Currently selected location.
+  , curloc = startloc
+  -- | Function mapping location and identifier to value.
+  , locid2a = f
 }
 
+-- | Top bar that draws number of iterations
 drawiters :: S a -> Widget N
 drawiters s = str $ "iter: " ++ show (curiter s) ++ "/" ++ show (niters s)
 
 
+-- | Arrow that points at the selected element of the list
+drawSelectedPtr :: Bool -> Widget N
+drawSelectedPtr False = str "  "
+drawSelectedPtr True = str "->"
+
+-- | Draw the code window
 drawcode :: Show a => S a -> Widget N
 drawcode S{..} = 
- let hasFocus = True
+ let
+     hasFocus = True
      -- | render :: Bool -> e -> Widget N
-     render True e = (str  "->") <+> e 
-     render False e = (str  "  ") <+> e 
+     render selected e = drawSelectedPtr selected <+> drawUINode (locid2a curloc) e
+      -- | Find a way to find out if this has focus
      in B.border (vLimit 30 (L.renderList render hasFocus l))
 
+-- | toplevel draw function
 draw :: Show a => S a -> [Widget N]
-draw s = 
- let hasFocus = True
-     -- | render :: Bool -> e -> Widget N
-     render True e = str $ "->" ++ e 
-     render False e = str $ "  " ++e 
- in [drawiters s <=> drawcode s]
+draw s = [drawiters s <=> drawcode s]
 
+-- | Choose the cursor we wish to focus on
 chooseCursor :: (S a) -> [CursorLocation N] -> Maybe (CursorLocation N)
 chooseCursor _ [] = Nothing
 chooseCursor _ (x:xs) = Just x
 
+-- | toplevel event hander
 handleEvent :: S a -> BrickEvent N e -> EventM N (Next (S a))
 handleEvent s (VtyEvent (V.EvKey V.KEsc [])) = halt s
 handleEvent s (VtyEvent (V.EvKey (V.KChar 'q') [])) = halt s
@@ -101,13 +128,22 @@ handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'l') [])) =
     continue $ s { curiter = max (curiter - 1) 0 }
 
 handleEvent s (VtyEvent e) = do
-  l' <- L.handleListEventVi L.handleListEvent e (l s) 
-  continue $ s {l = l'}
+  l' <- L.handleListEventVi L.handleListEvent e (l s)
+  -- | Get the new selected location. If it's the old one,
+  -- then just use it. Otherwise, get the location
+  -- from the newly selected one.
+  let newloc = fromMaybe
+                 (curloc s)
+                 (location . snd <$> L.listSelectedElement l')
+  continue $ s {l = l', curloc = newloc}
 
+
+-- | Initial event
 startEvent :: S a -> EventM N (S a)
 startEvent s = return s
 
 
+-- | No idea what this does.
 mkAttrMap :: S a -> AttrMap
 mkAttrMap s = attrMap defAttr []
 
@@ -120,7 +156,10 @@ app = App {
   , appAttrMap = mkAttrMap
 }
 
-render :: Show a => Program -> (Loc -> a) -> IO ()
+-- | Function exposed to outside world that render the TUI
+render :: Show a => Program
+  -> (Loc -> Id -> a)
+  -> IO ()
 render p f = do
     s <- defaultMain app (initS p f)
     return ()

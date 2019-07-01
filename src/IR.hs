@@ -14,9 +14,12 @@ import Util
 import Data.Maybe (catMaybes, fromJust)
 
 -- Identifiers
-newtype Id = Id String deriving(Eq, Ord)
+newtype Id = Id { unID:: String } deriving(Eq, Ord)
 instance Show Id where
   show (Id s) = s
+
+class Named a where
+  name :: a -> Id
 
 instance Pretty Id where
   pretty (Id s) =  pretty s
@@ -90,6 +93,9 @@ instance Show Assign where
 instance Located Assign where
   location (Assign loc _ _) = loc
 
+instance Named Assign where
+  name = assignid
+  
 -- Phi nodes
 data Phity = Philoop | Phicond deriving(Eq, Ord)
 
@@ -107,6 +113,9 @@ data Phi = Phi {
     phil :: (BBId, Id),
     phir :: (BBId, Id) 
 } deriving(Eq, Ord)
+
+instance Named Phi where
+  name = phiid
 
 instance Located Phi where
   location (Phi loc ty _ _ _) = loc
@@ -160,6 +169,9 @@ data BB = BB {
  bbterm :: Term
 }deriving(Eq, Ord, Show)
 
+instance Named BB where
+  name = bbid
+  
 instance Pretty BB where
   pretty (BB bbid bbty bbloc phis is term) =
     pretty bbloc <+> pretty bbid <+> pretty bbty <> line <>
@@ -167,7 +179,6 @@ instance Pretty BB where
 
 instance Located BB where
   location (BB _ _ loc _ _ _) = loc
-
 
 
 bbModifyInsts :: ([Assign] -> [Assign]) -> BB -> BB
@@ -343,11 +354,16 @@ data ProgramBuilder = ProgramBuilder {
   bbid2bb :: OM.OrderedMap BBId BB
 }
 
+-- | Initial location.
+-- NOTE: This information is used by UI to set the
+-- starting location in the UI
+startloc :: Loc
+startloc = Loc (-1)
 
 runProgramBuilder :: ST.State ProgramBuilder () -> Program
 runProgramBuilder pbst =
   let pbinit :: ProgramBuilder
-      pbinit = ProgramBuilder mempty (Loc (-1)) Nothing OM.empty
+      pbinit = ProgramBuilder mempty startloc Nothing OM.empty
 
       pbout :: ProgramBuilder
       pbout = ST.execState pbst pbinit
