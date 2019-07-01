@@ -20,7 +20,6 @@ import IR
 import Control.Monad(guard)
 import qualified Data.Map as M
 
-
 -- | An abstract domain is a lattice map which maps
 -- identifiers to abstract values
 type AbsDom a = LatticeMap Id a

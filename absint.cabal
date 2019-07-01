@@ -71,6 +71,7 @@ executable absint
     , Collectingsem
     , Absdomain
     , UI
+    , Interpreter
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -86,6 +87,7 @@ executable absint
                       , QuickCheck
                       , brick
                       , vty
+
 
 
   build-tools: c2hs >= 0.19.1
