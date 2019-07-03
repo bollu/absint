@@ -953,11 +953,13 @@ programs = [-- (passign, edefault)
 
 -- | Main entry point that executes all programs
 main :: IO ()
-main = for_ programs (\(p, e) -> do
+main = for_ programs $ \(p, e) -> do
     ai <- PolySCEV.mkAI p
-    let trace = Interpreter.aiProgramNTrace 10 ai p
-                  (Interpreter.aiStartState ai)
-    render p (\(Iteration iter) l id -> (trace !! iter) #! l #! id)
-        (Iteration (length trace - 1))
-    putStrLn "\n=========================")
+    putStrLn $ "ai made"
+    let trace = Interpreter.aiProgramNTrace 0 ai p
+                   (Interpreter.aiStartState ai)
+    print $ trace
+    -- render p (\(Iteration iter) l id -> (trace !! iter) #! l #! id)
+    --     (Iteration (length trace - 1))
+    -- putStrLn "\n=========================")
 

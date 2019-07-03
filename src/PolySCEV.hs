@@ -7,6 +7,9 @@ import ISL.Native.Types (DimType(..),
 import qualified ISL.Native.Types as ISLTy (Id)
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
+import Data.Text.Prettyprint.Doc
+import Data.Text.Prettyprint.Doc.Internal
+import Data.Text.Prettyprint.Doc.Util
 import Data.Maybe
 import IR
 import Lattice
@@ -18,9 +21,9 @@ import System.IO.Unsafe
 gctx :: Ptr Ctx
 gctx = unsafePerformIO $ do
   c <- ctxAlloc
-  islAbortOnError gctx
+  islAbortOnError c
   return c
-  
+
 
 -- | Short alias
 uio :: IO a -> a
@@ -28,8 +31,14 @@ uio = unsafePerformIO
 
 
 -- | Pwaff
-newtype P = P (Ptr Pwaff) deriving(Show)
+newtype P = P (Ptr Pwaff)
 
+instance Show P where
+    show (P pw) =
+        uio $ (pwaffCopy pw >>= pwaffCoalesce >>= pwaffToStr)
+
+instance Pretty P where
+    pretty = pretty . show
 
 instance Eq P where
   P p == P p' = uio $ pwaffIsEqual p p'
@@ -43,6 +52,9 @@ instance Eq S where
 -- | abstract value
 data V = V { vsym :: P -- ^ pwsymbolic value, with _no acceleration_ at all
            } deriving(Eq, Show)
+
+instance Pretty V where
+    pretty (V vsym) = pretty vsym
 
 instance Lattice V where
     lbot = undefined
@@ -67,14 +79,14 @@ data G = G { gparams :: S.Set Id -- ^ formal parameters
 -- ls = unsafePerformIO $ do
 --   s <- spaceSetAlloc ctx 0 (length gall)
 --   reurn undefined
-  
+
 
 -- | Pwaff that is purely pwsymbolic
 pwsymbolic :: G -> Id -> Ptr Pwaff
 pwsymbolic g@G{..} id = uio $ do
   Just ix <- findDimById gls IslDimSet (gislids M.! id)
   affVarOnDomain gls IslDimSet ix >>= pwaffFromAff
-    
+
 -- | Create a pwaff that takes on the value of the variable
 -- pwVar :: Ptr Ctx -> OM.OrderedMap Id (Ptr ISLTy.Id) -> Id -> IO (Ptr Pwaff)
 -- pwVar ctx id2isl id = do
@@ -85,19 +97,25 @@ pwsymbolic g@G{..} id = uio $ do
 
 -- | Pwaff that is undefined everywhere
 pwundef :: G -> Ptr Pwaff
-pwundef g@G{..} = undefined
+pwundef g@G{..} = uio $ do
+  ls <- localSpaceCopy gls
+  emptyset <- localSpaceCopy gls >>= getSpace >>= setEmpty
+
+  pwaff <- pwaffInt gctx ls 0
+  pwaff <- pwaffIntersectDomain pwaff emptyset
+  return pwaff
 
 -- | Pwaff that is constant everywhere
 constant :: G -> Int -> Ptr Pwaff
 constant g@G{..} i = uio $ do
   pwaffInt gctx gls  i
- 
+
 
 -- | Create ISL ids
 mkIslIds :: [Id] -> IO [(Id, Ptr ISLTy.Id)]
 mkIslIds ids =
   traverse (\id -> (id, ) <$> idAlloc gctx (show id)) ids
-  
+
 -- | Create a G instance for a given program.
 mkG :: Program -> IO G
 mkG p = do
@@ -108,7 +126,7 @@ mkG p = do
     let gall = gvivs `S.union` gparams `S.union` gvars
     gislids <- M.fromList <$> mkIslIds (S.toList gall)
     gls <- localSpaceIds gctx gislids
-    return $ G{..}
+    return $ G {..}
 
 -- | Abstract interpret an expression
 aie :: G -> Expr -> AbsDom V -> V

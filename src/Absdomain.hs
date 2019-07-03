@@ -4,7 +4,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 module Absdomain where
 import ISL.Native.C2Hs
-import ISL.Native.Types (DimType(..), 
+import ISL.Native.Types (DimType(..),
   Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
 import qualified ISL.Native.Types as ISLTy (Id)
 import Foreign.Ptr
@@ -26,8 +26,8 @@ localSpaceIds ctx id2isl = do
   islidcounters <- traverse (\(id, c) -> (, c) <$> idCopy id) islidcounters
 
   putStrLn "local space adding dimensions."
-  ls <- foldM 
-          (\ls (islid, ix) -> 
+  ls <- foldM
+          (\ls (islid, ix) ->
               localSpaceSetDimId ls IslDimSet ix islid) ls
                 islidcounters
   putStrLn "local space added dimensions"
@@ -41,11 +41,11 @@ mapAddUnnamedDim :: Ptr Map -> DimType -> Maybe (Ptr ISLTy.Id) -> IO (Ptr Map, I
 mapAddUnnamedDim m dt mislid = do
     ndim <- mapDim m dt
     m <- mapAddDims m dt 1
-    m <- case mislid of 
+    m <- case mislid of
           Nothing -> return m
           Just islid -> mapSetDimId m dt (fromIntegral ndim) islid
     return (m, fromIntegral ndim)
-      
+
 pwaffFromMap :: Ptr Map -> IO (Ptr Pwaff)
 pwaffFromMap m = do
     pwma <- (pwmultiaffFromMap m)
@@ -60,41 +60,41 @@ mapGetIxOfId m dt islid = do
   return $ fromIntegral <$> (id2ix M.!? islid)
 
 
-mapConditionallyMoveDims :: Ptr Map 
+mapConditionallyMoveDims :: Ptr Map
                          -> (Ptr ISLTy.Id -> Bool) -- filter for dimension ID
                          -> DimType  -- input dimension
                          -> DimType -- output dimension
                          -> IO (Ptr Map)
-mapConditionallyMoveDims m idfilter din dout = 
+mapConditionallyMoveDims m idfilter din dout =
   let move :: Ptr Map -> Int -> IO (Ptr Map)
       move m ixin = do
         nin <- mapDim m din
         nout <- mapDim m dout
-        
+
         if fromIntegral ixin >= nin
            then return m
            else do
                  idin <- mapGetDimId m din (fromIntegral ixin)
                  let shouldmove = idfilter idin
-                 --mapToStr m >>= 
-                 --  (\s -> putStrLn $ "nin: " ++ show nin ++ 
-                 --           "|ixin: " ++ show ixin ++ 
-                 --           "|shouldmove: " ++ show shouldmove ++ 
-                 --           "|nout: " ++ show nout ++ 
+                 --mapToStr m >>=
+                 --  (\s -> putStrLn $ "nin: " ++ show nin ++
+                 --           "|ixin: " ++ show ixin ++
+                 --           "|shouldmove: " ++ show shouldmove ++
+                 --           "|nout: " ++ show nout ++
                  --           " " ++ s)
                  if shouldmove
                     then do
                         m <- mapMoveDims m dout nout din (fromIntegral ixin) (fromIntegral 1)
                         move m ixin
                     else move m (ixin + 1)
-  in move m 0 
+  in move m 0
 
 
 class Spaced a where
   getSpace :: a -> IO (Ptr Space)
   -- get the number of dimensions for the given dimtype
   ndim :: a -> DimType -> IO Int
-  ndim a dt = getSpace a >>= \s -> spaceDim s dt 
+  ndim a dt = getSpace a >>= \s -> spaceDim s dt
 
   -- get the dimension ID
   getDimId :: a -> DimType -> Int -> IO (Ptr ISLTy.Id)
@@ -107,17 +107,17 @@ class Spaced a where
   addDims :: a -> DimType -> Int -> IO a
 
   findDimById :: a -> DimType -> Ptr ISLTy.Id -> IO (Maybe Int)
-  findDimById a dt id = 
+  findDimById a dt id =
     getSpace a >>= \s -> do
       n <- ndim s dt
-      mixs <- traverse (\ix -> do 
+      mixs <- traverse (\ix -> do
         ixid <- spaceGetDimId s dt ix
-        if ixid == id 
+        if ixid == id
            then return (Just ix)
            else return Nothing) [0..(n-1)]
       return $ foldl (<|>) Nothing mixs
 
--- add dimensions with the given IDs. 
+-- add dimensions with the given IDs.
 -- NOTE, TODO: I am abusing "name" to mean "id'd". Hopefully, this will
 -- not get confusing.
 addNamedDims :: Spaced a => a -> DimType -> [Ptr ISLTy.Id] -> IO a
@@ -170,13 +170,13 @@ constraintEqualityForSpaced set = do
 -- Abstract interpretation
 -- =======================
 instance Pretty (Ptr Pwaff) where
-    pretty pw = pretty $ 
-        (Unsafe.unsafePerformIO 
+    pretty pw = pretty $
+        (Unsafe.unsafePerformIO
             (pwaffCopy pw >>= pwaffCoalesce >>= pwaffToStr))
 
 instance Pretty (Ptr Set) where
-    pretty s = pretty $ 
-        (Unsafe.unsafePerformIO 
+    pretty s = pretty $
+        (Unsafe.unsafePerformIO
             (setCopy s >>= setCoalesce >>= setCoalesce >>= setToStr))
 
 instance Pretty (Ptr Space) where
