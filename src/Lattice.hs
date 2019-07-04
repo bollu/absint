@@ -65,6 +65,11 @@ lmInsert k v (LM lm) = do
                    Just v -> return v
                    Nothing -> lbot
 
+
+-- | A hack to avoid having to get `m v`. Used for debugging.
+lmmaybelookup :: (Ord k) => LatticeMap k v -> k -> Maybe v
+lmmaybelookup (LM m) k = m M.!? k
+
 instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (LatticeMap k v) where
   show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]
 

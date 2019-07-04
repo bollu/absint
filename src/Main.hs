@@ -33,7 +33,7 @@ import qualified Control.Monad (join)
 import IR
 import Opsem
 import Lattice
-import qualified Interpreter
+import qualified Interpreter as I
 import Util
 import Collectingsem
 import Absdomain
@@ -945,20 +945,29 @@ runProgram p e = do
 edefault :: Env Int
 edefault = envFromParamList [(Id "p", 1)]
 
-programs :: [(Program, Env Int)]
-programs = [-- (passign, edefault)
+programs :: [Program]
+programs = [passign
             -- (pif, edefault)
-            (ploop, edefault)
+            -- (ploop, edefault)
            ]
+
+lookupTrace :: [I.AbsState PolySCEV.V]
+            -> Iteration -> Loc -> Id -> Maybe PolySCEV.V
+lookupTrace trace (Iteration i) loc id = do
+    d <- trace !! i `lmmaybelookup` loc
+    d `lmmaybelookup` id
 
 
 -- | Main entry point that executes all programs
 main :: IO ()
-main = for_ programs $ \(p, e) -> do
+main = for_ programs $ \p -> do
     let ai = PolySCEV.mkAI p
+    let niters = 0
     putStrLn $ "ai made"
     trace <- PolySCEV.runIOGTop p $ do
-                 start <- Interpreter.aiStartState ai
-                 Interpreter.aiProgramNTrace 10 ai p start
+                 start <- I.aiStartState ai
+                 I.aiProgramNTrace niters ai p start
+    render p (lookupTrace trace)
+           (Iteration niters)
     print $ trace
 
