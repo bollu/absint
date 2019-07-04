@@ -957,7 +957,7 @@ main :: IO ()
 main = for_ programs $ \(p, e) -> do
     let ai = PolySCEV.mkAI p
     putStrLn $ "ai made"
-    trace <- PolySCEV.runIOGTop $ do
+    trace <- PolySCEV.runIOGTop p $ do
                  start <- Interpreter.aiStartState ai
                  Interpreter.aiProgramNTrace 10 ai p start
     print $ trace

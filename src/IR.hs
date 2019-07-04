@@ -95,7 +95,7 @@ instance Located Assign where
 
 instance Named Assign where
   name = assignid
-  
+
 -- Phi nodes
 data Phity = Philoop | Phicond deriving(Eq, Ord)
 
@@ -111,7 +111,7 @@ data Phi = Phi {
     phity :: Phity,
     phiid :: Id,
     phil :: (BBId, Id),
-    phir :: (BBId, Id) 
+    phir :: (BBId, Id)
 } deriving(Eq, Ord)
 
 instance Named Phi where
@@ -126,7 +126,7 @@ instance Pretty Phi where
       pretty id <+> equals <+> pretty l <+> pretty r
 
 instance Show Phi where
-  show (Phi loc ty id l r) = 
+  show (Phi loc ty id l r) =
     show loc ++  " phi " ++ show ty ++
       " " ++ show id ++ " = " ++ show l ++ " " ++ show r
 
@@ -171,7 +171,7 @@ data BB = BB {
 
 instance Named BB where
   name = bbid
-  
+
 instance Pretty BB where
   pretty (BB bbid bbty bbloc phis is term) =
     pretty bbloc <+> pretty bbid <+> pretty bbty <> line <>
@@ -197,6 +197,8 @@ bbModifyTerm f (BB id ty loc phis insts term) =
 bbGetLocs :: BB -> [Loc]
 bbGetLocs (BB _ _ loc phis insts term) =
   [loc] ++ (map location phis) ++ (map location insts) ++ [location term]
+
+
 
 -- | Get final location in a basic block
 bbFinalLoc :: BB -> Loc
@@ -250,9 +252,22 @@ progGetBB :: BBId -> Program -> BB
 progGetBB curid p = head . filter ((curid ==) . bbid) . progbbs $ p
 
 
+-- | get entry block
+progBBEntry :: Program -> BB
+progBBEntry p = head (progbbs p)
+
+-- | Location of start block
+progStartLoc :: Program -> Loc
+progStartLoc = location . progBBEntry
+
+
 -- | get the entry basic block ID
-programEntryId :: Program -> BBId
-programEntryId (Program _ (entry:_)) = bbid entry
+progEntryId :: Program -> BBId
+progEntryId  = bbid . progBBEntry
+
+-- | Location of entry basic block
+progEntryLoc :: Program -> Loc
+progEntryLoc = location . progBBEntry
 
 -- | IDs of variables in the program, *no* parameters
 progvarids :: Program -> S.Set Id

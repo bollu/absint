@@ -23,7 +23,7 @@ class Lattice a where
 
 class Lattice m a where
   lbot :: m a
-  ljoin :: a -> a -> m a 
+  ljoin :: a -> a -> m a
 
 
 -- | quickCheck properties of union.
@@ -89,6 +89,11 @@ instance (Monad m, Lattice m a) => Semigroup (LUnion m a) where
 instance (Monad m, Lattice m a) => Monoid (LUnion m a) where
     mempty = LUnion $ lbot
 
+lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
+lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]
+
+lmsingleton :: Ord k => k -> v -> LatticeMap k v
+lmsingleton k v = LM $ M.singleton k v
 
 {-
 -- A map based representation of a function (a -> b), which on partial
@@ -113,8 +118,6 @@ lmInsert k v (LM lm) =
                    Just v -> v
                    Nothing -> lbot
 
-lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
-lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]
 
 lmempty :: LatticeMap k v
 lmempty = LM $ M.empty

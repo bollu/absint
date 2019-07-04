@@ -107,7 +107,8 @@ bbFinalAbsdom :: Monad m =>Lattice m a => AbsState a -> BB -> m (AbsDom a)
 bbFinalAbsdom s bb  = s #! (bbFinalLoc bb)
 
 -- | Merge the state from predecrssors into a BB
-aiMergeBB :: Monad m => Lattice m a => BB -> M.Map BBId BB -> AbsState a -> m (AbsState a)
+aiMergeBB :: Monad m => Lattice m a =>
+    BB -> M.Map BBId BB -> AbsState a -> m (AbsState a)
 aiMergeBB bb bbid2bb s = do
     -- | gather predecessors
     -- bbps :: [BB]
@@ -121,11 +122,15 @@ aiMergeBB bb bbid2bb s = do
     return $ d''
 
 -- | Abstract interpret a basic block
+-- Note that special handling is needed for the entry block.
 aiBB :: Monad m => Lattice m a => AI m a
-    -> BB
+    -> BBId -- ^ bbid of entry
+    -> BB -- ^ BB to interpret
     -> M.Map BBId BB -> AbsState a -> m (AbsState a)
-aiBB ai bb bbid2bb s = do
-    sbb <-  aiMergeBB bb bbid2bb s
+aiBB ai entryid bb bbid2bb s = do
+    sbb <-  if bbid bb == entryid
+            then aiStartState ai
+            else aiMergeBB bb bbid2bb s
     si <- foldM (\s a -> aiAssign ai a s) sbb (bbinsts bb)
     st <- aiTerm ai (bbterm bb) bbid2bb  si
     return $ st
@@ -134,8 +139,9 @@ aiBB ai bb bbid2bb s = do
 aiProgramOnce :: Monad m => Lattice m a => AI m a -> Program -> AbsState a -> m (AbsState a)
 aiProgramOnce ai p s = do
   let bbs = progbbs p
+  let entryid = progEntryId p
   let bbid2bb = progbbid2bb p
-  foldM (\s bb -> aiBB ai bb bbid2bb s) s bbs
+  foldM (\s bb -> aiBB ai entryid bb bbid2bb s) s bbs
 
 -- | Run AI N times, or till fixpoint is reached, whichever is earlier
 aiProgramN :: (Monad m, Eq a, Lattice m a) => Int  -- ^ times to run
