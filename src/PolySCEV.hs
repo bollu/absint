@@ -241,7 +241,7 @@ instance Pretty V where
 
 instance Lattice IOG V where
   lbot  = V <$> pnone
-  ljoin v1 v2 = return v1
+  ljoin (V p1) (V p2) = V <$> punion p1 p2
 
 
 -- | Interpret an expression

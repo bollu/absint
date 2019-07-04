@@ -132,10 +132,8 @@ lmtolist (LM m) = M.toList m
 
 instance (Ord k, Lattice v) => Lattice (LatticeMap k v) where
   lbot = LM $ M.empty
-  ltop =  error "hard to define top for latticemap without knowing universe"
   ljoin (LM kv) kv' =
      foldl (\kv' (k, v)  -> lmInsert k v kv')  kv' (M.toList kv)
-  lmeet =  error "hard to define meet"
 
 instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (LatticeMap k v) where
   show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]

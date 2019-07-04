@@ -89,10 +89,10 @@ aiPhi phi bbid2bb s =
 
 -- | Get the predecessors of a given BB
 preds :: M.Map BBId BB -> BB -> [BB]
-preds bbid2bb bb = do
-    bb' <- (M.elems bbid2bb)
-    guard $ (bbid bb') `elem`  (termnextbbs . bbterm $ bb')
-    return $ bb'
+preds bbid2bb bbcur = do
+    bbpred <- (M.elems bbid2bb)
+    guard $ (bbid bbcur) `elem`  (termnextbbs . bbterm $ bbpred)
+    return $ bbpred
 
 aiTerm :: Monad m => Lattice m a => AI m a
        -> Loc
@@ -107,14 +107,14 @@ aiTerm AI{..} lprev term s = do
             v <- (aiT term bbid d)
             lmInsert bbid v d
 
-
    d' <- foldM aiSucc dinit (termnextbbs term)
+
    -- lmInsert lbb d' s
    lmInsert (location term) d' s
 
 -- | for a basic block, get the final abstract domain value
 bbFinalAbsdom :: Monad m =>Lattice m a => AbsState a -> BB -> m (AbsDom a)
-bbFinalAbsdom s bb  = s #! (bbFinalLoc bb)
+bbFinalAbsdom s bb = s #! (bbFinalLoc bb)
 
 -- | Merge the state from predecrssors into a BB
 aiMergeBB :: Monad m => Lattice m a =>
@@ -128,6 +128,7 @@ aiMergeBB bb bbid2bb s = do
     ds <- forM bbps (bbFinalAbsdom s)
     -- | Union all previous abstract domains
     d' <- unLUnion . mconcat $ (map (LUnion . return) ds)
+
     s' <- lmInsert (location bb) d' s
     return $ s'
 
@@ -137,10 +138,11 @@ aiBB :: Monad m => Lattice m a => AI m a
     -> BBId -- ^ bbid of entry
     -> BB -- ^ BB to interpret
     -> M.Map BBId BB -> AbsState a -> m (AbsState a)
-aiBB ai entryid bb bbid2bb s = do
+aiBB ai entryid bb bbid2bb sinit = do
     sbb <-  if bbid bb == entryid
             then aiStartState ai
-            else aiMergeBB bb bbid2bb s
+            else aiMergeBB bb bbid2bb sinit
+
     (lprev, si) <- foldM (\(lprev, s) a ->
                      (aiAssign ai lprev a s))
                    (location bb, sbb) (bbinsts bb)
@@ -150,11 +152,11 @@ aiBB ai entryid bb bbid2bb s = do
 
 -- | Abstract interpret the whole program once.
 aiProgramOnce :: Monad m => Lattice m a => AI m a -> Program -> AbsState a -> m (AbsState a)
-aiProgramOnce ai p s = do
+aiProgramOnce ai p sinit = do
   let bbs = progbbs p
   let entryid = progEntryId p
   let bbid2bb = progbbid2bb p
-  foldM (\s bb -> aiBB ai entryid bb bbid2bb s) s bbs
+  foldM (\s bb -> aiBB ai entryid bb bbid2bb s) sinit bbs
 
 -- | Run AI N times, or till fixpoint is reached, whichever is earlier
 aiProgramN :: (Monad m, Eq a, Lattice m a) => Int  -- ^ times to run
