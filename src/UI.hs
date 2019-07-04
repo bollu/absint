@@ -102,8 +102,8 @@ drawiters s = str $ "iter: " ++ show (curiter s) ++ "/" ++ show (niters s)
 
 -- | Arrow that points at the selected element of the list
 drawSelectedPtr :: Bool -> Widget N
-drawSelectedPtr False = str "  "
-drawSelectedPtr True = str "->"
+drawSelectedPtr False = str " "
+drawSelectedPtr True = str ">" <=> str ">"
 
 -- | Draw the code window
 drawcode :: Show a => S a -> Widget N

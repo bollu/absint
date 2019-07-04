@@ -12,7 +12,7 @@
 -- l1 -> i1 -> l2
 
 -- that is, THE LOCATION FOR AN INSTRUCTION IS WHERE IT WILL
--- READ DATA FROM!
+-- WRITE DATA TO!
 
 module Interpreter where
 import Lattice
@@ -94,22 +94,23 @@ preds bbid2bb bb = do
     guard $ (bbid bb') `elem`  (termnextbbs . bbterm $ bb')
     return $ bb'
 
-aiTerm :: Monad m => Lattice m a => AI m a -> Term -> M.Map BBId BB ->
-    AbsState a -> m (AbsState a)
-aiTerm AI{..} term bbid2bb s = do
-   d <- s #! (location term)
-   -- | M.Map BBId Loc
-   let bbid2loc = M.map location bbid2bb
-   -- | AbsState a -> BBId -> AbsState a
+aiTerm :: Monad m => Lattice m a => AI m a
+       -> Loc
+       -> Term
+       -> AbsState a
+       -> m (AbsState a)
+aiTerm AI{..} lprev term s = do
+   dinit <- s #! lprev
+   -- | AbsDom a -> BBId -> AbsDom a
    -- Update the state of the successor BBId
-   let aiSucc s bbid = do
-            d <- s #! (location term)
+   let aiSucc d bbid = do
             v <- (aiT term bbid d)
-            d' <- lmInsert bbid v  d
-            let lbb = bbid2loc M.! bbid
-            lmInsert lbb d' s
+            lmInsert bbid v d
 
-   foldM aiSucc s (termnextbbs term)
+
+   d' <- foldM aiSucc dinit (termnextbbs term)
+   -- lmInsert lbb d' s
+   lmInsert (location term) d' s
 
 -- | for a basic block, get the final abstract domain value
 bbFinalAbsdom :: Monad m =>Lattice m a => AbsState a -> BB -> m (AbsDom a)
@@ -122,13 +123,13 @@ aiMergeBB bb bbid2bb s = do
     -- | gather predecessors
     -- bbps :: [BB]
     let bbps = preds bbid2bb bb
-        -- | Gather abstract domains at the end of the predecessors
-        -- ds :: [AbsDom a]
+    -- | Gather abstract domains at the end of the predecessors
+    -- ds :: [AbsDom a]
     ds <- forM bbps (bbFinalAbsdom s)
     -- | Union all previous abstract domains
     d' <- unLUnion . mconcat $ (map (LUnion . return) ds)
-    d'' <- lmInsert (location bb) d' s
-    return $ d''
+    s' <- lmInsert (location bb) d' s
+    return $ s'
 
 -- | Abstract interpret a basic block
 -- Note that special handling is needed for the entry block.
@@ -143,7 +144,8 @@ aiBB ai entryid bb bbid2bb s = do
     (lprev, si) <- foldM (\(lprev, s) a ->
                      (aiAssign ai lprev a s))
                    (location bb, sbb) (bbinsts bb)
-    st <- aiTerm ai (bbterm bb) bbid2bb  si
+    let bbid2loc = M.map location bbid2bb
+    st <- aiTerm ai lprev (bbterm bb)  si
     return $ st
 
 -- | Abstract interpret the whole program once.

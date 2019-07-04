@@ -170,7 +170,7 @@ pand (P pw1) (P pw2) = do
 
     botht <- liftIO $ setIntersect pw1t pw2t
     P pone <- pconst (-1)
-    pone <- liftIO $ pwaffIntersectDomain pone botht
+    pone <- liftIO $ setCopy botht >>= \botht -> pwaffIntersectDomain pone botht
 
     P pzero <- pconst 0
     bothtc <- liftIO $ setCopy botht >>= setComplement
