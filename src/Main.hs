@@ -26,6 +26,7 @@ import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..),
   Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
 import qualified ISL.Native.Types as ISLTy (Id)
+import Control.Monad
 import Foreign.Ptr
 import Control.Monad (foldM)
 import qualified Control.Monad (join)
@@ -954,12 +955,10 @@ programs = [-- (passign, edefault)
 -- | Main entry point that executes all programs
 main :: IO ()
 main = for_ programs $ \(p, e) -> do
-    ai <- PolySCEV.mkAI p
+    let ai = PolySCEV.mkAI p
     putStrLn $ "ai made"
-    let trace = Interpreter.aiProgramNTrace 0 ai p
-                   (Interpreter.aiStartState ai)
+    trace <- PolySCEV.runIOGTop $ do
+                 start <- Interpreter.aiStartState ai
+                 Interpreter.aiProgramNTrace 10 ai p start
     print $ trace
-    -- render p (\(Iteration iter) l id -> (trace !! iter) #! l #! id)
-    --     (Iteration (length trace - 1))
-    -- putStrLn "\n=========================")
 
