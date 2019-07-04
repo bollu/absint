@@ -114,7 +114,7 @@ drawcode S{..} =
      render selected e = drawSelectedPtr selected <+>
                          drawUINode (info curiter  curloc) e
       -- | Find a way to find out if this has focus
-     in B.border (vLimit 30 (L.renderList render hasFocus l))
+     in B.border ((L.renderList render hasFocus l))
 
 -- | toplevel draw function
 draw :: Show a => S a -> [Widget N]

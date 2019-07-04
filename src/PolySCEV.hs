@@ -211,12 +211,13 @@ punion (P pl) (P pr) = do
     Just commonSubsetEq <- liftIO $ setIsSubset dcommon deq
     Just commonEqualEq <- liftIO $ setIsEqual dcommon deq
 
+    pl <- liftIO $ pwaffCopy pl
+    pr <- liftIO $ pwaffCopy pr
+    punion <- liftIO $ pwaffUnionMax pl pr
+
 
     if commonSubsetEq
     then  do
-        pl <- liftIO $ pwaffCopy pl
-        pr <- liftIO $ pwaffCopy pr
-        punion <- liftIO $ pwaffUnionMax pl pr
         return $ P punion
     else do
         dneq <- liftIO $ setCopy deq >>= setComplement
@@ -233,7 +234,8 @@ punion (P pl) (P pr) = do
             , pretty "commonEqualEq: " <> pretty commonEqualEq
             , pretty "commonSubsetEq: " <> pretty commonSubsetEq
             , pretty "---\n"]
-        Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+        return $ P punion
+        -- Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
 
 
 instance Pretty V where
