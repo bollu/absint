@@ -946,8 +946,8 @@ edefault :: Env Int
 edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [Program]
-programs = [-- passign
-            pif
+programs = [passign
+            , pif
             -- (ploop, edefault)
            ]
 
