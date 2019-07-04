@@ -49,7 +49,10 @@ liftIO :: IO a -> IOG a
 liftIO f = IOG $ const f
 
 -- | Abstract values
-data V = V P deriving(Eq, Show)
+data V = V P deriving(Eq)
+
+instance Show V where
+    show (V p) = show p
 
 -- | Global context
 data G = G { gctx :: Ptr Ctx
@@ -293,8 +296,8 @@ mkg p = do
     gctx <- ctxAlloc
     islAbortOnError gctx
     let vivs = progvivs p
-    let vars = progparams p
-    let params = progvarids p
+    let vars = progvarids p
+    let params = progparams p
     let ids = params `S.union`
               vivs `S.union`
               vars

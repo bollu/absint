@@ -962,7 +962,7 @@ lookupTrace trace (Iteration i) loc id = do
 main :: IO ()
 main = for_ programs $ \p -> do
     let ai = PolySCEV.mkAI p
-    let niters = 0
+    let niters = 1
     putStrLn $ "ai made"
     trace <- PolySCEV.runIOGTop p $ do
                  start <- I.aiStartState ai
