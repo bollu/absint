@@ -6,6 +6,7 @@ import IR
 import Brick
 import Data.Maybe(fromMaybe)
 import Graphics.Vty.Attributes (defAttr)
+import qualified Data.Set as S
 import qualified Graphics.Vty as V
 import qualified Brick.Main as M
 import qualified Brick.Types as T
@@ -70,11 +71,18 @@ mkUINodeBB bb =
   map mkUINodeGeneric (bbinsts bb) ++
   [mkUINodeTerm (bbterm bb)]
 
+mkUINodeParams :: Program -> [UINode]
+mkUINodeParams program =
+    let ps = S.toList (progparams program)
+     in [UINode (progEntryLoc program) (Just p) (show p) | p <- ps]
+
 mkUINodeProgram :: Program -> [UINode]
 mkUINodeProgram p =
-  concatMap mkUINodeBB (progbbs p)
+  mkUINodeParams p ++ concatMap mkUINodeBB (progbbs p)
 
-initS :: Show a => Program ->  (Iteration -> Loc -> Id -> a) -> Iteration -> S a
+initS :: Show a => Program
+      ->  (Iteration -> Loc -> Id -> a)
+      -> Iteration -> S a
 initS p f niters = S {
   l = (L.list  () (mkUINodeProgram p) 3)
   -- | Total number of iterations.

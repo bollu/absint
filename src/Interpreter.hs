@@ -47,16 +47,25 @@ data AI m a = AI {
 -- at a given point, update the full abstract state
 -- TODO, BUG: we should use the *previous* location here
 updateLoc :: Monad m => Lattice m a =>
-    (AbsDom a -> m a) -> Loc -> Id -> AbsState a -> m (AbsState a)
-updateLoc f l i s = do
-  d <- s #! l
+    (AbsDom a -> m a)
+    -> Loc -- ^ previous location
+    -> Loc -- ^ current location
+    -> Id -- ^ identifier to update
+    -> AbsState a -> m (Loc, AbsState a)
+updateLoc f lprev lcur i s = do
+  d <- s #! lprev
   v <- f d
   d' <- lmInsert i v d
-  lmInsert (locincr l) d' s
+  s' <- lmInsert lcur d' s
+  return $ (lcur, s')
 
--- | Abstract interpret an assignment
-aiAssign :: Monad m => Lattice m a => AI m a -> Assign -> AbsState a -> m (AbsState a)
-aiAssign AI{..} (Assign l id e) = updateLoc (aiE e) l id
+-- | Abstract interpret an assignment. Return current location
+-- and new state
+aiAssign :: Monad m => Lattice m a => AI m a
+         -> Loc -- ^ previous location
+         -> Assign -> AbsState a -> m (Loc, AbsState a)
+aiAssign AI{..} lprev (Assign lcur id e) =
+    updateLoc (aiE e) lprev lcur id
 
 
 -- | Abstract intepret  a phi node
@@ -131,7 +140,9 @@ aiBB ai entryid bb bbid2bb s = do
     sbb <-  if bbid bb == entryid
             then aiStartState ai
             else aiMergeBB bb bbid2bb s
-    si <- foldM (\s a -> aiAssign ai a s) sbb (bbinsts bb)
+    (lprev, si) <- foldM (\(lprev, s) a ->
+                     (aiAssign ai lprev a s))
+                   (location bb, sbb) (bbinsts bb)
     st <- aiTerm ai (bbterm bb) bbid2bb  si
     return $ st
 
