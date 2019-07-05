@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
@@ -48,11 +49,13 @@ instance MonadFail IOG where
 liftIO :: IO a -> IOG a
 liftIO f = IOG $ const f
 
+
+
 -- | Abstract values
-data V = V P deriving(Eq)
+data V = V P S deriving(Eq)
 
 instance Show V where
-    show (V p) = show p
+    show (V p s) = show p ++ show s
 
 -- | Global context
 data G = G { gctx :: Ptr Ctx
@@ -97,12 +100,29 @@ newtype P = P (Ptr Pwaff)
 instance Eq P where
     P pw == P pw' = undefined
 
+
 instance Show P where
     show (P pw) =
         uio (pwaffCopy pw >>= pwaffCoalesce >>= pwaffToStr)
 
+
 instance Pretty P where
     pretty (P pw) = pretty (show pw)
+
+
+newtype S = S (Ptr Set)
+
+
+instance Eq S where
+    S s == S s' = undefined
+
+
+instance Show S where
+    show (S s) =
+        uio (setCopy s >>= setCoalesce >>= setToStr)
+
+instance Pretty S where
+    pretty (S s) = pretty (show s)
 
 -- | Get a symbolic representation of the given variable
 psym :: Id -> IOG P
@@ -153,6 +173,23 @@ plt (P pw1) (P pw2) = do
     pwlt <- liftIO $ pwaffUnionMax pwt pwf
     return $ P pwlt
 
+
+-- | Return the set on which P equals -1 [true]
+ptrueset :: P -> IOG S
+ptrueset (P pw) = do
+    pw <- liftIO $ pwaffCopy pw
+    P pone <- pconst (-1)
+    strue <- liftIO $ pwaffEqSet pone pw
+    return $ S strue
+
+
+-- | Return the set where P equals 0 [false]
+pfalseset :: P -> IOG S
+pfalseset (P pw) = do
+    pw <- liftIO $ pwaffCopy pw
+    P pone <- pconst (0)
+    strue <- liftIO $ pwaffEqSet pone pw
+    return $ S strue
 
 -- | Take the piecewise AND of two pwaffs that are indicators
 -- of sets
@@ -237,40 +274,73 @@ punion (P pl) (P pr) = do
         return $ P punion
         -- Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
 
+snone :: IOG S
+snone = do
+    sp <- gsp
+    emptyset <- liftIO $ setEmpty sp
+    return $ S emptyset
+
+sunion :: S -> S -> IOG S
+sunion (S s1) (S s2) = do
+    s1 <- liftIO $ setCopy s1
+    s2 <- liftIO $ setCopy s2
+    su <- liftIO $ setUnion s1 s2
+    return $ S su
+
+scomplement :: S -> IOG S
+scomplement (S s) = do
+    s <- liftIO $ setCopy s
+    sc <- liftIO $ setComplement s
+    return $ S sc
+
 
 instance Pretty V where
   pretty = pretty . show
 
+
+instance Lattice IOG P where
+  lbot  =  pnone
+  ljoin p1 p2 = punion p1 p2
+
+instance Lattice IOG S where
+  lbot  =  snone
+  ljoin s1 s2 = sunion s1 s2
+
 instance Lattice IOG V where
-  lbot  = V <$> pnone
-  ljoin (V p1) (V p2) = V <$> punion p1 p2
+  lbot  = V <$> lbot <*> lbot
+  ljoin (V p1 s1) (V p2 s2) = V <$> (ljoin p1 p2) <*> (ljoin s1 s2)
 
 
 -- | Interpret an expression
 aie :: Expr -> AbsDom V -> IOG V
-aie  (EInt i) _ = V <$> pconst i
+aie  (EInt i) _ = V <$> pconst i <*> lbot
 aie  (EId id) d = d #! id
 aie  (EBinop op id id') d = do
-  (V p) <- d #! id
-  (V p') <- d #! id'
+  (V p _) <- d #! id
+  (V p' _) <- d #! id'
   case op of
-    Add -> V <$> padd p p'
-    Lt -> V <$> plt p p'
+    Add -> V <$> padd p p' <*> lbot
+    Lt -> V <$> plt p p' <*> lbot
 
 
 -- | Interpret a terminator.
-ait :: Term -> BBId -> AbsDom V -> IOG V
+ait :: Term
+    -> BBId -- ^ next basic block ID
+    -> AbsDom V
+    -> IOG V
 ait (Done _ bbcur) bbidnext d = d #! bbcur
 ait (Br _ bbcur _) bbidnext d = d #! bbcur
 ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
-    V pcur <- d #! bbcur
-    V pc <- d #! c
-    pthen <- pand pcur pc
-    pelse <- pand pcur pc >>= pcomplement
+    -- | execution condtions of BB
+    V _ scur <- d #! bbcur
+    -- | current pwaff
+    V pc _ <- d #! c
+    sthen <- ptrueset pc
+    selse <- pfalseset pc
     if bbidnext == bbl
-    then  return $ V pthen
+    then  V <$> lbot <*> (ptrueset pc)
     else if bbidnext == bbr
-    then return $ V pelse
+    then V <$> lbot <*> (pfalseset pc)
     else error $ "condbr only has bbl and bbr as successors"
 
 
@@ -284,7 +354,8 @@ aiStart p = do
     -- maps each parameter to symbolic variable.
     id2sym <- forM (S.toList ps) $ \id -> do
                     p <- psym id
-                    return $ (id, V p)
+                    s <- lbot
+                    return $ (id, V p s)
     return $ lmsingleton (progEntryLoc p) (lmfromlist id2sym)
 
 
