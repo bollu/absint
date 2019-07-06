@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module UI(UI.render, Iteration(..)) where
 import IR
@@ -38,6 +39,11 @@ type N = ()
 instance L.Splittable [] where
   splitAt = PreludeList.splitAt
 
+-- | Attributes for various UI nodes used to control style
+highlightedAttr, locAttr, vAttr :: AttrName
+highlightedAttr = "highlighted"
+locAttr = "loc"
+vAttr = "v"
 
 -- | vertical space each UI Node takes.
 vspaceUINode :: Int
@@ -61,11 +67,12 @@ data UINode =
 
 -- | Render the location
 drawLoc :: Loc -> Widget N
-drawLoc (Loc l) = hLimit 3 $ padRight Max $  str $ show l
+drawLoc (Loc l) = withAttr locAttr $ hLimit 3 $ padRight Max $  str $ show l
 
 -- | Draw the abstract info
 drawV :: V -> Widget N
-drawV v = (str . show . vp $ v) <=> (str . show . vs $ v)
+drawV v = withAttr vAttr $
+  (str . show . vp $ v) <=> (str . show . vs $ v)
 
 drawUINode :: (Id -> Maybe V)
   -> UINode -> Widget N
@@ -156,8 +163,11 @@ drawcode S{..} =
      -- | Id -> Maybe V
      f = info  curiter curloc
      -- | render :: Bool -> e -> Widget N
-     render selected e = drawSelectedPtr selected <+> drawUINode f e
-      -- | Find a way to find out if this has focus
+     render True e = forceAttr highlightedAttr $
+       drawSelectedPtr True <+> drawUINode f e
+     render False e = drawSelectedPtr False <+> drawUINode f e
+
+       -- | Find a way to find out if this has focus
      in B.border ((L.renderList render hasFocus l))
 
 -- | toplevel draw function
@@ -176,16 +186,13 @@ handleEvent s (VtyEvent (V.EvKey (V.KChar 'q') [])) = halt s
 
 handleEvent s@S{..} (VtyEvent (V.EvKey V.KLeft [])) =
     continue $ s { curiter = max (curiter - 1) 0 }
-handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'h') [])) =
-    continue $ s { curiter = max (curiter - 1) 0 }
 
 handleEvent s@S{..} (VtyEvent (V.EvKey V.KRight [])) =
     continue $ s { curiter = min (curiter + 1) niters }
-handleEvent s@S{..} (VtyEvent (V.EvKey (V.KChar 'l') [])) =
-    continue $ s { curiter = max (curiter - 1) 0 }
+
 
 handleEvent s (VtyEvent e) = do
-  l' <- L.handleListEventVi L.handleListEvent e (l s)
+  l' <- L.handleListEvent e (l s)
   -- | Get the new selected location. If it's the old one,
   -- then just use it. Otherwise, get the location
   -- from the newly selected one.
@@ -205,7 +212,11 @@ startEvent s = return s
 
 -- | No idea what this does.
 mkAttrMap :: S -> AttrMap
-mkAttrMap s = attrMap defAttr []
+mkAttrMap s = attrMap defAttr
+  [(locAttr, V.defAttr `V.withStyle` V.dim)
+  , (highlightedAttr, V.defAttr `V.withStyle` V.bold `V.withForeColor` V.blue)
+  , (vAttr, V.defAttr `V.withStyle` V.dim)
+  ]
 
 app :: App S e N
 app = App {
