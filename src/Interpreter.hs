@@ -113,7 +113,8 @@ aiTerm AI{..} lprev term s = do
    lmInsert (location term) d' s
 
 -- | for a basic block, get the final abstract domain value
-bbFinalAbsdom :: Monad m =>Lattice m a => AbsState a -> BB -> m (AbsDom a)
+bbFinalAbsdom :: Monad m => Lattice m a => AbsState a
+  -> BB -> m (AbsDom a)
 bbFinalAbsdom s bb = s #! (bbFinalLoc bb)
 
 -- | Merge the state from predecrssors into a BB
@@ -151,7 +152,8 @@ aiBB ai entryid bb bbid2bb sinit = do
     return $ st
 
 -- | Abstract interpret the whole program once.
-aiProgramOnce :: Monad m => Lattice m a => AI m a -> Program -> AbsState a -> m (AbsState a)
+aiProgramOnce :: Monad m => Lattice m a => AI m a
+  -> Program -> AbsState a -> m (AbsState a)
 aiProgramOnce ai p sinit = do
   let bbs = progbbs p
   let entryid = progEntryId p

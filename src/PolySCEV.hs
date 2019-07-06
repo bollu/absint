@@ -281,6 +281,13 @@ snone = do
     emptyset <- liftIO $ setEmpty sp
     return $ S emptyset
 
+suniv :: IOG S
+suniv = do
+  sp <- gsp
+  univset <- liftIO $ setUniverse sp
+  return $ S univset
+
+
 sunion :: S -> S -> IOG S
 sunion (S s1) (S s2) = do
     s1 <- liftIO $ setCopy s1
@@ -331,6 +338,9 @@ ait :: Term
     -> IOG V
 ait (Done _ bbcur) bbidnext d = d #! bbcur
 ait (Br _ bbcur _) bbidnext d = d #! bbcur
+  
+  
+  
 ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     -- | execution condtions of BB
     V _ scur <- d #! bbcur
@@ -347,7 +357,7 @@ ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
 
 
 aiStart :: Program -> IOG (AbsState V)
-aiStart p = do
+aiStart prog = do
     -- | get the parameters
     ps <- gread params
     id2isl <- gread gid2isl
@@ -357,7 +367,13 @@ aiStart p = do
                     p <- psym id
                     s <- lbot
                     return $ (id, V p s)
-    return $ lmsingleton (progEntryLoc p) (lmfromlist id2sym)
+    -- | Map the entry block to full domain
+    entry2v <- do
+                 p <- lbot
+                 s <- suniv
+                 return (progEntryId prog, V p s)
+    return $ lmsingleton (progEntryLoc prog)
+                (lmfromlist $ entry2v:id2sym)
 
 
 -- | Create the AI object
