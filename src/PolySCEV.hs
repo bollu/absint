@@ -238,6 +238,14 @@ pcomplement (P pw) = do
     pwcombined <- liftIO $ pwaffUnionMax pone pzero
     return $ P pwcombined
 
+-- | Retrict the domain of P to S
+prestrict :: P -> S -> IOG P
+prestrict (P pw) (S s) = do
+  pw <- liftIO $ pwaffCopy pw
+  s <- liftIO $ setCopy s
+  pw <- liftIO $ pwaffIntersectDomain pw s
+
+  return $ P pw
 
 -- | take union
 punion :: P -> P -> IOG P
@@ -331,6 +339,15 @@ aie  (EBinop op id id') d = do
     Add -> V <$> padd p p' <*> lbot
     Lt -> V <$> plt p p' <*> lbot
 
+-- | Interpret an assignment
+aia :: Assign -> AbsDom V -> IOG V
+aia a d = do
+  V _ scur <- d #! (assignownbbid a)
+  V p s <- aie (assignexpr a) d
+  -- | restrict the value to the current BB domain
+  p <- prestrict p scur
+  return $ V p s
+  
 
 -- | Interpret a terminator.
 ait :: Term
@@ -380,7 +397,7 @@ aiStart prog = do
 
 -- | Create the AI object
 mkAI :: Program -> AI IOG V
-mkAI p = AI { aiE = aie , aiT = ait, aiStartState = aiStart p }
+mkAI p = AI { aiA = aia , aiT = ait, aiStartState = aiStart p }
 
 -- | Make the global context
 mkg :: Program -> IO G

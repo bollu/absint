@@ -79,19 +79,22 @@ type BBId = Id
 -- Instructions
 data Assign = Assign {
     assignloc :: !Loc,
+    assignownbbid :: !BBId,
     assignid :: !Id,
     assignexpr :: !Expr
 }deriving(Eq, Ord)
 
 instance Pretty Assign where
-  pretty (Assign pc id expr) =
-    pretty pc <+> pretty id <+> equals <+> pretty expr
+  pretty (Assign pc bbid id expr) =
+    pretty pc <+> pretty bbid <+> pretty id <+> equals <+> pretty expr
 
 instance Show Assign where
-  show (Assign pc id expr) = show pc ++ " " ++ show id ++ " =  " ++ show expr
+  show (Assign pc bbid id expr) =
+    show pc <> " " <> show bbid <> "  " <>
+    show id <> " =  " <> show expr
 
 instance Located Assign where
-  location (Assign loc _ _) = loc
+  location = assignloc
 
 instance Named Assign where
   name = assignid
@@ -436,7 +439,8 @@ setTerm term = builderCurBBModify (bbModifyTerm (const term))
 assign :: String -> Expr -> ST.State ProgramBuilder ()
 assign id e = do
   loc <- builderLocIncr
-  appendInst (Assign loc (Id id) e)
+  ownbbid <- fromJust <$>  ST.gets curbbid
+  appendInst (Assign loc ownbbid (Id id) e)
 
 done :: ST.State ProgramBuilder ()
 done = do

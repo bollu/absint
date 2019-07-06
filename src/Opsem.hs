@@ -68,7 +68,7 @@ data Semantics a = Semantics {
 }
 
 mkSemInst :: (Expr -> VEnv a -> a) -> Assign -> VEnv a -> VEnv a
-mkSemInst sem (Assign _ id e) env  =
+mkSemInst sem (Assign _ _ id e) env  =
   M.insert id (sem e env) env
 
 mkSemTerm :: Pretty a => (a -> Maybe Bool) -- concrete value to truth value

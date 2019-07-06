@@ -99,7 +99,7 @@ data S = S { l :: L.GenericList () [] UINode
 
 
 mkUINodeAssign :: Assign -> UINode
-mkUINodeAssign (Assign loc id expr) =
+mkUINodeAssign (Assign loc ownbbid id expr) =
     UINode (Just loc) (Just id) (unID id <> " = " <> show expr) 4
 
 mkUINodePhi :: Phi -> UINode

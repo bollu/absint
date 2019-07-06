@@ -32,8 +32,8 @@ type AbsState a = LatticeMap Loc (AbsDom a)
 -- | Data needed to perform abstract interpretation
 -- a: abstract value
 data AI m a = AI {
-  -- | interpret an expression node
- aiE :: Expr -> AbsDom a -> m a
+  -- | interpret an assignment
+ aiA :: Assign -> AbsDom a -> m a
   -- | interpret a terminator node
   , aiT :: Term -- ^ terminator instruction
       -> BBId  -- ^  bbid of successor
@@ -69,8 +69,8 @@ updateLoc lprev lcur i s f = do
 aiAssign :: Monad m => Lattice m a => AI m a
          -> Loc -- ^ previous location
          -> Assign -> AbsState a -> m (Loc, AbsState a)
-aiAssign AI{..} lprev (Assign lcur id e) s =
-    updateLoc lprev lcur id s (aiE e)
+aiAssign AI{..} lprev a s =
+    updateLoc lprev (location a) (name a) s (aiA a)
 
 
 aiPhi :: (Monad m, Lattice m a) => AI m a 
