@@ -99,7 +99,7 @@ gislid id = do
 newtype P = P (Ptr Pwaff) deriving(Spaced)
 
 instance Eq P where
-    P pw == P pw' = undefined
+    P pw == P pw' = uio (pwaffIsEqual pw pw')
 
 
 instance Show P where
@@ -115,7 +115,8 @@ newtype S = S (Ptr Set) deriving(Spaced)
 
 
 instance Eq S where
-    S s == S s' = undefined
+    S s == S s' = uio (fromJust <$> setIsEqual s s')
+
 
 
 instance Show S where
@@ -355,7 +356,8 @@ ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     else error $ "condbr only has bbl and bbr as successors"
 
 
-
+-- | Starting state. Map every parameter to symbolic,
+-- map entry BB to universe domain
 aiStart :: Program -> IOG (AbsState V)
 aiStart prog = do
     -- | get the parameters
