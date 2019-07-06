@@ -94,6 +94,10 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Ctx'
   , `String'
   } -> `Ptr Set' id #}
+
+{#fun isl_set_drop_unused_params
+   as setDropUnusedParams { id `Ptr Set' } -> `Ptr Set' id #}
+
 -- =================
 -- map
 {#fun isl_map_gist as mapGist
@@ -552,6 +556,12 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
 {#fun isl_pw_aff_copy as pwaffCopy
   { id `Ptr Pwaff'
   } -> `Ptr Pwaff' id #}
+
+
+{#fun isl_pw_aff_drop_unused_params
+   as pwaffDropUnusedParams { id `Ptr Pwaff' } -> `Ptr Pwaff' id #}
+
+
 
 {# fun isl_pw_aff_from_aff as pwaffFromAff
     {id `Ptr Aff' } -> `Ptr Pwaff' id #}

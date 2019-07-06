@@ -27,10 +27,13 @@ import qualified Brick.Widgets.ProgressBar as P
 import qualified Brick.Widgets.List as L
 import qualified Data.List as PreludeList(splitAt)
 import PolySCEV
-
 import Brick.Util (on)
-
 import Brick.Util (on)
+import ISL.Native.C2Hs
+import ISL.Native.Types (DimType(..),
+  Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
+import Absdomain
+import qualified ISL.Native.Types as ISLTy (Id)
 
 newtype Iteration = Iteration Int deriving(Eq, Ord, Show, Num)
 
@@ -72,8 +75,8 @@ drawLoc (Loc l) = withAttr locAttr $ hLimit 3 $ padRight Max $  str $ show l
 -- | Draw the abstract info
 drawV :: V -> Widget N
 drawV v = withAttr vAttr $
-  (str $ "P: " <> (show . vp $ v)) <=>
-  (str $ "S: " <> (show . vs $ v))
+  (str $ "P: " <> (show . dropUnusedParams . vp $ v)) <=>
+  (str $ "S: " <> (show . dropUnusedParams . vs $ v))
 
 drawUINode :: (Id -> Maybe V)
   -> UINode -> Widget N

@@ -117,6 +117,9 @@ class Spaced a where
            else return Nothing) [0..(n-1)]
       return $ foldl (<|>) Nothing mixs
 
+  dropUnusedParams :: a -> a
+
+
 -- add dimensions with the given IDs.
 -- NOTE, TODO: I am abusing "name" to mean "id'd". Hopefully, this will
 -- not get confusing.
@@ -144,6 +147,8 @@ instance Spaced (Ptr Set) where
   getSpace = setGetSpace
   setDimId x dt i id = setSetDimId x dt (fromIntegral i) id
   addDims x dt i = setAddDims x dt (fromIntegral i)
+  dropUnusedParams s = Unsafe.unsafePerformIO $
+    setCopy s >>= setDropUnusedParams
 
 instance Spaced (Ptr Map) where
   getSpace = mapGetSpace
@@ -154,6 +159,8 @@ instance Spaced (Ptr Pwaff) where
   getSpace = pwaffGetSpace
   setDimId x dt i id = pwaffSetDimId x dt (fromIntegral i) id
   addDims x dt i = pwaffAddDims x dt (fromIntegral i)
+  dropUnusedParams p = Unsafe.unsafePerformIO $
+    pwaffCopy p >>= pwaffDropUnusedParams
 
 -- align a to b's space
 class Spaced b => Alignable a b where

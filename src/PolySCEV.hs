@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving  #-}
 module PolySCEV(V(..), AI, mkAI, runIOGTop) where
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..),
@@ -95,7 +96,7 @@ gislid id = do
     id2isl <- gread gid2isl
     return $ id2isl OM.! id
 
-newtype P = P (Ptr Pwaff)
+newtype P = P (Ptr Pwaff) deriving(Spaced)
 
 instance Eq P where
     P pw == P pw' = undefined
@@ -110,7 +111,7 @@ instance Pretty P where
     pretty (P pw) = pretty (show pw)
 
 
-newtype S = S (Ptr Set)
+newtype S = S (Ptr Set) deriving(Spaced)
 
 
 instance Eq S where
