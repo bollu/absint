@@ -49,17 +49,14 @@ windent :: Int -> Widget N
 windent n = str $ (replicate n ' ')
 
 
--- | A UI Node has a location, possibly an ID, and a string of what is to be
--- printed
+-- | A UI Node has a location, possibly an ID, and a string of what
+-- is to be printed
 data UINode =
-    UINode { uiloc :: Loc
+    UINode { uiloc :: (Maybe Loc)
            , uiid :: (Maybe Id)
            , uistr :: String
            , uiindent :: Int
            }
-
-instance Located UINode where
-  location = uiloc
 
 
 -- | Render the location
@@ -77,8 +74,10 @@ drawUINode f UINode{..} =
                 Just v -> drawV v
                 Nothing -> emptyWidget
         wnode = str uistr
-     in (drawLoc uiloc) <+>
-        (padLeft (Pad uiindent)  (wv <=> wnode))
+        wloc = case uiloc of
+                 Just l -> drawLoc l
+                 Nothing -> emptyWidget
+     in (wloc) <+> (padLeft (Pad uiindent)  (wv <=> wnode))
 
 
 data S = S { l :: L.GenericList () [] UINode
@@ -90,20 +89,21 @@ data S = S { l :: L.GenericList () [] UINode
 
 mkUINodeAssign :: Assign -> UINode
 mkUINodeAssign (Assign loc id expr) =
-    UINode loc (Just id) (unID id <> " = " <> show expr) 4
+    UINode (Just loc) (Just id) (unID id <> " = " <> show expr) 4
 
 mkUINodePhi :: Phi -> UINode
 mkUINodePhi (Phi loc ty id l r) =
-    UINode loc (Just id)
+    UINode (Just loc) (Just id)
            ("phi " <> (unID id) <> " = " <> show l <> " " <> show r)
            4
 
 mkUINodeTerm :: Term -> UINode
-mkUINodeTerm x = UINode (location x) Nothing (show x) 4
+mkUINodeTerm x = UINode (Just . location $ x) Nothing (show x) 4
 
 mkUINodeBBHeader :: BB -> UINode
 mkUINodeBBHeader bb =
-    UINode (location bb) (Just . name $ bb)
+    UINode (Just . location $ bb)
+           (Just . name $ bb)
            ((unID . bbid $ bb) <> ":")
            0
 
@@ -117,7 +117,7 @@ mkUINodeBB bb =
 mkUINodeParams :: Program -> [UINode]
 mkUINodeParams program =
     let ps = S.toList (progparams program)
-     in [UINode (progEntryLoc program) (Just p) (show p) 0 | p <- ps]
+     in [UINode Nothing (Just p) (show p) 0 | p <- ps]
 
 mkUINodeProgram :: Program -> [UINode]
 mkUINodeProgram p =
@@ -191,7 +191,10 @@ handleEvent s (VtyEvent e) = do
   -- from the newly selected one.
   let newloc = fromMaybe
                  (curloc s)
-                 (location . snd <$> L.listSelectedElement l')
+                 (do
+                     (_, n) <- L.listSelectedElement l'
+                     uiloc n
+                 )
   continue $ s {l = l', curloc = newloc}
 
 
