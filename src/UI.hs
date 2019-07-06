@@ -109,7 +109,15 @@ mkUINodePhi (Phi loc ty id l r) =
            4
 
 mkUINodeTerm :: Term -> UINode
-mkUINodeTerm x = UINode (Just . location $ x) Nothing (show x) 4
+mkUINodeTerm t = let
+  s = case t of
+        Done _ _ -> "done"
+        Br _ l r -> "br " <> show l <> " " <>  show r
+
+        BrCond _ _  c l r -> "brcond " <> show c <> " " <>
+                          show l <> " " <>
+                          show r
+  in UINode (Just . location $ t) Nothing s 4
 
 mkUINodeBBHeader :: BB -> UINode
 mkUINodeBBHeader bb =
