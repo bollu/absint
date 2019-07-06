@@ -35,7 +35,8 @@ import ISL.Native.Types (DimType(..),
 import Absdomain
 import qualified ISL.Native.Types as ISLTy (Id)
 
-newtype Iteration = Iteration Int deriving(Eq, Ord, Show, Num)
+newtype Iteration = Iteration { unIteration ::  Int }
+   deriving(Eq, Ord, Show, Num)
 
 type N = ()
 
@@ -159,7 +160,9 @@ initS p f niters = S {
 
 -- | Top bar that draws number of iterations
 drawiters :: S -> Widget N
-drawiters s = str $ "iter: " ++ show (curiter s) ++ "/" ++ show (niters s)
+drawiters s = str $
+  "iter: " <> show (unIteration (curiter s) + 1) <> "/" <>
+  show (unIteration (niters s) + 1)
 
 
 -- | Arrow that points at the selected element of the list

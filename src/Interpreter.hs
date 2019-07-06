@@ -217,7 +217,7 @@ aiProgramNTrace 0 _ _ s = return [s]
 aiProgramNTrace n ai p s = do
   s' <-  aiProgramOnce ai p s
   if s == s'
-  then return [s']
+  then return []
   else do
       ss <- aiProgramNTrace (n-1) ai p s'
       return $ ss ++ [s']
