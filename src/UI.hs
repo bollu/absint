@@ -47,7 +47,7 @@ vAttr = "v"
 
 -- | vertical space each UI Node takes.
 vspaceUINode :: Int
-vspaceUINode  = 4
+vspaceUINode  = 3
 
 
 -- | Indentation
