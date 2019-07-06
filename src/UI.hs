@@ -25,6 +25,7 @@ import qualified Brick.Focus as F
 import qualified Brick.Widgets.ProgressBar as P
 import qualified Brick.Widgets.List as L
 import qualified Data.List as PreludeList(splitAt)
+import PolySCEV
 
 import Brick.Util (on)
 
@@ -37,54 +38,96 @@ type N = ()
 instance L.Splittable [] where
   splitAt = PreludeList.splitAt
 
+
+-- | vertical space each UI Node takes.
+vspaceUINode :: Int
+vspaceUINode  = 4
+
+
+-- | Indentation
+windent :: Int -> Widget N
+windent n = str $ (replicate n ' ')
+
+
 -- | A UI Node has a location, possibly an ID, and a string of what is to be
 -- printed
-data UINode = UINode Loc (Maybe Id) String
+data UINode =
+    UINode { uiloc :: Loc
+           , uiid :: (Maybe Id)
+           , uistr :: String
+           , uiindent :: Int
+           }
 
 instance Located UINode where
-  location (UINode loc _ _) = loc
+  location = uiloc
 
 
-drawUINode :: Show a => (Id -> a) -> UINode -> (Widget N)
-drawUINode id2a (UINode _ Nothing rhs) =
-  padBottom (Pad 1) $ padTop (Pad 1) $  str rhs
-drawUINode id2a (UINode _ (Just id) rhs) =
-  padBottom (Pad 1) $ (str . show . id2a $ id)  <=>  str rhs
+-- | Render the location
+drawLoc :: Loc -> Widget N
+drawLoc (Loc l) = hLimit 3 $ padRight Max $  str $ show l
+
+-- | Draw the abstract info
+drawV :: V -> Widget N
+drawV v = (str . show . vp $ v) <=> (str . show . vs $ v)
+
+drawUINode :: (Id -> Maybe V)
+  -> UINode -> Widget N
+drawUINode f UINode{..} =
+    let wv = case uiid >>= f of
+                Just v -> drawV v
+                Nothing -> emptyWidget
+        wnode = str uistr
+     in (drawLoc uiloc) <+>
+        (padLeft (Pad uiindent)  (wv <=> wnode))
 
 
-data S a = S { l :: L.GenericList () [] UINode
+data S = S { l :: L.GenericList () [] UINode
              , niters :: Iteration
              , curiter :: Iteration
              , curloc :: Loc
-             , info :: Iteration -> Loc -> Id -> a }
+             , info :: Iteration -> Loc -> Id -> Maybe V }
 
 
-mkUINodeGeneric :: (Show a, Located a, IR.Named a) => a -> UINode
-mkUINodeGeneric x =  UINode (location x) (Just . name $ x) (show x)
+mkUINodeAssign :: Assign -> UINode
+mkUINodeAssign (Assign loc id expr) =
+    UINode loc (Just id) (unID id <> " = " <> show expr) 4
 
-mkUINodeTerm x =  UINode (location x) Nothing (show x)
+mkUINodePhi :: Phi -> UINode
+mkUINodePhi (Phi loc ty id l r) =
+    UINode loc (Just id)
+           ("phi " <> (unID id) <> " = " <> show l <> " " <> show r)
+           4
+
+mkUINodeTerm :: Term -> UINode
+mkUINodeTerm x = UINode (location x) Nothing (show x) 4
+
+mkUINodeBBHeader :: BB -> UINode
+mkUINodeBBHeader bb =
+    UINode (location bb) (Just . name $ bb)
+           ((unID . bbid $ bb) <> ":")
+           0
 
 mkUINodeBB :: BB -> [UINode]
 mkUINodeBB bb =
-  [UINode (location bb) (Just . name $ bb) ((show . unID . bbid $ bb) <> ":")] ++
-  map mkUINodeGeneric (bbphis bb) ++
-  map mkUINodeGeneric (bbinsts bb) ++
+  [mkUINodeBBHeader bb] ++
+  map mkUINodePhi (bbphis bb) ++
+  map mkUINodeAssign (bbinsts bb) ++
   [mkUINodeTerm (bbterm bb)]
 
 mkUINodeParams :: Program -> [UINode]
 mkUINodeParams program =
     let ps = S.toList (progparams program)
-     in [UINode (progEntryLoc program) (Just p) (show p) | p <- ps]
+     in [UINode (progEntryLoc program) (Just p) (show p) 0 | p <- ps]
 
 mkUINodeProgram :: Program -> [UINode]
 mkUINodeProgram p =
   mkUINodeParams p ++ concatMap mkUINodeBB (progbbs p)
 
-initS :: Show a => Program
-      ->  (Iteration -> Loc -> Id -> a)
-      -> Iteration -> S a
+initS :: Program
+      ->  (Iteration -> Loc -> Id -> Maybe V)
+      -> Iteration -> S
 initS p f niters = S {
-  l = (L.list  () (mkUINodeProgram p) 3)
+  l = (L.list  () (mkUINodeProgram p) vspaceUINode)
   -- | Total number of iterations.
   , niters = niters
   -- | Current iteration.
@@ -96,37 +139,38 @@ initS p f niters = S {
 }
 
 -- | Top bar that draws number of iterations
-drawiters :: S a -> Widget N
+drawiters :: S -> Widget N
 drawiters s = str $ "iter: " ++ show (curiter s) ++ "/" ++ show (niters s)
 
 
 -- | Arrow that points at the selected element of the list
 drawSelectedPtr :: Bool -> Widget N
-drawSelectedPtr False = str " "
-drawSelectedPtr True = str ">" <=> str ">"
+drawSelectedPtr False = vBox $ replicate vspaceUINode (str " ")
+drawSelectedPtr True = vBox $ replicate vspaceUINode (str ">")
 
 -- | Draw the code window
-drawcode :: Show a => S a -> Widget N
+drawcode :: S -> Widget N
 drawcode S{..} =
  let
      hasFocus = True
+     -- | Id -> Maybe V
+     f = info  curiter curloc
      -- | render :: Bool -> e -> Widget N
-     render selected e = drawSelectedPtr selected <+>
-                         drawUINode (info curiter  curloc) e
+     render selected e = drawSelectedPtr selected <+> drawUINode f e
       -- | Find a way to find out if this has focus
      in B.border ((L.renderList render hasFocus l))
 
 -- | toplevel draw function
-draw :: Show a => S a -> [Widget N]
+draw :: S -> [Widget N]
 draw s = [drawiters s <=> drawcode s]
 
 -- | Choose the cursor we wish to focus on
-chooseCursor :: (S a) -> [CursorLocation N] -> Maybe (CursorLocation N)
+chooseCursor :: S -> [CursorLocation N] -> Maybe (CursorLocation N)
 chooseCursor _ [] = Nothing
 chooseCursor _ (x:xs) = Just x
 
 -- | toplevel event hander
-handleEvent :: S a -> BrickEvent N e -> EventM N (Next (S a))
+handleEvent :: S -> BrickEvent N e -> EventM N (Next S)
 handleEvent s (VtyEvent (V.EvKey V.KEsc [])) = halt s
 handleEvent s (VtyEvent (V.EvKey (V.KChar 'q') [])) = halt s
 
@@ -152,15 +196,15 @@ handleEvent s (VtyEvent e) = do
 
 
 -- | Initial event
-startEvent :: S a -> EventM N (S a)
+startEvent :: S -> EventM N S
 startEvent s = return s
 
 
 -- | No idea what this does.
-mkAttrMap :: S a -> AttrMap
+mkAttrMap :: S -> AttrMap
 mkAttrMap s = attrMap defAttr []
 
-app :: Show a => App (S a) e N
+app :: App S e N
 app = App {
   appDraw = draw
   , appChooseCursor = chooseCursor
@@ -171,8 +215,8 @@ app = App {
 
 
 -- | Function exposed to outside world that render the TUI
-render :: Show a => Program
-  -> (Iteration -> Loc -> Id -> a)
+render :: Program
+  -> (Iteration -> Loc -> Id -> Maybe V)
   -> Iteration
   -> IO ()
 render p info niters = do

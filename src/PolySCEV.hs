@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
-module PolySCEV(V, AI, mkAI, runIOGTop) where
+module PolySCEV(V(..), AI, mkAI, runIOGTop) where
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..),
   Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
@@ -52,7 +52,7 @@ liftIO f = IOG $ const f
 
 
 -- | Abstract values
-data V = V P S deriving(Eq)
+data V = V { vp :: P, vs :: S } deriving(Eq)
 
 instance Show V where
     show (V p s) = show p ++ show s
