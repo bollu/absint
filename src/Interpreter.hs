@@ -39,6 +39,10 @@ data AI m a = AI {
       -> BBId  -- ^  bbid of successor
       -> AbsDom a -- ^ abstract domain to use
       -> m a
+   -- | Transform the LHS of a phi node 
+  , aiLoopPhiL ::  AbsDom a -> a -> m a
+  -- | Transform the RHS of a phi node
+  , aiLoopPhiR ::  AbsDom a -> a -> m a
   , aiStartState :: m (AbsState a) -- ^ Starting state of the AI
 }
 
@@ -47,12 +51,13 @@ data AI m a = AI {
 -- at a given point, update the full abstract state
 -- TODO, BUG: we should use the *previous* location here
 updateLoc :: Monad m => Lattice m a =>
-    (AbsDom a -> m a)
-    -> Loc -- ^ previous location
+    Loc -- ^ previous location
     -> Loc -- ^ current location
     -> Id -- ^ identifier to update
-    -> AbsState a -> m (Loc, AbsState a)
-updateLoc f lprev lcur i s = do
+    -> AbsState a -- ^ previous abstract state
+    -> (AbsDom a -> m a) -- ^ update value
+    -> m  (Loc, AbsState a)
+updateLoc lprev lcur i s f = do
   d <- s #! lprev
   v <- f d
   d' <- lmInsert i v d
@@ -64,28 +69,41 @@ updateLoc f lprev lcur i s = do
 aiAssign :: Monad m => Lattice m a => AI m a
          -> Loc -- ^ previous location
          -> Assign -> AbsState a -> m (Loc, AbsState a)
-aiAssign AI{..} lprev (Assign lcur id e) =
-    updateLoc (aiE e) lprev lcur id
+aiAssign AI{..} lprev (Assign lcur id e) s =
+    updateLoc lprev lcur id s (aiE e)
 
 
--- | Abstract intepret  a phi node
--- TODO, BUG: Phi should probably just project out data
--- from the BB and copy it. Actually, phi can also just
--- be identity.
-aiPhi :: (Monad m, Lattice m a) => Phi -> M.Map BBId BB -> AbsState a -> m (AbsState a)
-aiPhi _ _ s = return s
-{-
-aiPhi phi bbid2bb s =
-    let (bbidl, idl) = phil phi
-        (bbidr, idr) = phir phi
-        dl = s #! (bbFinalLoc (bbid2bb M.! bbidl))
-        dr = s #! (bbFinalLoc (bbid2bb M.! bbidr))
-    in updateLoc
-         (const ((dl #! idl) `ljoin` (dr #! idr)))
-         (philoc phi)
-         (phiid phi)
-         s
--}
+aiPhi :: (Monad m, Lattice m a) => AI m a 
+  -> Loc -- ^ previous location
+  -> Phi -- ^ phinode
+  -> M.Map BBId BB
+  -> AbsState a
+  -> m (Loc, AbsState a)
+aiPhi AI{..} lprev phi bbid2bb s = do
+   let (bbidl, idl) = phil phi
+   let (bbidr, idr) = phir phi
+   updateLoc lprev (location phi) (name phi) s $ \d -> do
+     vl <- d #! idl
+     vr <- d #! idr
+     -- dl <- s #! (bbFinalLoc (bbid2bb M.! bbidl))
+     -- dr <- s #! (bbFinalLoc (bbid2bb M.! bbidr))
+     -- vl <- dl #! idl
+     -- vr <- dr #! idr
+     -- | If it's a phi loop, then allow the
+     -- | abstract interpreter to decide how to merge
+     --   values together.
+     (vl, vr) <- case phity phi of
+                  Phicond -> return (vl, vr)
+                  Philoop -> do
+                    -- | Perform phi transformation of left and right.
+                    -- Keep it seaparate for now.
+                    vl <- aiLoopPhiL d vl
+                    vr <- aiLoopPhiR d vr
+                    return (vl, vr)
+     vphi <- vl `ljoin` vr
+     return $ vphi
+
+
 
 -- | Get the predecessors of a given BB
 preds :: M.Map BBId BB -> BB -> [BB]
@@ -144,9 +162,13 @@ aiBB ai entryid bb bbid2bb sinit = do
             then aiStartState ai
             else aiMergeBB bb bbid2bb sinit
 
+    (lprev, sphi) <- foldM (\(lprev, s) phi ->
+                     (aiPhi ai lprev phi bbid2bb s))
+                   (location bb, sbb) (bbphis bb)
+
     (lprev, si) <- foldM (\(lprev, s) a ->
                      (aiAssign ai lprev a s))
-                   (location bb, sbb) (bbinsts bb)
+                   (lprev, sphi) (bbinsts bb)
     let bbid2loc = M.map location bbid2bb
     st <- aiTerm ai lprev (bbterm bb)  si
     return $ st
