@@ -190,6 +190,12 @@ handleEvent s@S{..} (VtyEvent (V.EvKey V.KLeft [])) =
 handleEvent s@S{..} (VtyEvent (V.EvKey V.KRight [])) =
     continue $ s { curiter = min (curiter + 1) niters }
 
+handleEvent s@S{..} (VtyEvent (V.EvKey V.KUp [V.MShift])) = 
+    continue $ s { l = L.listMoveBy (-2) l}
+
+handleEvent s@S{..} (VtyEvent (V.EvKey V.KDown [V.MShift])) = 
+    continue $ s { l = L.listMoveBy 2 l}
+
 
 handleEvent s (VtyEvent e) = do
   l' <- L.handleListEvent e (l s)
