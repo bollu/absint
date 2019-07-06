@@ -72,7 +72,8 @@ drawLoc (Loc l) = withAttr locAttr $ hLimit 3 $ padRight Max $  str $ show l
 -- | Draw the abstract info
 drawV :: V -> Widget N
 drawV v = withAttr vAttr $
-  (str . show . vp $ v) <=> (str . show . vs $ v)
+  (str $ "P: " <> (show . vp $ v)) <=>
+  (str $ "S: " <> (show . vs $ v))
 
 drawUINode :: (Id -> Maybe V)
   -> UINode -> Widget N

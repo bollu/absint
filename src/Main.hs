@@ -948,7 +948,7 @@ edefault = envFromParamList [(Id "p", 1)]
 programs :: [Program]
 programs = [passign
             , pif
-            -- (ploop, edefault)
+            , ploop
            ]
 
 lookupTrace :: [I.AbsState PolySCEV.V]
