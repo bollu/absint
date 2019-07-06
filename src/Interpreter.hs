@@ -159,7 +159,7 @@ aiBB :: Monad m => Lattice m a => AI m a
     -> M.Map BBId BB -> AbsState a -> m (AbsState a)
 aiBB ai entryid bb bbid2bb sinit = do
     sbb <-  if bbid bb == entryid
-            then aiStartState ai
+            then return sinit
             else aiMergeBB bb bbid2bb sinit
 
     (lprev, sphi) <- foldM (\(lprev, s) phi ->
@@ -217,7 +217,7 @@ aiProgramNTrace 0 _ _ s = return [s]
 aiProgramNTrace n ai p s = do
   s' <-  aiProgramOnce ai p s
   if s == s'
-  then return []
+  then return [s']
   else do
       ss <- aiProgramNTrace (n-1) ai p s'
       return $ ss ++ [s']

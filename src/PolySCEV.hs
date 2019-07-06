@@ -282,7 +282,7 @@ punion (P pl) (P pr) = do
             , pretty "commonSubsetEq: " <> pretty commonSubsetEq
             , pretty "---\n"]
         return $ P punion
-        -- Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+        Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
 
 snone :: IOG S
 snone = do
@@ -395,9 +395,22 @@ aiStart prog = do
                 (lmfromlist $ entry2v:id2sym)
 
 
+aiLoopL :: AbsDom V -> V ->IOG  V
+aiLoopL d a = return a
+  
+
+aiLoopR :: AbsDom V -> V ->IOG  V
+aiLoopR d a = return a
+
+  
 -- | Create the AI object
 mkAI :: Program -> AI IOG V
-mkAI p = AI { aiA = aia , aiT = ait, aiStartState = aiStart p }
+mkAI p = AI { aiA = aia
+            , aiT = ait
+            , aiStartState = aiStart p
+            , aiLoopPhiL = aiLoopL
+            , aiLoopPhiR = aiLoopR
+            }
 
 -- | Make the global context
 mkg :: Program -> IO G
