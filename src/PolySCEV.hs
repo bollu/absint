@@ -282,8 +282,9 @@ pacc init delta editid vivid = do
   mdelta <- liftDeltaPwaffToMap pwdelta editid
   -- | { [k] -> [[viv, x, y] -> [viv, x, y + k]] }
   (mdeltaPow, isexact) <- liftIO $ mapPower mdelta
+
   liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---"
+    [pretty "\n---[1]"
     , pretty "mdeltaPow: " <> pretty mdeltaPow
     , pretty "isexact: " <> pretty isexact]
 
@@ -293,14 +294,14 @@ pacc init delta editid vivid = do
              IslDimIn (fromIntegral 0) (fromIntegral 1)
 
   liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---"
+    [pretty "\n---[2]"
     , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
   -- | [k] -> { [viv, x, y] -> [viv, x, y + k] } (UNWRAPPED)
   mdeltaPow <- liftIO $ mapRange mdeltaPow >>= setUnwrap
 
   liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---"
+    [pretty "\n---[3]"
     , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
   id2isl <- gread gid2isl
@@ -311,7 +312,7 @@ pacc init delta editid vivid = do
   mdeltaPow <- liftIO $ mapEquate mdeltaPow IslDimParam 0 IslDimIn vivix
 
   liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---"
+    [pretty "\n---[4]"
     , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
   -- | Project out [k] (THE ONLY PARAMETER DIM!!!)
@@ -320,8 +321,10 @@ pacc init delta editid vivid = do
 
 
   liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---"
+    [pretty "\n---[5]"
     , pretty "mdeltaPow: " <> pretty mdeltaPow]
+
+  liftIO $ putStrLn $ "\n\n"
 
   -- | { [viv, x, y] -> [(viv), (x), (y + viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
   -- TODO: do we need an mpwa? (multi-pw-aff ?)
