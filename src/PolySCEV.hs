@@ -7,7 +7,7 @@
 module PolySCEV(V(..), AI, mkAI, runIOGTop) where
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..),
-  Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
+  Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint, Multipwaff)
 import qualified ISL.Native.Types as ISLTy (Id)
 import qualified Data.Set as S
 import Control.Monad.Fail
@@ -124,6 +124,11 @@ gislid id = do
 
 newtype P = P (Ptr Pwaff) deriving(Spaced)
 
+withP :: P -> (Ptr Pwaff -> IOG a) -> IOG a
+withP (P pw) f = do
+    pw <- liftIO $ pwaffCopy pw
+    f pw
+
 instance Eq P where
     P pw == P pw' = uio (pwaffIsEqual pw pw')
 
@@ -223,12 +228,10 @@ plt (P pw1) (P pw2) = do
 
 
 
-
--- https://github.com/bollu/absint/blob/06f37247b2aa9be1f5ee35e672380adae64febec/src/Main.hs
--- | Given a pwaff ([x, y] -> delta) and an id "y", make the map
--- [x, y] -> [x, y + delta]
-liftDeltaPwaffToMap :: Ptr Pwaff -> Id -> IOG (Ptr Map)
-liftDeltaPwaffToMap pwdelta liftid = do
+-- | Given a pwaff ([x, y] -> z) and an id "y", make the map
+-- [x, y] -> [(x), (z)]
+liftPwaffToMultipwaff :: Ptr Pwaff -> Id -> IOG (Ptr Multipwaff)
+liftPwaffToMultipwaff pw liftid = do
     -- { [x, y] }
     sp <- gsp
     -- { [x, y] -> [x, y] }
@@ -243,19 +246,33 @@ liftDeltaPwaffToMap pwdelta liftid = do
                       Just ix <- liftIO $ findDimById sp IslDimSet islid
                       (P pwsym) <- psym id
                       pwout <- if id == liftid
-                                 then liftIO $ pwaffAdd pwsym pwdelta -- [y] -> [y + delta]
-                                 else return pwsym -- [x] -> [x]
+                                 then return pw -- [x, y] -> [z]
+                                 else return pwsym -- [x, y] -> [x]
                       return pwout
-    liftIO $ forM pullback_pws (\p -> pwaffToStr p >>= putStrLn)
-    liftIO $ putStrLn $ "3"
+    liftIO $ do
+        putStrLn $ "\n pullback pws:\n"
+        forM pullback_pws (\p -> pwaffToStr p >>= putStrLn)
     ctx <- gread gctx
     -- | create a pw_aff_list
     listpws <- liftIO $ toListPwaff ctx pullback_pws
-    liftIO $ putStrLn $ "4"
+    liftIO $ putStrLn "\nvvvv\n"
     -- | create a multipw
     multipw <- liftIO $ multipwaffFromPwaffList mapspace listpws
-    liftIO $ putStrLn $ "5"
-    liftIO $  multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
+    liftIO $ putStrLn "\n^^^^\n"
+    -- liftIO $  multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
+    return multipw
+
+
+-- https://github.com/bollu/absint/blob/06f37247b2aa9be1f5ee35e672380adae64febec/src/Main.hs
+-- | Given a pwaff ([x, y] -> delta) and an id "y", make the map
+-- [x, y] -> [x, y + delta]
+liftDeltaPwaffToMap :: Ptr Pwaff -> Id -> IOG (Ptr Map)
+liftDeltaPwaffToMap pwdelta liftid = do
+    pwdelta <- liftIO $ pwaffCopy pwdelta
+    (P pwsym) <- psym liftid
+    -- [x, y] -> [(y + delta)]
+    pwlift <- liftIO $ pwaffAdd pwsym pwdelta
+    multipw <- liftPwaffToMultipwaff pwlift liftid
     liftIO $ mapFromMultiPwaff multipw
 
 
@@ -278,9 +295,9 @@ pacc init delta editid vivid = do
   -- now create the map that is [delta] -> [delta^k]
   let P pwdelta = delta
   pwdelta <- liftIO $ pwaffCopy pwdelta
-  -- | { [viv, x, y] -> [viv, x, y + 1] }
+  -- | { [viv, x, y] -> [viv, x, y + delta] }
   mdelta <- liftDeltaPwaffToMap pwdelta editid
-  -- | { [k] -> [[viv, x, y] -> [viv, x, y + k]] }
+  -- | { [k] -> [[viv, x, y] -> [viv, x, y + delta*k]] }
   (mdeltaPow, isexact) <- liftIO $ mapPower mdelta
 
   liftIO $ putDocW 80 $ vcat $
@@ -290,9 +307,9 @@ pacc init delta editid vivid = do
 
   -- | We can't accelerate
   if isexact == 0
-  then return init
+  then error $ "unable to accelerate exactly"
   else do
-    -- | [k] -> { [] -> [[viv, x, y] -> [viv, x, y + k]] }
+    -- | [k] -> { [] -> [[viv, x, y] -> [viv, x, y + delta*k]] }
     mdeltaPow <- liftIO $ mapMoveDims mdeltaPow IslDimParam (fromIntegral 0)
                IslDimIn (fromIntegral 0) (fromIntegral 1)
 
@@ -300,7 +317,7 @@ pacc init delta editid vivid = do
       [pretty "\n---[2]"
       , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
-    -- | [k] -> { [viv, x, y] -> [viv, x, y + k] } (UNWRAPPED)
+    -- | [k] -> { [viv, x, y] -> [viv, x, y + delta*k] } (UNWRAPPED)
     mdeltaPow <- liftIO $ mapRange mdeltaPow >>= setUnwrap
 
     liftIO $ putDocW 80 $ vcat $
@@ -311,7 +328,7 @@ pacc init delta editid vivid = do
     Just vivix <- liftIO $ findDimById mdeltaPow IslDimIn (id2isl OM.! vivid)
 
     -- | equate [k] to [viv]
-    -- | [k=viv] -> { [viv, x, y] -> [viv, x, y + k=viv] } (k=viv)
+    -- | [k=viv] -> { [viv, x, y] -> [viv, x, y + delta*(k=viv)] } (k=viv)
     mdeltaPow <- liftIO $ mapEquate mdeltaPow IslDimParam 0 IslDimIn vivix
 
     liftIO $ putDocW 80 $ vcat $
@@ -319,7 +336,7 @@ pacc init delta editid vivid = do
       , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
     -- | Project out [k] (THE ONLY PARAMETER DIM!!!)
-    -- | { [viv, x, y] -> [viv, x, y + viv] } (k is lost, only viv)
+    -- | { [viv, x, y] -> [viv, x, y + delta*viv] } (k is lost, only viv)
     mdeltaPow <- liftIO $ mapProjectOut mdeltaPow IslDimParam 0 1
 
 
@@ -329,19 +346,17 @@ pacc init delta editid vivid = do
 
     liftIO $ putStrLn $ "\n\n"
 
-    -- | { [viv, x, y] -> [(viv), (x), (y + viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
-    -- TODO: do we need an mpwa? (multi-pw-aff ?)
+    -- | { [viv, x, y] -> [(viv), (x), (y + delta*viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
     pwma <- liftIO $ pwmultiaffFromMap mdeltaPow
     liftIO $ putStrLn $ "PWMA:\n\n"
     liftIO $  pwmultiaffToStr pwma >>= putStrLn
 
 
     -- | Find the location where (y+viv) lives in the pwma, and extract it out
+    -- | { [viv, x, y] -> [(y + delta*viv)} (returns the accelerated value)
     Just editix <- liftIO $ findDimById mdeltaPow IslDimOut (id2isl OM.! editid)
     pw <- liftIO $ pwmultiaffGetPwaff pwma (fromIntegral editix)
     return $ P pw
-
-
 
 
 
@@ -433,8 +448,8 @@ prestrict (P pw) (S s) = do
 
 
 -- | Take union. In overlapping area, pick maximum
-punionmax :: P -> P -> IOG P
-punionmax (P p1) (P p2) = do
+punionmax__ :: P -> P -> IOG P
+punionmax__ (P p1) (P p2) = do
     p1 <- liftIO $ pwaffCopy p1
     p2 <- liftIO $ pwaffCopy p2
     pu <- liftIO $ pwaffUnionMax p1 p2
@@ -448,13 +463,9 @@ pinvolves (P pw) id = do
     Just involves <- liftIO $ pwaffInvolvesDims pw IslDimIn ix 1
     return $ involves
 
-
--- | take union
-paccunion :: Maybe (Id, Id)  -- ^ Id of value to accelerate, and the ID of the viv dimension
-          -> P
-          -> P
-          -> IOG P
-paccunion maccid pl pr = do
+-- | Union pwaffs ensuring that they are equal on their overlapping domain
+punioneq :: P -> P -> IOG P
+punioneq pl pr = do
     dl <- pdomain pl
     dr <- pdomain pr
 
@@ -464,22 +475,96 @@ paccunion maccid pl pr = do
     commonSubsetEq <- ssubset dcommon deq
     let commonEqualEq = dcommon == deq
 
-    paccunion <- punionmax pl pr
+    punion <- punionmax__ pl pr
 
     if commonSubsetEq
     then  do
-      return $ paccunion
+      return $ punion
+    else do
+      dneq <- scomplement deq
+
+      liftIO $ putDocW 80 $ vcat $
+          [pretty "\n---"
+          , pretty "pl: " <> pretty pl
+          , pretty "dl: " <> pretty dl
+          , pretty "-----"
+          , pretty "pr: " <> pretty pr
+          , pretty "dr: " <> pretty dr
+          , pretty "-----"
+          , pretty "dcommon: " <> pretty dcommon
+          , pretty "deq: " <> pretty deq
+          , pretty "dNEQ: " <> pretty dneq
+          , pretty "commonEqualEq: " <> pretty commonEqualEq
+          , pretty "commonSubsetEq: " <> pretty commonSubsetEq
+          , pretty "---\n"]
+      Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+
+
+-- | Project a dimension out from a pwaff and return the new pwaff
+-- There is no guarantee that this will continue to be a pwaff, so be
+-- careful.
+pproject :: Id -> P -> IOG P
+pproject id (P pw) = do
+    pw <- liftIO $ pwaffCopy pw
+    m <- liftIO $ mapFromPwaff pw
+    islid <- gislid id
+    Just ix <- liftIO $ findDimById m IslDimIn islid
+    -- | remove the dimension
+    m <- liftIO $ mapProjectOut m IslDimIn ix 1
+    -- | Add back the dimension and set the id
+    m <- liftIO $ mapInsertDims m IslDimIn (ix - 1) 1
+    -- | set the ID
+    m <- liftIO $ mapSetDimId m IslDimIn ix islid
+
+    pw <- liftIO $ pwaffFromMap m
+    return $ P pw
+
+-- | Get the pwaff as it was at the zero parameter.
+pEvalParam0 :: Id -> P -> IOG P
+pEvalParam0 id p = do
+  -- { id =  0 }
+  sid0 <-  suniv >>= \s -> sparamzero s id
+  -- { p : id = 0 }
+  pid0 <- prestrict p sid0
+  -- { project out the 'id' dimension
+  pproject id pid0
+
+-- | take union, accelerating when pwaffs overlap and disagree
+punionacc ::
+          Id -- ^ ID of value to accelerate
+          -> Id -- ^ ID of viv dimension
+          -> P
+          -> P
+          -> IOG P
+punionacc toaccid vivid pl pr = do
+    dl <- pdomain pl
+    dr <- pdomain pr
+
+    dcommon <- sintersect dl dr
+    deq <- peqset pl pr
+
+    commonSubsetEq <- ssubset dcommon deq
+    let commonEqualEq = dcommon == deq
+
+    if commonSubsetEq
+    then  do
+      punionmax__ pl pr
     else do
       dneq <- scomplement deq
 
       -- | The only place where we can have disagreement
       -- between old and new values is along a backedge.
       -- So accelerate the backedge.
+      -- TODO, NOTE: we assume that pr is farther along than pl.
+      -- This can be verified by inspecting their minimum value along the
+      -- viv dimension
       delta <- psub pr pl
 
       liftIO $ putDocW 80 $ vcat $
           [pretty "\n---"
-          , pretty "loopid: " <> pretty maccid
+          , pretty "toaccid:  " <> pretty toaccid
+          , pretty "vivid:  " <> pretty vivid
+          , pretty "\n---"
           , pretty "\n---"
           , pretty "pl: " <> pretty pl
           , pretty "dl: " <> pretty dl
@@ -494,16 +579,37 @@ paccunion maccid pl pr = do
           , pretty "commonSubsetEq: " <> pretty commonSubsetEq
           , pretty "---\n"
           , pretty "delta: " <> pretty delta]
-      -- | We need to provide an ID
-      let Just (toaccid, vivid) = maccid
 
+      -- liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
+      -- | deltapow: [viv, x, toacc] -> [x, toacc + delta * viv]
+      deltapow <- pacc pl delta toaccid vivid
+
+      liftIO $ putDocW 80 $ pretty "\ndeltapow: " <> pretty deltapow
+
+
+      -- | Now find the value that is in the pl at (viv=0)
+      -- Replace the `toaccid` dimension in `deltapow` with `plviv0`
+      plviv0 <- pEvalParam0 vivid pl
+
+
+      liftIO $ putDocW 80 $ pretty "\nplviv0: " <> pretty plviv0
+
+      -- | [viv, x, toacc] -> [(viv), (x), (beginvalue)]
+      mpw_plviv0 <- withP plviv0 $ \p -> liftPwaffToMultipwaff p toaccid
+
+      liftIO $ multipwaffToStr mpw_plviv0 >>= \s ->  putDocW 80 $ pretty "\nmpw_plviv0: " <> pretty  s <> pretty "\n"
+      -- | substitute beginvalue
+      subst <- withP deltapow $ \p ->
+                    liftIO $ pwaffPullbackMultipwaff p mpw_plviv0
+      return $ P subst
+
+      {-
       -- check if either left or right involve the vivid. If only one of
       -- them does, then use that. Otherwise, fail.
       -- If they are both accelerated, then increment the right's parameter dim by 1 and take
       -- | involves is not a sane way to check for this, because involves
       -- | also checks the constraints.
       (linvolves, rinvolves) <- liftA2 (,) (pinvolves pl vivid) (pinvolves pr vivid)
-      -- liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
       case (False, False) of
         (True, True) -> do
                           pr' <- pparamincr' pr vivid
@@ -519,11 +625,10 @@ paccunion maccid pl pr = do
                           if delta /= pzero
                           then Control.Monad.Fail.fail $ "delta is not zero!"
                           else return $ pr
-
-
         (True, False) -> return $ pl
         (False, True) -> return $ pr
         (False, False) -> pacc pl delta toaccid vivid
+        -}
 
 
 
@@ -639,15 +744,16 @@ instance Lattice IOG V where
   ljoin vl@(V p1 s1 bbid1 vid1) (V p2 s2 bbid2 vid2) = do
       liftIO $ putStrLn $ "==== unioning: " <> show vid1 <> "   " <> show vid2 <> "====="
       bbid <- ljoin bbid1 bbid2
+      -- llvid :: LeftLean If
       vid <- ljoin vid1 vid2
+      s <- ljoin s1 s2
 
-      let mvidbbid = liftA2 (,) (unLeftLean vid) bbid
-      if vid1 == vid2
-      then return vl
-      else do
-        p <-  paccunion mvidbbid p1 p2
-        s <- ljoin s1 s2
-        return $ V p s bbid vid
+      p <-  case (bbid, vid) of
+                (Just bbid, LeftLean (Just vid)) -> do
+                    punionacc vid bbid p1 p2
+                _ -> punioneq p1 p2
+
+      return $ V p s bbid vid
 
 
 -- | Interpret an expression
@@ -723,17 +829,19 @@ aiLoopL phi d vl = do
     let phiid = name phi
     let loopid = phiownbbid phi
     d <- pdomain (vp vl)
-     -- | d : viv = 0
+     -- |  {viv = 0}
     dviv0 <- sparamzero d loopid
-    -- | d^c: viv > 0
+    -- | { viv > 0 }
     dvivgt0 <- sparamgt0 d loopid
 
-    -- | phi: viv > 0
+    -- | { phiid : viv > 0 }
     sym <- psym phiid
     sym <- prestrict sym dvivgt0
 
+    -- | { vl : viv = 0 }
     p <- prestrict (vp vl) dviv0
-    p <- paccunion Nothing p sym
+    -- | { vl : viv = 0; phiid : viv > 0 }
+    p <- punioneq p sym
 
     return $ V p (vs vl) (Just (phiownbbid phi)) (mkLeftLean (name phi))
 

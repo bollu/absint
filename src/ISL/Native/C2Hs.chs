@@ -127,14 +127,22 @@ mapPower m = do
 {#fun isl_map_add_dims as mapAddDims
   { id `Ptr Map'
   , fromDimType `DimType'
-  , id `CUInt'
+  , fromIntegral `Int'
+  } -> `Ptr Map' id #}
+
+
+{#fun isl_map_insert_dims as mapInsertDims
+  { id `Ptr Map'
+  , fromDimType `DimType'
+  , fromIntegral `Int'
+  , fromIntegral `Int'
   } -> `Ptr Map' id #}
 
 {#fun isl_map_project_out as mapProjectOut
   { id `Ptr Map'
   , fromDimType `DimType'
-  , id `CUInt'
-  , id `CUInt'
+  , fromIntegral `Int'
+  , fromIntegral `Int'
   } -> `Ptr Map' id #}
 
 {#fun isl_map_transitive_closure as mapTransitiveClosure
@@ -206,7 +214,7 @@ mapPower m = do
 {#fun isl_map_set_dim_id as mapSetDimId
   { id `Ptr Map'
   , fromDimType `DimType'
-  , fromIntegral `CInt'
+  , fromIntegral `Int'
   , id `Ptr Id'
   } -> `Ptr Map' id #}
 
