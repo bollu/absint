@@ -11,6 +11,7 @@ import ISL.Native.Types (DimType(..),
 import qualified ISL.Native.Types as ISLTy (Id)
 import qualified Data.Set as S
 import Control.Monad.Fail
+import Control.Applicative
 import Data.Traversable
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
@@ -61,11 +62,23 @@ instance (Show a, Eq a, Monad m, MonadFail m) => Lattice m (Maybe a) where
             "maybe not equal: " <> show x <> " " <> show y
         else return (Just x)
 
+-- | Maybe with left-leaning union
+newtype LeftLean a = LeftLean { unLeftLean :: (Maybe a) } deriving(Eq, Show)
+
+mkLeftLean :: a -> LeftLean a
+mkLeftLean = LeftLean . Just
+
+instance (Show a, Eq a, Monad m, MonadFail m) => Lattice m (LeftLean a) where
+    lbot = return $ LeftLean Nothing
+    ljoin (LeftLean Nothing) x = return x
+    ljoin x _ = return x
+
 -- | Abstract values, and
-data V = V { vp :: P, vs :: S, vloop :: Maybe Id } deriving(Eq)
+data V = V { vp :: P, vs :: S, vloop :: Maybe Id, vid :: LeftLean Id } deriving(Eq)
 
 instance Show V where
-    show (V p s id ) = show p <> show s <> show id
+    show (V p s bbid vid) = show p <> " " <> show s <> " " <>
+                            show bbid <> " " <>show vid
 
 -- | Global context
 data G = G { gctx :: Ptr Ctx
@@ -209,9 +222,121 @@ plt (P pw1) (P pw2) = do
     return $ P pwlt
 
 
--- | pacc(init, delta, kid) = { [k] -> init + delta * k }
-pacc :: P -> P -> Id -> IOG P
-pacc init delta id = return init
+
+
+-- https://github.com/bollu/absint/blob/06f37247b2aa9be1f5ee35e672380adae64febec/src/Main.hs
+-- | Given a pwaff ([x, y] -> delta) and an id "y", make the map
+-- [x, y] -> [x, y + delta]
+liftDeltaPwaffToMap :: Ptr Pwaff -> Id -> IOG (Ptr Map)
+liftDeltaPwaffToMap pwdelta liftid = do
+    -- { [x, y] }
+    sp <- gsp
+    -- { [x, y] -> [x, y] }
+    mapspace <- liftIO $ do
+                    sp <- spaceCopy sp
+                    sp' <- spaceCopy sp
+                    spaceMapFromDomainAndRange  sp sp'
+
+    id2isl <- gread gid2isl
+    -- [Ptr Pwaff]
+    pullback_pws <- forM  (OM.toList id2isl) $ \(id, islid) ->  do
+                      Just ix <- liftIO $ findDimById sp IslDimSet islid
+                      (P pwsym) <- psym id
+                      pwout <- if id == liftid
+                                 then liftIO $ pwaffAdd pwsym pwdelta -- [y] -> [y + delta]
+                                 else return pwsym -- [x] -> [x]
+                      return pwout
+    liftIO $ forM pullback_pws (\p -> pwaffToStr p >>= putStrLn)
+    liftIO $ putStrLn $ "3"
+    ctx <- gread gctx
+    -- | create a pw_aff_list
+    listpws <- liftIO $ toListPwaff ctx pullback_pws
+    liftIO $ putStrLn $ "4"
+    -- | create a multipw
+    multipw <- liftIO $ multipwaffFromPwaffList mapspace listpws
+    liftIO $ putStrLn $ "5"
+    liftIO $  multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
+    liftIO $ mapFromMultiPwaff multipw
+
+
+
+-- eg. y: { [viv, x, y] -> [100] }
+--     delta: { [viv, x, y] -> [1] }
+--     acc: { [viv, x, y] -> y + viv }
+pacc :: P  -- ^ Init map
+     -> P -- ^ Delta map
+     -> Id -- ^ Dimension to apply the delta to (y)
+     -> Id -- ^ name of the viv dimension (viv)
+     -> IOG P
+pacc init delta editid vivid = do
+  liftIO $ putDocW 80 $ vcat $
+    [pretty "\n---"
+    , pretty "init: " <> pretty init
+    , pretty "delta: " <> pretty delta
+    , pretty "\n---"]
+  -- Control.Monad.Fail.fail $ "debug"
+  -- now create the map that is [delta] -> [delta^k]
+  let P pwdelta = delta
+  pwdelta <- liftIO $ pwaffCopy pwdelta
+  -- | { [viv, x, y] -> [viv, x, y + 1] }
+  mdelta <- liftDeltaPwaffToMap pwdelta editid
+  -- | { [k] -> [[viv, x, y] -> [viv, x, y + k]] }
+  (mdeltaPow, isexact) <- liftIO $ mapPower mdelta
+  liftIO $ putDocW 80 $ vcat $
+    [pretty "\n---"
+    , pretty "mdeltaPow: " <> pretty mdeltaPow
+    , pretty "isexact: " <> pretty isexact]
+
+
+  -- | [k] -> { [] -> [[viv, x, y] -> [viv, x, y + k]] }
+  mdeltaPow <- liftIO $ mapMoveDims mdeltaPow IslDimParam (fromIntegral 0)
+             IslDimIn (fromIntegral 0) (fromIntegral 1)
+
+  liftIO $ putDocW 80 $ vcat $
+    [pretty "\n---"
+    , pretty "mdeltaPow: " <> pretty mdeltaPow]
+
+  -- | [k] -> { [viv, x, y] -> [viv, x, y + k] } (UNWRAPPED)
+  mdeltaPow <- liftIO $ mapRange mdeltaPow >>= setUnwrap
+
+  liftIO $ putDocW 80 $ vcat $
+    [pretty "\n---"
+    , pretty "mdeltaPow: " <> pretty mdeltaPow]
+
+  id2isl <- gread gid2isl
+  Just vivix <- liftIO $ findDimById mdeltaPow IslDimIn (id2isl OM.! vivid)
+
+  -- | equate [k] to [viv]
+  -- | [k=viv] -> { [viv, x, y] -> [viv, x, y + k=viv] } (k=viv)
+  mdeltaPow <- liftIO $ mapEquate mdeltaPow IslDimParam 0 IslDimIn vivix
+
+  liftIO $ putDocW 80 $ vcat $
+    [pretty "\n---"
+    , pretty "mdeltaPow: " <> pretty mdeltaPow]
+
+  -- | Project out [k] (THE ONLY PARAMETER DIM!!!)
+  -- | { [viv, x, y] -> [viv, x, y + viv] } (k is lost, only viv)
+  mdeltaPow <- liftIO $ mapProjectOut mdeltaPow IslDimParam 0 1
+
+
+  liftIO $ putDocW 80 $ vcat $
+    [pretty "\n---"
+    , pretty "mdeltaPow: " <> pretty mdeltaPow]
+
+  -- | { [viv, x, y] -> [(viv), (x), (y + viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
+  -- TODO: do we need an mpwa? (multi-pw-aff ?)
+  pwma <- liftIO $ pwmultiaffFromMap mdeltaPow
+  liftIO $ putStrLn $ "PWMA:\n\n"
+  liftIO $  pwmultiaffToStr pwma >>= putStrLn
+
+
+  -- | Find the location where (y+viv) lives in the pwma, and extract it out
+  Just editix <- liftIO $ findDimById mdeltaPow IslDimOut (id2isl OM.! editid)
+  pw <- liftIO $ pwmultiaffGetPwaff pwma (fromIntegral editix)
+  return $ P pw
+
+
+
 
 
 -- | domain of a P
@@ -311,7 +436,10 @@ punionmax (P p1) (P p2) = do
 
 
 -- | take union
-paccunion :: Maybe Id -> P -> P -> IOG P
+paccunion :: Maybe (Id, Id)  -- ^ Id of value to accelerate, and the ID of the viv dimension
+          -> P
+          -> P
+          -> IOG P
 paccunion maccid pl pr = do
     dl <- pdomain pl
     dr <- pdomain pr
@@ -351,9 +479,10 @@ paccunion maccid pl pr = do
       -- So accelerate the backedge.
       delta <- psub pr pl
       -- | We need to provide an ID
-      let Just accid = maccid
-      out <- pacc pl delta accid
-      Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+      let Just (toaccid, vivid) = maccid
+      out <- pacc pl delta toaccid vivid
+      return $ out
+      -- Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
 
 
 snone :: IOG S
@@ -436,34 +565,41 @@ instance Lattice IOG S where
   lbot  =  snone
   ljoin s1 s2 = sunion s1 s2
 
+
+
 instance Lattice IOG V where
-  lbot  = V <$> pnone <*> lbot <*> lbot
-  ljoin (V p1 s1 bbid1) (V p2 s2 bbid2) = do
-      id <- ljoin bbid1 bbid2
-      p <-  paccunion id p1 p2
+  lbot  = V <$> pnone <*> lbot <*> lbot <*> lbot
+  ljoin (V p1 s1 bbid1 vid1) (V p2 s2 bbid2 vid2) = do
+      bbid <- ljoin bbid1 bbid2
+      vid <- ljoin vid1 vid2
+
+      let mvidbbid = liftA2 (,) (unLeftLean vid) bbid
+
+
+      p <-  paccunion mvidbbid p1 p2
       s <- ljoin s1 s2
-      return $ V p s id
+      return $ V p s bbid vid
 
 
 -- | Interpret an expression
 aie :: Expr -> AbsDom V -> IOG V
-aie  (EInt i) _ = V <$> pconst i <*> lbot <*> lbot
+aie  (EInt i) _ = V <$> pconst i <*> lbot <*> lbot <*> lbot
 aie  (EId id) d = d #! id
 aie  (EBinop op id id') d = do
-  (V p _ _ ) <- d #! id
-  (V p' _ _) <- d #! id'
+  p <- vp <$> d #! id
+  p' <- vp <$> d #! id'
   case op of
-    Add -> V <$> padd p p' <*> lbot <*> lbot
-    Lt -> V <$> plt p p' <*> lbot <*> lbot
+    Add -> V <$> padd p p' <*> lbot <*> lbot <*> lbot
+    Lt -> V <$> plt p p' <*> lbot <*> lbot <*> lbot
 
 -- | Interpret an assignment
 aia :: Assign -> AbsDom V -> IOG V
 aia a d = do
-  V _ scur _ <- d #! (assignownbbid a)
-  V p s _ <- aie (assignexpr a) d
+  sbb <- vs <$> d #! (assignownbbid a)
+  V p s _ _ <- aie (assignexpr a) d
   -- | restrict the value to the current BB domain
-  p <- prestrict p scur
-  return $ V p s Nothing
+  p <- prestrict p sbb
+  return $ V p s Nothing (mkLeftLean (name a))
 
 
 -- | Interpret a terminator.
@@ -477,15 +613,15 @@ ait (Br _ bbcur _) bbidnext d = d #! bbcur
 
 ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     -- | execution condtions of BB
-    V _ scur _ <- d #! bbcur
+    scur <- vs <$> d #! bbcur
     -- | current pwaff
-    V pc _ _ <- d #! c
+    pc  <- vp <$> d #! c
     sthen <- ptrueset pc
     selse <- pfalseset pc
     if bbidnext == bbl
-    then  V <$> pnone <*> (ptrueset pc) <*> lbot
+    then  V <$> pnone <*> (ptrueset pc) <*> lbot <*> lbot
     else if bbidnext == bbr
-    then V <$> pnone <*> (pfalseset pc) <*> lbot
+    then V <$> pnone <*> (pfalseset pc) <*> lbot <*> lbot
     else error $ "condbr only has bbl and bbr as successors"
 
 
@@ -501,12 +637,13 @@ aiStart prog = do
     id2sym <- forM (S.toList ps) $ \id -> do
                     p <- psym id
                     s <- lbot
-                    return $ (id, V p s Nothing)
+                    return $ (id, V p s Nothing (mkLeftLean id))
     -- | Map the entry block to full domain
     entry2v <- do
                  p <- pnone
                  s <- suniv
-                 return (progEntryId prog, V p s Nothing)
+                 let id = progEntryId prog
+                 return (id, V p s Nothing (mkLeftLean id))
     return $ lmsingleton (progEntryLoc prog)
                 (lmfromlist $ entry2v:id2sym)
 
@@ -514,19 +651,22 @@ aiStart prog = do
 -- | AI the left value in the loop
 aiLoopL :: Phi -> AbsDom V -> V -> IOG  V
 aiLoopL phi d vl = do
+    let phiid = name phi
+    let loopid = phiownbbid phi
     d <- pdomain (vp vl)
      -- | d : viv = 0
-    dviv0 <- sparamzero d (phiownbbid phi)
-    -- | d^c: viv >= 0 | viv < 0
-    dvivgt0 <- sparamgt0 d (phiownbbid phi)
+    dviv0 <- sparamzero d loopid
+    -- | d^c: viv > 0
+    dvivgt0 <- sparamgt0 d loopid
 
-    sym <- psym (phiownbbid phi)
+    -- | phi: viv > 0
+    sym <- psym phiid
     sym <- prestrict sym dvivgt0
 
     p <- prestrict (vp vl) dviv0
     p <- paccunion Nothing p sym
 
-    return $ V p (vs vl) (Just (phiownbbid phi))
+    return $ V p (vs vl) (Just (phiownbbid phi)) (mkLeftLean (name phi))
 
 
 

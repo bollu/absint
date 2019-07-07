@@ -113,10 +113,15 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , id `Ptr Map'
   } -> `Bool' #}
 
-{#fun isl_map_power as mapPower
+{#fun isl_map_power as mapPower_
   { id `Ptr Map'
   , alloca- `CInt' peek*
   } -> `Ptr Map' id #}
+
+mapPower :: Ptr Map -> IO (PtrMap, Int)
+mapPower m = do
+    (p, exact) <- mapPower_ m
+    return $ (p, fromIntegral exact)
 
 
 {#fun isl_map_add_dims as mapAddDims
@@ -177,6 +182,11 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   } -> `Ptr Map' id #}
 
 
+{#fun isl_map_from_multi_pw_aff as mapFromMultiPwaff
+  { id `Ptr Multipwaff'
+  } -> `Ptr Map' id #}
+
+
 {#fun isl_map_set_tuple_name as mapSetTupleName
   { id `Ptr Map'
   , fromDimType `DimType'
@@ -231,19 +241,19 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Map' } -> `Ptr Map' id #}
 
 
-{#fun isl_map_wrap as mapWrap 
+{#fun isl_map_wrap as mapWrap
   { id `Ptr Map'  } -> `Ptr Set' id #}
 
 {#fun isl_map_from_domain_and_range as mapFromDomainAndRange
   { id `Ptr Set', id `Ptr Set' } -> `Ptr Map' id #}
 
 {#fun isl_map_apply_range as mapApplyRange
-  { id `Ptr Map', 
+  { id `Ptr Map',
     id `Ptr Map' } -> `Ptr Map' id #}
 
 
 {#fun isl_map_apply_domain as mapApplyDomain
-  { id `Ptr Map', 
+  { id `Ptr Map',
     id `Ptr Map' } -> `Ptr Map' id #}
 
 
@@ -254,7 +264,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 -- 	enum isl_dim_type src_type, unsigned src_pos, unsigned n);
 
 {#fun isl_map_move_dims as mapMoveDims
-  { id `Ptr Map', 
+  { id `Ptr Map',
   fromDimType `DimType', id `CUInt',
   fromDimType `DimType', id `CUInt',
   id `CUInt' } -> `Ptr Map' id #}
@@ -262,6 +272,13 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 {#fun isl_map_add_constraint as mapAddConstraint
   { id `Ptr Map'
   , id `Ptr Constraint'
+  } -> `Ptr Map' id #}
+
+
+{#fun isl_map_equate as mapEquate
+  { id `Ptr Map'
+  , fromDimType `DimType', fromIntegral `Int'
+  , fromDimType `DimType', fromIntegral `Int'
   } -> `Ptr Map' id #}
 
 
@@ -295,7 +312,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Set'
   } -> `String' #}
 
-{#fun isl_set_unwrap as setUnwrap 
+{#fun isl_set_unwrap as setUnwrap
   { id `Ptr Set' } -> `Ptr Map' id #}
 
 
@@ -312,7 +329,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   , id `Ptr Id'
   } -> `Ptr Set' id #}
 
-  
+
 {#fun isl_set_coalesce as setCoalesce
   { id `Ptr Set'
   } -> `Ptr Set' id #}
@@ -324,13 +341,13 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
 
 
 {#fun isl_set_is_subset as setIsSubset
-  { id `Ptr Set' 
+  { id `Ptr Set'
   , id `Ptr Set'
   } -> `Maybe Bool' fromRawIslBool #}
 
 
 {#fun isl_set_is_equal as setIsEqual
-  { id `Ptr Set' 
+  { id `Ptr Set'
   , id `Ptr Set'
   } -> `Maybe Bool' fromRawIslBool #}
 
@@ -418,7 +435,7 @@ idAlloc ctx s = idAlloc_ ctx s nullPtr
   { id `Ptr Space', fromDimType `DimType' } -> `CInt' fromIntegral #}
 
 spaceDim :: Ptr Space -> DimType -> IO Int
-spaceDim sp dt = fromIntegral <$> spaceDim_ sp dt 
+spaceDim sp dt = fromIntegral <$> spaceDim_ sp dt
 
 
 
@@ -640,7 +657,7 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
 
 
 -- =================
--- pwaff list 
+-- pwaff list
 
 
 {#fun isl_pw_aff_list_alloc as pwaffListAlloc
@@ -657,7 +674,7 @@ toListPwaff ctx pws = do
     l <- pwaffListAlloc ctx 0
     foldM (\l pw -> pwaffListAdd l pw) l pws
 
-{#fun isl_multi_pw_aff_from_pw_aff_list as multipwaffFromPwaffList 
+{#fun isl_multi_pw_aff_from_pw_aff_list as multipwaffFromPwaffList
 { id `Ptr Space', id `Ptr (List Pwaff)' } -> `Ptr Multipwaff' id #}
 
 
@@ -690,18 +707,18 @@ pwaffInt :: Ptr Ctx -> Ptr LocalSpace -> Int -> IO (Ptr Pwaff)
 pwaffInt ctx ls i = do
     aff <- affInt ctx ls i
     pwaffFromAff aff
-    
+
 spaceSetAlloc :: Ptr Ctx -> Int -> Int -> IO (Ptr Space)
-spaceSetAlloc ctx nparam ndim = 
+spaceSetAlloc ctx nparam ndim =
     spaceSetAlloc_ ctx (fromIntegral nparam) (fromIntegral ndim)
 
 localSpaceSetAlloc :: Ptr Ctx -> Int -> Int -> IO (Ptr LocalSpace)
-localSpaceSetAlloc ctx nparam ndim = 
+localSpaceSetAlloc ctx nparam ndim =
     spaceSetAlloc ctx nparam ndim >>= localSpaceFromSpace
 
 
 spaceAlloc :: Ptr Ctx -> Int -> Int -> Int -> IO (Ptr Space)
-spaceAlloc ctx nparam nin nout = 
+spaceAlloc ctx nparam nin nout =
     spaceAlloc_ ctx (fromIntegral nparam) (fromIntegral nin) (fromIntegral nout)
 
 
