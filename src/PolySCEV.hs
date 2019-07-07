@@ -288,55 +288,58 @@ pacc init delta editid vivid = do
     , pretty "mdeltaPow: " <> pretty mdeltaPow
     , pretty "isexact: " <> pretty isexact]
 
+  -- | We can't accelerate
+  if isexact == 0
+  then return init
+  else do
+    -- | [k] -> { [] -> [[viv, x, y] -> [viv, x, y + k]] }
+    mdeltaPow <- liftIO $ mapMoveDims mdeltaPow IslDimParam (fromIntegral 0)
+               IslDimIn (fromIntegral 0) (fromIntegral 1)
 
-  -- | [k] -> { [] -> [[viv, x, y] -> [viv, x, y + k]] }
-  mdeltaPow <- liftIO $ mapMoveDims mdeltaPow IslDimParam (fromIntegral 0)
-             IslDimIn (fromIntegral 0) (fromIntegral 1)
+    liftIO $ putDocW 80 $ vcat $
+      [pretty "\n---[2]"
+      , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
-  liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---[2]"
-    , pretty "mdeltaPow: " <> pretty mdeltaPow]
+    -- | [k] -> { [viv, x, y] -> [viv, x, y + k] } (UNWRAPPED)
+    mdeltaPow <- liftIO $ mapRange mdeltaPow >>= setUnwrap
 
-  -- | [k] -> { [viv, x, y] -> [viv, x, y + k] } (UNWRAPPED)
-  mdeltaPow <- liftIO $ mapRange mdeltaPow >>= setUnwrap
+    liftIO $ putDocW 80 $ vcat $
+      [pretty "\n---[3]"
+      , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
-  liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---[3]"
-    , pretty "mdeltaPow: " <> pretty mdeltaPow]
+    id2isl <- gread gid2isl
+    Just vivix <- liftIO $ findDimById mdeltaPow IslDimIn (id2isl OM.! vivid)
 
-  id2isl <- gread gid2isl
-  Just vivix <- liftIO $ findDimById mdeltaPow IslDimIn (id2isl OM.! vivid)
+    -- | equate [k] to [viv]
+    -- | [k=viv] -> { [viv, x, y] -> [viv, x, y + k=viv] } (k=viv)
+    mdeltaPow <- liftIO $ mapEquate mdeltaPow IslDimParam 0 IslDimIn vivix
 
-  -- | equate [k] to [viv]
-  -- | [k=viv] -> { [viv, x, y] -> [viv, x, y + k=viv] } (k=viv)
-  mdeltaPow <- liftIO $ mapEquate mdeltaPow IslDimParam 0 IslDimIn vivix
+    liftIO $ putDocW 80 $ vcat $
+      [pretty "\n---[4]"
+      , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
-  liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---[4]"
-    , pretty "mdeltaPow: " <> pretty mdeltaPow]
-
-  -- | Project out [k] (THE ONLY PARAMETER DIM!!!)
-  -- | { [viv, x, y] -> [viv, x, y + viv] } (k is lost, only viv)
-  mdeltaPow <- liftIO $ mapProjectOut mdeltaPow IslDimParam 0 1
-
-
-  liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---[5]"
-    , pretty "mdeltaPow: " <> pretty mdeltaPow]
-
-  liftIO $ putStrLn $ "\n\n"
-
-  -- | { [viv, x, y] -> [(viv), (x), (y + viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
-  -- TODO: do we need an mpwa? (multi-pw-aff ?)
-  pwma <- liftIO $ pwmultiaffFromMap mdeltaPow
-  liftIO $ putStrLn $ "PWMA:\n\n"
-  liftIO $  pwmultiaffToStr pwma >>= putStrLn
+    -- | Project out [k] (THE ONLY PARAMETER DIM!!!)
+    -- | { [viv, x, y] -> [viv, x, y + viv] } (k is lost, only viv)
+    mdeltaPow <- liftIO $ mapProjectOut mdeltaPow IslDimParam 0 1
 
 
-  -- | Find the location where (y+viv) lives in the pwma, and extract it out
-  Just editix <- liftIO $ findDimById mdeltaPow IslDimOut (id2isl OM.! editid)
-  pw <- liftIO $ pwmultiaffGetPwaff pwma (fromIntegral editix)
-  return $ P pw
+    liftIO $ putDocW 80 $ vcat $
+      [pretty "\n---[5]"
+      , pretty "mdeltaPow: " <> pretty mdeltaPow]
+
+    liftIO $ putStrLn $ "\n\n"
+
+    -- | { [viv, x, y] -> [(viv), (x), (y + viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
+    -- TODO: do we need an mpwa? (multi-pw-aff ?)
+    pwma <- liftIO $ pwmultiaffFromMap mdeltaPow
+    liftIO $ putStrLn $ "PWMA:\n\n"
+    liftIO $  pwmultiaffToStr pwma >>= putStrLn
+
+
+    -- | Find the location where (y+viv) lives in the pwma, and extract it out
+    Just editix <- liftIO $ findDimById mdeltaPow IslDimOut (id2isl OM.! editid)
+    pw <- liftIO $ pwmultiaffGetPwaff pwma (fromIntegral editix)
+    return $ P pw
 
 
 
@@ -497,16 +500,21 @@ paccunion maccid pl pr = do
       -- check if either left or right involve the vivid. If only one of
       -- them does, then use that. Otherwise, fail.
       -- If they are both accelerated, then increment the right's parameter dim by 1 and take
+      -- | involves is not a sane way to check for this, because involves
+      -- | also checks the constraints.
       (linvolves, rinvolves) <- liftA2 (,) (pinvolves pl vivid) (pinvolves pr vivid)
-      liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
-      case (linvolves, rinvolves) of
+      -- liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
+      case (False, False) of
         (True, True) -> do
-                          pr <- pparamincr' pr vivid
-                          delta <- psub pr pl
+                          pr' <- pparamincr' pr vivid
+                          delta <- psub pr' pl
                           liftIO $ putDocW 80 $ vcat $
                               [pretty "\n---TRUE TRUE ---\n"
-                              , pretty "incr: " <> pretty pr
-                              , pretty "delta: " <> pretty delta]
+                              , pretty "pl: " <> pretty pl
+                              , pretty "pr: " <> pretty pr
+                              , pretty "pr': " <> pretty pr'
+                              , pretty "delta: " <> pretty delta
+                              , pretty "--"]
                           pzero <- pconst 0
                           if delta /= pzero
                           then Control.Monad.Fail.fail $ "delta is not zero!"
@@ -628,16 +636,18 @@ instance Lattice IOG S where
 
 instance Lattice IOG V where
   lbot  = V <$> pnone <*> lbot <*> lbot <*> lbot
-  ljoin (V p1 s1 bbid1 vid1) (V p2 s2 bbid2 vid2) = do
+  ljoin vl@(V p1 s1 bbid1 vid1) (V p2 s2 bbid2 vid2) = do
+      liftIO $ putStrLn $ "==== unioning: " <> show vid1 <> "   " <> show vid2 <> "====="
       bbid <- ljoin bbid1 bbid2
       vid <- ljoin vid1 vid2
 
       let mvidbbid = liftA2 (,) (unLeftLean vid) bbid
-
-
-      p <-  paccunion mvidbbid p1 p2
-      s <- ljoin s1 s2
-      return $ V p s bbid vid
+      if vid1 == vid2
+      then return vl
+      else do
+        p <-  paccunion mvidbbid p1 p2
+        s <- ljoin s1 s2
+        return $ V p s bbid vid
 
 
 -- | Interpret an expression
