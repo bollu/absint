@@ -111,8 +111,9 @@ instance Pretty Phity where
 
 data Phi = Phi {
     philoc :: !Loc,
-    phity :: Phity,
-    phiid :: Id,
+    phiownbbid :: !BBId,
+    phity :: !Phity,
+    phiid :: !Id,
     phil :: (BBId, Id),
     phir :: (BBId, Id)
 } deriving(Eq, Ord)
@@ -121,16 +122,17 @@ instance Named Phi where
   name = phiid
 
 instance Located Phi where
-  location (Phi loc ty _ _ _) = loc
+  location = philoc
 
 instance Pretty Phi where
-  pretty (Phi loc ty id l r) =
-    pretty loc <+> pretty "phi" <+> pretty ty <+>
-      pretty id <+> equals <+> pretty l <+> pretty r
+  pretty (Phi loc ownbbid ty id l r) =
+    pretty loc <+> pretty ownbbid <+>
+    pretty "phi" <+> pretty ty <+>
+    pretty id <+> equals <+> pretty l <+> pretty r
 
 instance Show Phi where
-  show (Phi loc ty id l r) =
-    show loc ++  " phi " ++ show ty ++
+  show (Phi loc ownbbid ty id l r) =
+    show loc <>  " " <> show ownbbid <> " phi " <> show ty <>
       " " ++ show id ++ " = " ++ show l ++ " " ++ show r
 
 -- Terminator instruction
@@ -297,7 +299,8 @@ progbbid2nl (Program _ bbs) = M.fromList $ do
   bb <- bbs
   let ty = bbty bb
   case ty of
-    Just (BBLoop bodies) -> return (bbid bb, NaturalLoop (bbid bb) bodies)
+    Just (BBLoop bodies) ->
+      return (bbid bb, NaturalLoop (bbid bb) bodies)
     Nothing -> []
 
 -- | Map baic block ids to predecessors
@@ -451,7 +454,10 @@ done = do
 phi :: Phity -> String -> (BBId, String) -> (BBId, String) -> ST.State ProgramBuilder ()
 phi ty id (bbidl, idl) (bbidr, idr) = do
   loc <- builderLocIncr
-  appendPhi (Phi loc ty (Id id) (bbidl, Id idl) (bbidr, Id idr))
+  ownbbid <- fromJust <$>  ST.gets curbbid
+  appendPhi (Phi loc ownbbid ty
+              (Id id)
+              (bbidl, Id idl) (bbidr, Id idr))
 
 condbr :: String -> BBId -> BBId -> ST.State ProgramBuilder ()
 condbr id bbidt bbidf = do

@@ -88,7 +88,7 @@ mkSemPhi :: Pretty a => Phi
          -> BBId  -- prevbbid
          -> VEnv a
          -> VEnv a
-mkSemPhi  p@(Phi _ _ id (bbidl, idl) (bbidr, idr)) prevbbid env =
+mkSemPhi  p@(Phi _ _ _  id (bbidl, idl) (bbidr, idr)) prevbbid env =
   if prevbbid == bbidl
      then M.insert id (env !!# idl) env
      else if prevbbid == bbidr

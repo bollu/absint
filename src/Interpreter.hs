@@ -39,10 +39,10 @@ data AI m a = AI {
       -> BBId  -- ^  bbid of successor
       -> AbsDom a -- ^ abstract domain to use
       -> m a
-   -- | Transform the LHS of a phi node 
-  , aiLoopPhiL ::  AbsDom a -> a -> m a
+   -- | Transform the LHS of a phi node
+  , aiLoopPhiL :: Phi -> AbsDom a -> a -> m a
   -- | Transform the RHS of a phi node
-  , aiLoopPhiR ::  AbsDom a -> a -> m a
+  , aiLoopPhiR :: Phi -> AbsDom a -> a -> m a
   , aiStartState :: m (AbsState a) -- ^ Starting state of the AI
 }
 
@@ -73,7 +73,7 @@ aiAssign AI{..} lprev a s =
     updateLoc lprev (location a) (name a) s (aiA a)
 
 
-aiPhi :: (Monad m, Lattice m a) => AI m a 
+aiPhi :: (Monad m, Lattice m a) => AI m a
   -> Loc -- ^ previous location
   -> Phi -- ^ phinode
   -> M.Map BBId BB
@@ -97,8 +97,8 @@ aiPhi AI{..} lprev phi bbid2bb s = do
                   Philoop -> do
                     -- | Perform phi transformation of left and right.
                     -- Keep it seaparate for now.
-                    vl <- aiLoopPhiL d vl
-                    vr <- aiLoopPhiR d vr
+                    vl <- aiLoopPhiL phi d vl
+                    vr <- aiLoopPhiR phi d vr
                     return (vl, vr)
      vphi <- vl `ljoin` vr
      return $ vphi

@@ -941,9 +941,6 @@ runProgram p e = do
     putDocW 80 (pretty p)
     putStrLn ""
 
--- | Default environment we start with
-edefault :: Env Int
-edefault = envFromParamList [(Id "p", 1)]
 
 programs :: [Program]
 programs = [passign

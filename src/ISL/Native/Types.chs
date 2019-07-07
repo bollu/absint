@@ -81,7 +81,7 @@ islEnumOnErrorAbort :: CInt
 islEnumOnErrorAbort = fromIntegral 2
 
 fromRawIslBool :: CInt -> Maybe Bool
-fromRawIslBool i = 
+fromRawIslBool i =
     case (fromIntegral i) of
         -1 -> Nothing
         0 -> Just False

@@ -51,12 +51,21 @@ liftIO :: IO a -> IOG a
 liftIO f = IOG $ const f
 
 
+instance (Show a, Eq a, Monad m, MonadFail m) => Lattice m (Maybe a) where
+    lbot = return Nothing
+    ljoin Nothing x = return x
+    ljoin x Nothing = return x
+    ljoin (Just x) (Just y) = do
+        if x /= y
+        then Control.Monad.Fail.fail $
+            "maybe not equal: " <> show x <> " " <> show y
+        else return (Just x)
 
--- | Abstract values
-data V = V { vp :: P, vs :: S } deriving(Eq)
+-- | Abstract values, and
+data V = V { vp :: P, vs :: S, vloop :: Maybe Id } deriving(Eq)
 
 instance Show V where
-    show (V p s) = show p ++ show s
+    show (V p s id ) = show p <> show s <> show id
 
 -- | Global context
 data G = G { gctx :: Ptr Ctx
@@ -90,11 +99,15 @@ glsp = do
   liftIO $ localSpaceFromSpace sp
 
 
+
+
+
 -- | Get the ISL id for a given ID
 gislid :: Id -> IOG (Ptr ISLTy.Id)
 gislid id = do
     id2isl <- gread gid2isl
     return $ id2isl OM.! id
+
 
 newtype P = P (Ptr Pwaff) deriving(Spaced)
 
@@ -108,7 +121,7 @@ instance Show P where
 
 
 instance Pretty P where
-    pretty (P pw) = pretty (show pw)
+    pretty = pretty . show
 
 
 newtype S = S (Ptr Set) deriving(Spaced)
@@ -124,7 +137,9 @@ instance Show S where
         uio (setCopy s >>= setCoalesce >>= setToStr)
 
 instance Pretty S where
-    pretty (S s) = pretty (show s)
+    pretty  = pretty . show
+
+newtype C = C (Ptr Constraint)
 
 -- | Get a symbolic representation of the given variable
 psym :: Id -> IOG P
@@ -161,6 +176,24 @@ padd (P p) (P p') = do
     pa <- liftIO $ pwaffAdd p p'
     return $ P pa
 
+pmul :: P -> P -> IOG P
+pmul (P p) (P p') = do
+  p <- liftIO $ pwaffCopy p
+  p' <- liftIO $ pwaffCopy p'
+  out <- liftIO $ pwaffMul p p'
+  return $ P out
+
+pscale :: Int -> P -> IOG P
+pscale i p = do
+  pi <- pconst i
+  pmul p pi
+
+psub :: P -> P -> IOG P
+psub p p' = do
+  p' <- pscale (-1) p'
+  padd p p'
+
+
 plt :: P -> P -> IOG P
 plt (P pw1) (P pw2) = do
     pw1 <- liftIO $ pwaffCopy pw1
@@ -175,6 +208,26 @@ plt (P pw1) (P pw2) = do
     pwlt <- liftIO $ pwaffUnionMax pwt pwf
     return $ P pwlt
 
+
+-- | pacc(init, delta, kid) = { [k] -> init + delta * k }
+pacc :: P -> P -> Id -> IOG P
+pacc init delta id = return init
+
+
+-- | domain of a P
+pdomain :: P -> IOG S
+pdomain (P pw) = do
+    pw <- liftIO $ pwaffCopy pw
+    s <- liftIO $ pwaffDomain pw
+    return $ S s
+
+-- | Return the domain on which the two pwaffs are equal
+peqset :: P -> P -> IOG S
+peqset (P p1) (P p2) = do
+    p1 <- liftIO $ pwaffCopy p1
+    p2 <- liftIO $ pwaffCopy p2
+    s <- liftIO $ pwaffEqSet p1 p2
+    return $ S s
 
 -- | Return the set on which P equals -1 [true]
 ptrueset :: P -> IOG S
@@ -247,42 +300,61 @@ prestrict (P pw) (S s) = do
 
   return $ P pw
 
+
+-- | Take union. In overlapping area, pick maximum
+punionmax :: P -> P -> IOG P
+punionmax (P p1) (P p2) = do
+    p1 <- liftIO $ pwaffCopy p1
+    p2 <- liftIO $ pwaffCopy p2
+    pu <- liftIO $ pwaffUnionMax p1 p2
+    return $ P pu
+
+
 -- | take union
-punion :: P -> P -> IOG P
-punion (P pl) (P pr) = do
-    dl <- liftIO $ pwaffCopy pl >>= pwaffDomain
-    dr <- liftIO $ pwaffCopy pr >>= pwaffDomain
-    dcommon <- liftIO $ setCopy dl >>= \dl -> setCopy dr >>= \dr -> setIntersect dl dr
-    deq <- liftIO $ pwaffCopy pl >>= \pl -> pwaffCopy pr >>= \pr -> pwaffEqSet pl pr
+paccunion :: Maybe Id -> P -> P -> IOG P
+paccunion maccid pl pr = do
+    dl <- pdomain pl
+    dr <- pdomain pr
 
-    Just commonSubsetEq <- liftIO $ setIsSubset dcommon deq
-    Just commonEqualEq <- liftIO $ setIsEqual dcommon deq
+    dcommon <- sintersect dl dr
+    deq <- peqset pl pr
 
-    pl <- liftIO $ pwaffCopy pl
-    pr <- liftIO $ pwaffCopy pr
-    punion <- liftIO $ pwaffUnionMax pl pr
+    commonSubsetEq <- ssubset dcommon deq
+    let commonEqualEq = dcommon == deq
 
+    paccunion <- punionmax pl pr
 
     if commonSubsetEq
     then  do
-        return $ P punion
+      return $ paccunion
     else do
-        dneq <- liftIO $ setCopy deq >>= setComplement
-        liftIO $ putDocW 80 $ vcat $
-            [pretty "\n---"
-            , pretty "pl: " <> pretty pl
-            , pretty "dl: " <> pretty dl
-            , pretty "pr: " <> pretty pr
-            , pretty "-----"
-            , pretty "dr: " <> pretty dr
-            , pretty "dcommon: " <> pretty dcommon
-            , pretty "deq: " <> pretty deq
-            , pretty "dNEQ: " <> pretty dneq
-            , pretty "commonEqualEq: " <> pretty commonEqualEq
-            , pretty "commonSubsetEq: " <> pretty commonSubsetEq
-            , pretty "---\n"]
-        return $ P punion
-        Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+      dneq <- scomplement deq
+      liftIO $ putDocW 80 $ vcat $
+          [pretty "\n---"
+          , pretty "loopid: " <> pretty maccid
+          , pretty "\n---"
+          , pretty "pl: " <> pretty pl
+          , pretty "dl: " <> pretty dl
+          , pretty "-----"
+          , pretty "pr: " <> pretty pr
+          , pretty "dr: " <> pretty dr
+          , pretty "-----"
+          , pretty "dcommon: " <> pretty dcommon
+          , pretty "deq: " <> pretty deq
+          , pretty "dNEQ: " <> pretty dneq
+          , pretty "commonEqualEq: " <> pretty commonEqualEq
+          , pretty "commonSubsetEq: " <> pretty commonSubsetEq
+          , pretty "---\n"]
+
+      -- | The only place where we can have disagreement
+      -- between old and new values is along a backedge.
+      -- So accelerate the backedge.
+      delta <- psub pr pl
+      -- | We need to provide an ID
+      let Just accid = maccid
+      out <- pacc pl delta accid
+      Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+
 
 snone :: IOG S
 snone = do
@@ -304,50 +376,95 @@ sunion (S s1) (S s2) = do
     su <- liftIO $ setUnion s1 s2
     return $ S su
 
+
+sintersect :: S -> S -> IOG S
+sintersect (S s1) (S s2) = do
+    s1 <- liftIO $ setCopy s1
+    s2 <- liftIO $ setCopy s2
+    out <- liftIO $ setIntersect s1 s2
+    return $ S out
+
 scomplement :: S -> IOG S
 scomplement (S s) = do
     s <- liftIO $ setCopy s
     sc <- liftIO $ setComplement s
     return $ S sc
 
+ssubset :: S -> S -> IOG Bool
+ssubset (S s1) (S s2) =
+    fromJust <$> liftIO (setIsSubset s1 s2)
+
+
+-- | Make a parameter zero
+sparamzero :: S
+          -> Id -- ^ ID of the parameter
+          -> IOG S
+sparamzero (S s) id = do
+    s <- liftIO $ setCopy s
+    id2isl <- gread gid2isl
+    ls <- glsp
+    Just ix <- liftIO $ findDimById ls IslDimSet (id2isl OM.! id)
+    c <- liftIO $ getSpace s >>= localSpaceFromSpace >>=
+        constraintAllocEquality
+    c <- liftIO $ constraintSetCoefficient c IslDimSet ix 1
+    c <- liftIO $ constraintSetConstant c 0
+    s <- liftIO $ setAddConstraint s c
+    return $ S s
+
+sparamgt0 :: S
+    -> Id
+    -> IOG S
+sparamgt0 (S s) id = do
+    s <- liftIO $ setCopy s
+    id2isl <- gread gid2isl
+    ls <- glsp
+    Just ix <- liftIO $ findDimById ls IslDimSet (id2isl OM.! id)
+    c <- liftIO $ getSpace s >>= localSpaceFromSpace >>=
+        constraintAllocInequality
+    c <- liftIO $ constraintSetCoefficient c IslDimSet ix (1)
+    c <- liftIO $ constraintSetConstant c (-1)
+    s <- liftIO $ setAddConstraint s c
+    return $ S s
+
+
 
 instance Pretty V where
   pretty = pretty . show
 
-
-instance Lattice IOG P where
-  lbot  =  pnone
-  ljoin p1 p2 = punion p1 p2
 
 instance Lattice IOG S where
   lbot  =  snone
   ljoin s1 s2 = sunion s1 s2
 
 instance Lattice IOG V where
-  lbot  = V <$> lbot <*> lbot
-  ljoin (V p1 s1) (V p2 s2) = V <$> (ljoin p1 p2) <*> (ljoin s1 s2)
+  lbot  = V <$> pnone <*> lbot <*> lbot
+  ljoin (V p1 s1 bbid1) (V p2 s2 bbid2) = do
+      id <- ljoin bbid1 bbid2
+      p <-  paccunion id p1 p2
+      s <- ljoin s1 s2
+      return $ V p s id
 
 
 -- | Interpret an expression
 aie :: Expr -> AbsDom V -> IOG V
-aie  (EInt i) _ = V <$> pconst i <*> lbot
+aie  (EInt i) _ = V <$> pconst i <*> lbot <*> lbot
 aie  (EId id) d = d #! id
 aie  (EBinop op id id') d = do
-  (V p _) <- d #! id
-  (V p' _) <- d #! id'
+  (V p _ _ ) <- d #! id
+  (V p' _ _) <- d #! id'
   case op of
-    Add -> V <$> padd p p' <*> lbot
-    Lt -> V <$> plt p p' <*> lbot
+    Add -> V <$> padd p p' <*> lbot <*> lbot
+    Lt -> V <$> plt p p' <*> lbot <*> lbot
 
 -- | Interpret an assignment
 aia :: Assign -> AbsDom V -> IOG V
 aia a d = do
-  V _ scur <- d #! (assignownbbid a)
-  V p s <- aie (assignexpr a) d
+  V _ scur _ <- d #! (assignownbbid a)
+  V p s _ <- aie (assignexpr a) d
   -- | restrict the value to the current BB domain
   p <- prestrict p scur
-  return $ V p s
-  
+  return $ V p s Nothing
+
 
 -- | Interpret a terminator.
 ait :: Term
@@ -356,20 +473,19 @@ ait :: Term
     -> IOG V
 ait (Done _ bbcur) bbidnext d = d #! bbcur
 ait (Br _ bbcur _) bbidnext d = d #! bbcur
-  
-  
-  
+
+
 ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     -- | execution condtions of BB
-    V _ scur <- d #! bbcur
+    V _ scur _ <- d #! bbcur
     -- | current pwaff
-    V pc _ <- d #! c
+    V pc _ _ <- d #! c
     sthen <- ptrueset pc
     selse <- pfalseset pc
     if bbidnext == bbl
-    then  V <$> lbot <*> (ptrueset pc)
+    then  V <$> pnone <*> (ptrueset pc) <*> lbot
     else if bbidnext == bbr
-    then V <$> lbot <*> (pfalseset pc)
+    then V <$> pnone <*> (pfalseset pc) <*> lbot
     else error $ "condbr only has bbl and bbr as successors"
 
 
@@ -385,24 +501,40 @@ aiStart prog = do
     id2sym <- forM (S.toList ps) $ \id -> do
                     p <- psym id
                     s <- lbot
-                    return $ (id, V p s)
+                    return $ (id, V p s Nothing)
     -- | Map the entry block to full domain
     entry2v <- do
-                 p <- lbot
+                 p <- pnone
                  s <- suniv
-                 return (progEntryId prog, V p s)
+                 return (progEntryId prog, V p s Nothing)
     return $ lmsingleton (progEntryLoc prog)
                 (lmfromlist $ entry2v:id2sym)
 
 
-aiLoopL :: AbsDom V -> V ->IOG  V
-aiLoopL d a = return a
-  
+-- | AI the left value in the loop
+aiLoopL :: Phi -> AbsDom V -> V -> IOG  V
+aiLoopL phi d vl = do
+    d <- pdomain (vp vl)
+     -- | d : viv = 0
+    dviv0 <- sparamzero d (phiownbbid phi)
+    -- | d^c: viv >= 0 | viv < 0
+    dvivgt0 <- sparamgt0 d (phiownbbid phi)
 
-aiLoopR :: AbsDom V -> V ->IOG  V
-aiLoopR d a = return a
+    sym <- psym (phiownbbid phi)
+    sym <- prestrict sym dvivgt0
 
-  
+    p <- prestrict (vp vl) dviv0
+    p <- paccunion Nothing p sym
+
+    return $ V p (vs vl) (Just (phiownbbid phi))
+
+
+
+-- | AI the right value in the loop
+aiLoopR :: Phi ->  AbsDom V -> V ->IOG  V
+aiLoopR phi d a = return a
+
+
 -- | Create the AI object
 mkAI :: Program -> AI IOG V
 mkAI p = AI { aiA = aia

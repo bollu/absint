@@ -104,7 +104,7 @@ mkUINodeAssign (Assign loc ownbbid id expr) =
     UINode (Just loc) (Just id) (unID id <> " = " <> show expr) 4
 
 mkUINodePhi :: Phi -> UINode
-mkUINodePhi (Phi loc ty id l r) =
+mkUINodePhi (Phi loc ownbbid ty id l r) =
     UINode (Just loc) (Just id)
            ("phi " <> (unID id) <> " = " <> show l <> " " <> show r)
            4
@@ -205,10 +205,10 @@ handleEvent s@S{..} (VtyEvent (V.EvKey V.KLeft [])) =
 handleEvent s@S{..} (VtyEvent (V.EvKey V.KRight [])) =
     continue $ s { curiter = min (curiter + 1) niters }
 
-handleEvent s@S{..} (VtyEvent (V.EvKey V.KUp [V.MShift])) = 
+handleEvent s@S{..} (VtyEvent (V.EvKey V.KUp [V.MShift])) =
     continue $ s { l = L.listMoveBy (-2) l}
 
-handleEvent s@S{..} (VtyEvent (V.EvKey V.KDown [V.MShift])) = 
+handleEvent s@S{..} (VtyEvent (V.EvKey V.KDown [V.MShift])) =
     continue $ s { l = L.listMoveBy 2 l}
 
 
