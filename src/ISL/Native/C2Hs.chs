@@ -656,6 +656,14 @@ spaceFindDimById sp dt id = fromIntegral <$> spaceFindDimById_ sp dt id
   } -> `Bool' #}
 
 
+{#fun isl_pw_aff_involves_dims as pwaffInvolvesDims
+  { id `Ptr Pwaff'
+  , fromDimType `DimType'
+  , fromIntegral `Int'
+  , fromIntegral `Int'
+  } -> `Maybe Bool' fromRawIslBool #}
+
+
 -- =================
 -- pwaff list
 
@@ -680,6 +688,9 @@ toListPwaff ctx pws = do
 
 {# fun isl_multi_pw_aff_to_str as multipwaffToStr
     {id `Ptr Multipwaff' } -> `String' #}
+
+-- ==========================
+-- multi_pw_aff
 
 -- =================
 -- pw multi aff

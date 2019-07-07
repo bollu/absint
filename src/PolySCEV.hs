@@ -437,6 +437,14 @@ punionmax (P p1) (P p2) = do
     pu <- liftIO $ pwaffUnionMax p1 p2
     return $ P pu
 
+-- | Check if the pwaff involves an ID in its computation
+pinvolves :: P -> Id -> IOG Bool
+pinvolves (P pw) id = do
+    id2isl <- gread gid2isl
+    Just ix <- liftIO $ findDimById pw IslDimIn (id2isl OM.! id)
+    Just involves <- liftIO $ pwaffInvolvesDims pw IslDimIn ix 1
+    return $ involves
+
 
 -- | take union
 paccunion :: Maybe (Id, Id)  -- ^ Id of value to accelerate, and the ID of the viv dimension
@@ -460,6 +468,12 @@ paccunion maccid pl pr = do
       return $ paccunion
     else do
       dneq <- scomplement deq
+
+      -- | The only place where we can have disagreement
+      -- between old and new values is along a backedge.
+      -- So accelerate the backedge.
+      delta <- psub pr pl
+
       liftIO $ putDocW 80 $ vcat $
           [pretty "\n---"
           , pretty "loopid: " <> pretty maccid
@@ -475,17 +489,34 @@ paccunion maccid pl pr = do
           , pretty "dNEQ: " <> pretty dneq
           , pretty "commonEqualEq: " <> pretty commonEqualEq
           , pretty "commonSubsetEq: " <> pretty commonSubsetEq
-          , pretty "---\n"]
-
-      -- | The only place where we can have disagreement
-      -- between old and new values is along a backedge.
-      -- So accelerate the backedge.
-      delta <- psub pr pl
+          , pretty "---\n"
+          , pretty "delta: " <> pretty delta]
       -- | We need to provide an ID
       let Just (toaccid, vivid) = maccid
-      out <- pacc pl delta toaccid vivid
-      return $ out
-      -- Control.Monad.Fail.fail $ "pwaffs are not equal on common domain"
+
+      -- check if either left or right involve the vivid. If only one of
+      -- them does, then use that. Otherwise, fail.
+      -- If they are both accelerated, then increment the right's parameter dim by 1 and take
+      (linvolves, rinvolves) <- liftA2 (,) (pinvolves pl vivid) (pinvolves pr vivid)
+      liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
+      case (linvolves, rinvolves) of
+        (True, True) -> do
+                          pr <- pparamincr' pr vivid
+                          delta <- psub pr pl
+                          liftIO $ putDocW 80 $ vcat $
+                              [pretty "\n---TRUE TRUE ---\n"
+                              , pretty "incr: " <> pretty pr
+                              , pretty "delta: " <> pretty delta]
+                          pzero <- pconst 0
+                          if delta /= pzero
+                          then Control.Monad.Fail.fail $ "delta is not zero!"
+                          else return $ pr
+
+
+        (True, False) -> return $ pl
+        (False, True) -> return $ pr
+        (False, False) -> pacc pl delta toaccid vivid
+
 
 
 snone :: IOG S
@@ -558,6 +589,31 @@ sparamgt0 (S s) id = do
     s <- liftIO $ setAddConstraint s c
     return $ S s
 
+
+pparamincr' :: P -> Id -> IOG P
+pparamincr' (P pw) incrid = do
+   ctx <- gread gctx
+   pw <- liftIO $ pwaffCopy pw
+   id2isl <- gread gid2isl
+   mapspace <- do
+                 sp <- gsp
+                 sp' <- gsp
+                 liftIO $ spaceMapFromDomainAndRange  sp sp'
+   -- [Pwaffs to pullback against]
+   pullback_pws <- forM (OM.toList id2isl) $ \(id, islid) ->  do
+                     Just ix <- liftIO $ findDimById pw IslDimIn islid
+                     (P pwsym) <- psym id
+                     pwout <- if id == incrid
+                                then do
+                                    (P pone) <- pconst (-1)
+                                    liftIO $ pwaffAdd pwsym pone
+                                else return pwsym -- [x] -> [x]
+                     return pwout
+   listpws <- liftIO $ toListPwaff ctx pullback_pws
+   -- | create a multipw
+   multipw <- liftIO $ multipwaffFromPwaffList mapspace listpws
+   pw <- liftIO $ pwaffPullbackMultipwaff pw multipw
+   return $ P pw
 
 
 instance Pretty V where
