@@ -13,6 +13,7 @@ import qualified Data.Set as S
 import Control.Monad.Fail
 import Control.Applicative
 import Data.Traversable
+import Data.Foldable
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Internal
 import Data.IORef
@@ -61,6 +62,7 @@ instance (Show a, Eq a, Monad m, MonadFail m) => Lattice m (Maybe a) where
         then Control.Monad.Fail.fail $
             "maybe not equal: " <> show x <> " " <> show y
         else return (Just x)
+
 
 -- | Maybe with left-leaning union
 newtype LeftLean a = LeftLean { unLeftLean :: (Maybe a) } deriving(Eq, Show)
@@ -280,12 +282,12 @@ liftDeltaPwaffToMap pwdelta liftid = do
 -- eg. y: { [viv, x, y] -> [100] }
 --     delta: { [viv, x, y] -> [1] }
 --     acc: { [viv, x, y] -> y + viv }
-pacc :: P  -- ^ Init map
+ppow :: P  -- ^ Init map
      -> P -- ^ Delta map
      -> Id -- ^ Dimension to apply the delta to (y)
      -> Id -- ^ name of the viv dimension (viv)
-     -> IOG P
-pacc init delta editid vivid = do
+     -> IOG (Maybe P)
+ppow init delta editid vivid = do
   liftIO $ putDocW 80 $ vcat $
     [pretty "\n---"
     , pretty "init: " <> pretty init
@@ -302,12 +304,14 @@ pacc init delta editid vivid = do
 
   liftIO $ putDocW 80 $ vcat $
     [pretty "\n---[1]"
-    , pretty "mdeltaPow: " <> pretty mdeltaPow
-    , pretty "isexact: " <> pretty isexact]
+    , pretty "\nmdeltaPow: " <> pretty mdeltaPow
+    , pretty "\nisexact: " <> pretty isexact]
 
   -- | We can't accelerate
   if isexact == 0
-  then error $ "unable to accelerate exactly"
+  then -- TODO: for now, return the left. To be correct, we need to find ou
+       -- which of left or right is more advanced and proceed accordingly
+       return $ Nothing
   else do
     -- | [k] -> { [] -> [[viv, x, y] -> [viv, x, y + delta*k]] }
     mdeltaPow <- liftIO $ mapMoveDims mdeltaPow IslDimParam (fromIntegral 0)
@@ -356,7 +360,7 @@ pacc init delta editid vivid = do
     -- | { [viv, x, y] -> [(y + delta*viv)} (returns the accelerated value)
     Just editix <- liftIO $ findDimById mdeltaPow IslDimOut (id2isl OM.! editid)
     pw <- liftIO $ pwmultiaffGetPwaff pwma (fromIntegral editix)
-    return $ P pw
+    return $ Just (P pw)
 
 
 
@@ -529,6 +533,18 @@ pEvalParam0 id p = do
   -- { project out the 'id' dimension
   pproject id pid0
 
+psubst :: Id  -- ^ id to be substituted: x
+       -> P -- ^ P with new vaue for substitution: x: [x, y] -> new
+       -> P  -- ^ P to substitute into [x, y] -> x + y
+       -> IOG P -- [x, y] -> new + y
+psubst id newval pold = do
+  -- | [x, y] -> [(new), (y)]
+  mpw <- withP newval $ \p -> liftPwaffToMultipwaff p id
+  -- | substitute beginvalue
+  finalpw <- withP pold $ \pwold -> liftIO $ pwaffPullbackMultipwaff pwold mpw
+  return $ P finalpw
+
+
 -- | take union, accelerating when pwaffs overlap and disagree
 punionacc ::
           Id -- ^ ID of value to accelerate
@@ -582,53 +598,61 @@ punionacc toaccid vivid pl pr = do
 
       -- liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
       -- | deltapow: [viv, x, toacc] -> [x, toacc + delta * viv]
-      deltapow <- pacc pl delta toaccid vivid
+      mdeltapow <- ppow pl delta toaccid vivid
 
-      liftIO $ putDocW 80 $ pretty "\ndeltapow: " <> pretty deltapow
-
-
-      -- | Now find the value that is in the pl at (viv=0)
-      -- Replace the `toaccid` dimension in `deltapow` with `plviv0`
-      plviv0 <- pEvalParam0 vivid pl
+      case mdeltapow of
+        Nothing -> return pl
+        Just deltapow -> do
+            liftIO $ putDocW 80 $ pretty "\ndeltapow: " <> pretty deltapow
 
 
-      liftIO $ putDocW 80 $ pretty "\nplviv0: " <> pretty plviv0
+            -- | Now find the value that is in the pl at (viv=0)
+            -- Replace the `toaccid` dimension in `deltapow` with `plviv0`.
+            -- NOTE: THIS DOES NOT HAVE (viv =0)
+            plbegin <- pEvalParam0 vivid pl
 
-      -- | [viv, x, toacc] -> [(viv), (x), (beginvalue)]
-      mpw_plviv0 <- withP plviv0 $ \p -> liftPwaffToMultipwaff p toaccid
+            -- | Substitute plbegin in deltapow. Note that this is only defined
+            -- for (viv > 0)
+            subst <- psubst toaccid plbegin deltapow
 
-      liftIO $ multipwaffToStr mpw_plviv0 >>= \s ->  putDocW 80 $ pretty "\nmpw_plviv0: " <> pretty  s <> pretty "\n"
-      -- | substitute beginvalue
-      subst <- withP deltapow $ \p ->
-                    liftIO $ pwaffPullbackMultipwaff p mpw_plviv0
-      return $ P subst
+            -- | We also create value at (viv = 0), which is the pwaff
+            -- plbegin, restricted to (viv = 0)
+            plviv0 <- prestrictparam0 plbegin vivid
 
-      {-
-      -- check if either left or right involve the vivid. If only one of
-      -- them does, then use that. Otherwise, fail.
-      -- If they are both accelerated, then increment the right's parameter dim by 1 and take
-      -- | involves is not a sane way to check for this, because involves
-      -- | also checks the constraints.
-      (linvolves, rinvolves) <- liftA2 (,) (pinvolves pl vivid) (pinvolves pr vivid)
-      case (False, False) of
-        (True, True) -> do
-                          pr' <- pparamincr' pr vivid
-                          delta <- psub pr' pl
-                          liftIO $ putDocW 80 $ vcat $
-                              [pretty "\n---TRUE TRUE ---\n"
-                              , pretty "pl: " <> pretty pl
-                              , pretty "pr: " <> pretty pr
-                              , pretty "pr': " <> pretty pr'
-                              , pretty "delta: " <> pretty delta
-                              , pretty "--"]
-                          pzero <- pconst 0
-                          if delta /= pzero
-                          then Control.Monad.Fail.fail $ "delta is not zero!"
-                          else return $ pr
-        (True, False) -> return $ pl
-        (False, True) -> return $ pr
-        (False, False) -> pacc pl delta toaccid vivid
-        -}
+
+            liftIO $ putDocW 80 $ pretty "\nfinal accelerated(BEOFRE UNION): " <> pretty subst <> pretty "   " <> pretty plviv0
+            final <- punioneq subst plviv0
+
+
+            liftIO $ putDocW 80 $ pretty "\nfinal accelerated: " <> pretty final
+            return $ final
+
+            {-
+            -- check if either left or right involve the vivid. If only one of
+            -- them does, then use that. Otherwise, fail.
+            -- If they are both accelerated, then increment the right's parameter dim by 1 and take
+            -- | involves is not a sane way to check for this, because involves
+            -- | also checks the constraints.
+            (linvolves, rinvolves) <- liftA2 (,) (pinvolves pl vivid) (pinvolves pr vivid)
+            case (False, False) of
+              (True, True) -> do
+                                pr' <- pparamincr' pr vivid
+                                delta <- psub pr' pl
+                                liftIO $ putDocW 80 $ vcat $
+                                    [pretty "\n---TRUE TRUE ---\n"
+                                    , pretty "pl: " <> pretty pl
+                                    , pretty "pr: " <> pretty pr
+                                    , pretty "pr': " <> pretty pr'
+                                    , pretty "delta: " <> pretty delta
+                                    , pretty "--"]
+                                pzero <- pconst 0
+                                if delta /= pzero
+                                then Control.Monad.Fail.fail $ "delta is not zero!"
+                                else return $ pr
+              (True, False) -> return $ pl
+              (False, True) -> return $ pr
+              (False, False) -> ppow pl delta toaccid vivid
+              -}
 
 
 
@@ -702,6 +726,12 @@ sparamgt0 (S s) id = do
     s <- liftIO $ setAddConstraint s c
     return $ S s
 
+-- | Restrict a pwaff to the case where a parameter is 0
+prestrictparam0 :: P -> Id -> IOG P
+prestrictparam0 p id = do
+    univ <- suniv
+    sidzero <- sparamzero univ id
+    prestrict p sidzero
 
 pparamincr' :: P -> Id -> IOG P
 pparamincr' (P pw) incrid = do
@@ -749,8 +779,7 @@ instance Lattice IOG V where
       s <- ljoin s1 s2
 
       p <-  case (bbid, vid) of
-                (Just bbid, LeftLean (Just vid)) -> do
-                    punionacc vid bbid p1 p2
+                (Just bbid, LeftLean (Just vid)) -> punionacc vid bbid p1 p2
                 _ -> punioneq p1 p2
 
       return $ V p s bbid vid
