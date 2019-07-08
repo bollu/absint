@@ -772,12 +772,12 @@ instance Lattice IOG S where
 instance Lattice IOG V where
   lbot  = V <$> pnone <*> lbot <*> lbot <*> lbot
   ljoin vl@(V p1 s1 bbid1 vid1) vr@(V p2 s2 bbid2 vid2) = do
-      -- liftIO $ putStrLn $ "==== unioning: " <> show vid1 <> "   " <> show vid2 <> "====="
       bbid <- ljoin bbid1 bbid2
       vid <- ljoin vid1 vid2
       s <- ljoin s1 s2
 
       liftIO $ putDocW 80 $  vcat [pretty "unioning: " <> pretty (show vid1) <> pretty " " <> pretty (show vid2) <> pretty "\n", indent 4 $ pretty p1, indent 4 $ pretty p2, pretty "\n"]
+
       p <-  case (bbid, vid) of
                 (Just bbid, LeftLean (Just vid)) -> punionacc vid bbid p1 p2
                 _ ->  punioneq p1 p2

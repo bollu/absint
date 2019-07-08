@@ -85,13 +85,6 @@ aiPhi AI{..} lprev phi bbid2bb s = do
    updateLoc lprev (location phi) (name phi) s $ \d -> do
      vl <- d #! idl
      vr <- d #! idr
-     -- dl <- s #! (bbFinalLoc (bbid2bb M.! bbidl))
-     -- dr <- s #! (bbFinalLoc (bbid2bb M.! bbidr))
-     -- vl <- dl #! idl
-     -- vr <- dr #! idr
-     -- | If it's a phi loop, then allow the
-     -- | abstract interpreter to decide how to merge
-     --   values together.
      (vl, vr) <- case phity phi of
                   Phicond -> return (vl, vr)
                   Philoop -> do
@@ -140,7 +133,8 @@ aiMergeBB :: Monad m => Lattice m a =>
 aiMergeBB bb bbid2bb s = do
     -- | gather predecessors
     -- bbps :: [BB]
-    let bbps = filter (\bb' -> bbid bb /= bbid bb') $ preds bbid2bb bb
+    -- let bbps = filter (\bb' -> bbid bb /= bbid bb') $ preds bbid2bb bb
+    let bbps = preds bbid2bb bb
     -- | Gather abstract domains at the end of the predecessors
     -- ds :: [AbsDom a]
     ds <- forM bbps (bbFinalAbsdom s)
