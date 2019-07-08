@@ -50,15 +50,18 @@ data LatticeMap k v = LM !(M.Map k v) deriving(Eq, Ord, Functor)
 --         arbitrary = lmfromlist <$> arbitrary
 
 
-lmInsert :: (Monad m, Ord k, Lattice m v) => k -> v ->
+lmUnion :: (Monad m, Ord k, Lattice m v) => k -> v ->
   LatticeMap k v ->  m (LatticeMap k v)
-lmInsert k v (LM lm) = do
+lmUnion k v (LM lm) = do
   vold <- case lm M.!? k of
                 Nothing -> lbot
                 Just v' -> return v'
   vnew <- ljoin v vold
   return $ LM $ M.insert k vnew lm
 
+lmOverwrite :: (Ord k) => k -> v ->
+  LatticeMap k v ->  LatticeMap k v
+lmOverwrite k v (LM lm) = LM (M.insert k v lm)
 
 (#!) :: (Ord k, Monad m, Lattice m v) => LatticeMap k v -> k -> m v
 (#!) (LM m) k = case m M.!? k of
@@ -80,7 +83,7 @@ instance (Ord k, Pretty k, Pretty v) => Pretty (LatticeMap k v) where
 instance (Monad m, Ord k, Lattice m v) => Lattice m (LatticeMap k v) where
   lbot = return $ LM $ M.empty
   ljoin (LM kv) kv' =
-     foldM (\kv' (k, v)  -> lmInsert k v kv')  kv' (M.toList kv)
+     foldM (\kv' (k, v)  -> lmUnion k v kv')  kv' (M.toList kv)
 
 -- | a union combinator  for monoid on lattice
 newtype LUnion m a = LUnion { unLUnion :: m a } deriving(Eq, Ord, Show)
@@ -110,8 +113,15 @@ instance (Ord k, Arbitrary k, Arbitrary v) =>
         arbitrary = lmfromlist <$> arbitrary
 
 
-lmInsert :: (Ord k, Lattice v) => k -> v ->  LatticeMap k v ->  LatticeMap k v
-lmInsert k v (LM lm) =
+lmUnion :: (Ord k, Lattice v) => k -> v ->  LatticeMap k v ->  LatticeMap k v
+lmUnion k v (LM lm) =
+  let vold = case lm M.!? k of
+                Nothing -> lbot
+                Just v' -> v'
+  in LM $ M.insert k (ljoin v vold) lm
+
+lmOverwrite :: k -> v -> LatticeMap k v -> LattiveMap k v
+lmOverwrite k v (LM lm) =
   let vold = case lm M.!? k of
                 Nothing -> lbot
                 Just v' -> v'
@@ -133,7 +143,7 @@ lmtolist (LM m) = M.toList m
 instance (Ord k, Lattice v) => Lattice (LatticeMap k v) where
   lbot = LM $ M.empty
   ljoin (LM kv) kv' =
-     foldl (\kv' (k, v)  -> lmInsert k v kv')  kv' (M.toList kv)
+     foldl (\kv' (k, v)  -> lmUnion k v kv')  kv' (M.toList kv)
 
 instance (Ord k, Show k, Show v, Pretty k, Pretty v) => Show (LatticeMap k v) where
   show (LM m) = show $ [(k, m M.! k) | k <- M.keys m]

@@ -60,8 +60,8 @@ updateLoc :: Monad m => Lattice m a =>
 updateLoc lprev lcur i s f = do
   d <- s #! lprev
   v <- f d
-  d' <- lmInsert i v d
-  s' <- lmInsert lcur d' s
+  let d' = lmOverwrite i v d
+  let s' = lmOverwrite lcur d' s
   return $ (lcur, s')
 
 -- | Abstract interpret an assignment. Return current location
@@ -123,12 +123,11 @@ aiTerm AI{..} lprev term s = do
    -- Update the state of the successor BBId
    let aiSucc d bbid = do
             v <- (aiT term bbid d)
-            lmInsert bbid v d
+            return $ lmOverwrite bbid v d
 
    d' <- foldM aiSucc dinit (termnextbbs term)
 
-   -- lmInsert lbb d' s
-   lmInsert (location term) d' s
+   return $ lmOverwrite (location term) d' s
 
 -- | for a basic block, get the final abstract domain value
 bbFinalAbsdom :: Monad m => Lattice m a => AbsState a
@@ -148,7 +147,7 @@ aiMergeBB bb bbid2bb s = do
     -- | Union all previous abstract domains
     d' <- unLUnion . mconcat $ (map (LUnion . return) ds)
 
-    s' <- lmInsert (location bb) d' s
+    s' <- lmUnion (location bb) d' s
     return $ s'
 
 -- | Abstract interpret a basic block

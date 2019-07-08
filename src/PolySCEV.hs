@@ -251,16 +251,16 @@ liftPwaffToMultipwaff pw liftid = do
                                  then return pw -- [x, y] -> [z]
                                  else return pwsym -- [x, y] -> [x]
                       return pwout
-    liftIO $ do
-        putStrLn $ "\n pullback pws:\n"
-        forM pullback_pws (\p -> pwaffToStr p >>= putStrLn)
+    -- liftIO $ do
+    --     putStrLn $ "\n pullback pws:\n"
+    --     forM pullback_pws (\p -> pwaffToStr p >>= putStrLn)
     ctx <- gread gctx
     -- | create a pw_aff_list
     listpws <- liftIO $ toListPwaff ctx pullback_pws
-    liftIO $ putStrLn "\nvvvv\n"
+    --- liftIO $ putStrLn "\nvvvv\n"
     -- | create a multipw
     multipw <- liftIO $ multipwaffFromPwaffList mapspace listpws
-    liftIO $ putStrLn "\n^^^^\n"
+    --- liftIO $ putStrLn "\n^^^^\n"
     -- liftIO $  multipwaffToStr multipw >>= \s -> putStrLn $ "multipw: " ++ s
     return multipw
 
@@ -288,11 +288,11 @@ ppow :: P  -- ^ Init map
      -> Id -- ^ name of the viv dimension (viv)
      -> IOG (Maybe P)
 ppow init delta editid vivid = do
-  liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---"
-    , pretty "init: " <> pretty init
-    , pretty "delta: " <> pretty delta
-    , pretty "\n---"]
+  -- liftIO $ putDocW 80 $ vcat $
+  --   [pretty "\n---"
+  --   , pretty "init: " <> pretty init
+  --   , pretty "delta: " <> pretty delta
+  --   , pretty "\n---"]
   -- Control.Monad.Fail.fail $ "debug"
   -- now create the map that is [delta] -> [delta^k]
   let P pwdelta = delta
@@ -302,10 +302,10 @@ ppow init delta editid vivid = do
   -- | { [k] -> [[viv, x, y] -> [viv, x, y + delta*k]] }
   (mdeltaPow, isexact) <- liftIO $ mapPower mdelta
 
-  liftIO $ putDocW 80 $ vcat $
-    [pretty "\n---[1]"
-    , pretty "\nmdeltaPow: " <> pretty mdeltaPow
-    , pretty "\nisexact: " <> pretty isexact]
+  -- liftIO $ putDocW 80 $ vcat $
+  --   [pretty "\n---[1]"
+  --   , pretty "\nmdeltaPow: " <> pretty mdeltaPow
+  --   , pretty "\nisexact: " <> pretty isexact]
 
   -- | We can't accelerate
   if isexact == 0
@@ -317,16 +317,16 @@ ppow init delta editid vivid = do
     mdeltaPow <- liftIO $ mapMoveDims mdeltaPow IslDimParam (fromIntegral 0)
                IslDimIn (fromIntegral 0) (fromIntegral 1)
 
-    liftIO $ putDocW 80 $ vcat $
-      [pretty "\n---[2]"
-      , pretty "mdeltaPow: " <> pretty mdeltaPow]
+    -- liftIO $ putDocW 80 $ vcat $
+    --   [pretty "\n---[2]"
+    --   , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
     -- | [k] -> { [viv, x, y] -> [viv, x, y + delta*k] } (UNWRAPPED)
     mdeltaPow <- liftIO $ mapRange mdeltaPow >>= setUnwrap
 
-    liftIO $ putDocW 80 $ vcat $
-      [pretty "\n---[3]"
-      , pretty "mdeltaPow: " <> pretty mdeltaPow]
+    -- liftIO $ putDocW 80 $ vcat $
+    --   [pretty "\n---[3]"
+    --   , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
     id2isl <- gread gid2isl
     Just vivix <- liftIO $ findDimById mdeltaPow IslDimIn (id2isl OM.! vivid)
@@ -335,24 +335,24 @@ ppow init delta editid vivid = do
     -- | [k=viv] -> { [viv, x, y] -> [viv, x, y + delta*(k=viv)] } (k=viv)
     mdeltaPow <- liftIO $ mapEquate mdeltaPow IslDimParam 0 IslDimIn vivix
 
-    liftIO $ putDocW 80 $ vcat $
-      [pretty "\n---[4]"
-      , pretty "mdeltaPow: " <> pretty mdeltaPow]
+    -- liftIO $ putDocW 80 $ vcat $
+    --   [pretty "\n---[4]"
+    --   , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
     -- | Project out [k] (THE ONLY PARAMETER DIM!!!)
     -- | { [viv, x, y] -> [viv, x, y + delta*viv] } (k is lost, only viv)
     mdeltaPow <- liftIO $ mapProjectOut mdeltaPow IslDimParam 0 1
 
 
-    liftIO $ putDocW 80 $ vcat $
-      [pretty "\n---[5]"
-      , pretty "mdeltaPow: " <> pretty mdeltaPow]
+    -- liftIO $ putDocW 80 $ vcat $
+    --   [pretty "\n---[5]"
+    --   , pretty "mdeltaPow: " <> pretty mdeltaPow]
 
-    liftIO $ putStrLn $ "\n\n"
+    --- liftIO $ putStrLn $ "\n\n"
 
     -- | { [viv, x, y] -> [(viv), (x), (y + delta*viv)] } (we have a pw_multi_aff, so each dimension is a separate pw_aff)
     pwma <- liftIO $ pwmultiaffFromMap mdeltaPow
-    liftIO $ putStrLn $ "PWMA:\n\n"
+    -- liftIO $ putStrLn $ "PWMA:\n\n"
     liftIO $  pwmultiaffToStr pwma >>= putStrLn
 
 
@@ -576,25 +576,25 @@ punionacc toaccid vivid pl pr = do
       -- viv dimension
       delta <- psub pr pl
 
-      liftIO $ putDocW 80 $ vcat $
-          [pretty "\n---"
-          , pretty "toaccid:  " <> pretty toaccid
-          , pretty "vivid:  " <> pretty vivid
-          , pretty "\n---"
-          , pretty "\n---"
-          , pretty "pl: " <> pretty pl
-          , pretty "dl: " <> pretty dl
-          , pretty "-----"
-          , pretty "pr: " <> pretty pr
-          , pretty "dr: " <> pretty dr
-          , pretty "-----"
-          , pretty "dcommon: " <> pretty dcommon
-          , pretty "deq: " <> pretty deq
-          , pretty "dNEQ: " <> pretty dneq
-          , pretty "commonEqualEq: " <> pretty commonEqualEq
-          , pretty "commonSubsetEq: " <> pretty commonSubsetEq
-          , pretty "---\n"
-          , pretty "delta: " <> pretty delta]
+      -- liftIO $ putDocW 80 $ vcat $
+      --     [pretty "\n---"
+      --     , pretty "toaccid:  " <> pretty toaccid
+      --     , pretty "vivid:  " <> pretty vivid
+      --     , pretty "\n---"
+      --     , pretty "\n---"
+      --     , pretty "pl: " <> pretty pl
+      --     , pretty "dl: " <> pretty dl
+      --     , pretty "-----"
+      --     , pretty "pr: " <> pretty pr
+      --     , pretty "dr: " <> pretty dr
+      --     , pretty "-----"
+      --     , pretty "dcommon: " <> pretty dcommon
+      --     , pretty "deq: " <> pretty deq
+      --     , pretty "dNEQ: " <> pretty dneq
+      --     , pretty "commonEqualEq: " <> pretty commonEqualEq
+      --     , pretty "commonSubsetEq: " <> pretty commonSubsetEq
+      --     , pretty "---\n"
+      --     , pretty "delta: " <> pretty delta]
 
       -- liftIO $ putStrLn $ "\n\n**INVOLVES: " <> show (linvolves, rinvolves)
       -- | deltapow: [viv, x, toacc] -> [x, toacc + delta * viv]
@@ -603,7 +603,7 @@ punionacc toaccid vivid pl pr = do
       case mdeltapow of
         Nothing -> return pl
         Just deltapow -> do
-            liftIO $ putDocW 80 $ pretty "\ndeltapow: " <> pretty deltapow
+            -- liftIO $ putDocW 80 $ pretty "\ndeltapow: " <> pretty deltapow
 
 
             -- | Now find the value that is in the pl at (viv=0)
@@ -620,11 +620,11 @@ punionacc toaccid vivid pl pr = do
             plviv0 <- prestrictparam0 plbegin vivid
 
 
-            liftIO $ putDocW 80 $ pretty "\nfinal accelerated(BEOFRE UNION): " <> pretty subst <> pretty "   " <> pretty plviv0
+            -- liftIO $ putDocW 80 $ pretty "\nfinal accelerated(BEOFRE UNION): " <> pretty subst <> pretty "   " <> pretty plviv0
             final <- punioneq subst plviv0
 
 
-            liftIO $ putDocW 80 $ pretty "\nfinal accelerated: " <> pretty final
+            -- liftIO $ putDocW 80 $ pretty "\nfinal accelerated: " <> pretty final
             return $ final
 
             {-
@@ -771,16 +771,16 @@ instance Lattice IOG S where
 
 instance Lattice IOG V where
   lbot  = V <$> pnone <*> lbot <*> lbot <*> lbot
-  ljoin vl@(V p1 s1 bbid1 vid1) (V p2 s2 bbid2 vid2) = do
-      liftIO $ putStrLn $ "==== unioning: " <> show vid1 <> "   " <> show vid2 <> "====="
+  ljoin vl@(V p1 s1 bbid1 vid1) vr@(V p2 s2 bbid2 vid2) = do
+      -- liftIO $ putStrLn $ "==== unioning: " <> show vid1 <> "   " <> show vid2 <> "====="
       bbid <- ljoin bbid1 bbid2
-      -- llvid :: LeftLean If
       vid <- ljoin vid1 vid2
       s <- ljoin s1 s2
 
+      liftIO $ putDocW 80 $  vcat [pretty "unioning: " <> pretty (show vid1) <> pretty " " <> pretty (show vid2) <> pretty "\n", indent 4 $ pretty p1, indent 4 $ pretty p2, pretty "\n"]
       p <-  case (bbid, vid) of
                 (Just bbid, LeftLean (Just vid)) -> punionacc vid bbid p1 p2
-                _ -> punioneq p1 p2
+                _ ->  punioneq p1 p2
 
       return $ V p s bbid vid
 
