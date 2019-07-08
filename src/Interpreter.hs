@@ -140,7 +140,7 @@ aiMergeBB :: Monad m => Lattice m a =>
 aiMergeBB bb bbid2bb s = do
     -- | gather predecessors
     -- bbps :: [BB]
-    let bbps = preds bbid2bb bb
+    let bbps = filter (\bb' -> bbid bb /= bbid bb') $ preds bbid2bb bb
     -- | Gather abstract domains at the end of the predecessors
     -- ds :: [AbsDom a]
     ds <- forM bbps (bbFinalAbsdom s)
