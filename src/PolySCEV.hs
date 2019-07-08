@@ -646,7 +646,7 @@ punionacc toaccid vivid pl pr = do
 
 
             -- | Return the substitution map made
-            let substmap = lmsingleton toaccid deltapow
+            let substmap = lmsingleton toaccid final
 
 
             -- liftIO $ putDocW 80 $ pretty "\nfinal accelerated: " <> pretty final

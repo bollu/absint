@@ -213,5 +213,5 @@ aiProgramNTrace n ai p s = do
   then return [s']
   else do
       ss <- aiProgramNTrace (n-1) ai p s'
-      return $ ss ++ [s']
+      return $ s':ss
 
