@@ -100,6 +100,9 @@ instance (Monad m, Lattice m a) => Monoid (LUnion m a) where
 lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
 lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]
 
+lmtolist :: Ord k => LatticeMap k v -> [(k, v)]
+lmtolist (LM m) = M.toList m
+
 lmsingleton :: Ord k => k -> v -> LatticeMap k v
 lmsingleton k v = LM $ M.singleton k v
 

@@ -12,6 +12,7 @@ import qualified ISL.Native.Types as ISLTy (Id)
 import qualified Data.Set as S
 import Control.Monad.Fail
 import Control.Applicative
+import Control.Monad
 import Data.Traversable
 import Data.Foldable
 import Data.Text.Prettyprint.Doc
@@ -26,6 +27,14 @@ import Foreign.Ptr
 import Interpreter
 import qualified OrderedMap as OM
 import qualified System.IO.Unsafe as Unsafe
+
+-- | Fix a monadic computation till fixpoint
+mfixstable :: (Monad m, Eq a) => (a -> m a) -> a -> m a
+mfixstable f a = do
+    a' <- f a
+    if a == a'
+    then return a'
+    else mfixstable f a'
 
 uio :: IO a -> a
 uio = Unsafe.unsafePerformIO
@@ -76,10 +85,10 @@ instance (Show a, Eq a, Monad m, MonadFail m) => Lattice m (LeftLean a) where
     ljoin x _ = return x
 
 -- | Abstract values, and
-data V = V { vp :: P, vs :: S, vloop :: Maybe Id, vid :: LeftLean Id } deriving(Eq)
+data V = V { vp :: P, vs :: S, vloop :: Maybe Id, vid :: LeftLean Id, vsubst :: LatticeMap Id P  } deriving(Eq)
 
 instance Show V where
-    show (V p s bbid vid) = show p <> " " <> show s <> " " <>
+    show (V p s bbid vid subst) = show p <> " " <> show s <> " " <>
                             show bbid <> " " <>show vid
 
 -- | Global context
@@ -544,6 +553,17 @@ psubst id newval pold = do
   finalpw <- withP pold $ \pwold -> liftIO $ pwaffPullbackMultipwaff pwold mpw
   return $ P finalpw
 
+-- | Take a map of substitutions and apply them all once
+psubstmap :: LatticeMap Id P
+   -> P
+   -> IOG P
+psubstmap id2p pinit =
+    foldM  (\pcur (idsubst, p') ->
+                psubst idsubst p' pcur)
+           pinit
+           (lmtolist id2p)
+
+
 
 -- | take union, accelerating when pwaffs overlap and disagree
 punionacc ::
@@ -551,7 +571,7 @@ punionacc ::
           -> Id -- ^ ID of viv dimension
           -> P
           -> P
-          -> IOG P
+          -> IOG (LatticeMap Id P, P) -- ^ substitutions made, and the new accelerated value
 punionacc toaccid vivid pl pr = do
     dl <- pdomain pl
     dr <- pdomain pr
@@ -564,7 +584,7 @@ punionacc toaccid vivid pl pr = do
 
     if commonSubsetEq
     then  do
-      punionmax__ pl pr
+      liftA2 (,) lbot (punionmax__ pl pr)
     else do
       dneq <- scomplement deq
 
@@ -601,7 +621,7 @@ punionacc toaccid vivid pl pr = do
       mdeltapow <- ppow pl delta toaccid vivid
 
       case mdeltapow of
-        Nothing -> return pl
+        Nothing -> fmap (, pl) lbot
         Just deltapow -> do
             -- liftIO $ putDocW 80 $ pretty "\ndeltapow: " <> pretty deltapow
 
@@ -624,8 +644,13 @@ punionacc toaccid vivid pl pr = do
             final <- punioneq subst plviv0
 
 
+
+            -- | Return the substitution map made
+            let substmap = lmsingleton toaccid deltapow
+
+
             -- liftIO $ putDocW 80 $ pretty "\nfinal accelerated: " <> pretty final
-            return $ final
+            return $ (substmap, final)
 
             {-
             -- check if either left or right involve the vivid. If only one of
@@ -768,42 +793,67 @@ instance Lattice IOG S where
   ljoin s1 s2 = sunion s1 s2
 
 
+instance Lattice IOG P where
+  lbot  =  pnone
+  ljoin = punioneq
+
+
 
 instance Lattice IOG V where
-  lbot  = V <$> pnone <*> lbot <*> lbot <*> lbot
-  ljoin vl@(V p1 s1 bbid1 vid1) vr@(V p2 s2 bbid2 vid2) = do
+  lbot  = V <$> pnone <*> lbot <*> lbot <*> lbot <*> lbot
+  ljoin vl@(V p1 s1 bbid1 vid1 subst1) vr@(V p2 s2 bbid2 vid2 subst2) = do
       bbid <- ljoin bbid1 bbid2
       vid <- ljoin vid1 vid2
       s <- ljoin s1 s2
+      subst <- ljoin subst1 subst2
 
-      liftIO $ putDocW 80 $  vcat [pretty "unioning: " <> pretty (show vid1) <> pretty " " <> pretty (show vid2) <> pretty "\n", indent 4 $ pretty p1, indent 4 $ pretty p2, pretty "\n"]
+     -- | Apply all substitutions considered so far.
+      p1 <- (psubstmap subst) p1
+      p2 <- (psubstmap subst) p2
 
-      p <-  case (bbid, vid) of
-                (Just bbid, LeftLean (Just vid)) -> punionacc vid bbid p1 p2
-                _ ->  punioneq p1 p2
+      liftIO $ putDocW 80 $
+          vcat [pretty "unioning: " <>
+                pretty (show vid1) <>
+                pretty " " <>
+                pretty (show vid2) <> pretty "\n",
+                indent 4 $ pretty p1, indent 4 $ pretty p2,
+                pretty "\n",
+                pretty subst,
+                pretty "\n"
+               ]
 
-      return $ V p s bbid vid
+      (substacc, p) <-  case (bbid, vid) of
+                          (Just bbid, LeftLean (Just vid)) -> punionacc vid bbid p1 p2
+                          _ ->  liftA2 (,) lbot (punioneq p1 p2)
+
+      subst <- (substacc `ljoin` subst)
+      return $ V p s bbid vid  subst
 
 
 -- | Interpret an expression
 aie :: Expr -> AbsDom V -> IOG V
-aie  (EInt i) _ = V <$> pconst i <*> lbot <*> lbot <*> lbot
+aie  (EInt i) _ = V <$> pconst i <*> lbot <*> lbot <*> lbot <*> lbot
 aie  (EId id) d = d #! id
 aie  (EBinop op id id') d = do
-  p <- vp <$> d #! id
-  p' <- vp <$> d #! id'
+  v <- d #! id
+  v' <- d #! id'
+  let p = vp v
+  let p' =  vp v'
+  let subst =  vsubst v
+  let subst' = vsubst v'
+
   case op of
-    Add -> V <$> padd p p' <*> lbot <*> lbot <*> lbot
-    Lt -> V <$> plt p p' <*> lbot <*> lbot <*> lbot
+    Add -> V <$> padd p p' <*> lbot <*> lbot <*> lbot <*> subst `ljoin` subst'
+    Lt -> V <$> plt p p' <*> lbot <*> lbot <*> lbot <*> subst `ljoin` subst'
 
 -- | Interpret an assignment
 aia :: Assign -> AbsDom V -> IOG V
 aia a d = do
   sbb <- vs <$> d #! (assignownbbid a)
-  V p s _ _ <- aie (assignexpr a) d
+  V p s _ _ subst <- aie (assignexpr a) d
   -- | restrict the value to the current BB domain
   p <- prestrict p sbb
-  return $ V p s Nothing (mkLeftLean (name a))
+  return $ V p s Nothing (mkLeftLean (name a)) subst
 
 
 -- | Interpret a terminator.
@@ -823,9 +873,9 @@ ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     sthen <- ptrueset pc
     selse <- pfalseset pc
     if bbidnext == bbl
-    then  V <$> pnone <*> (ptrueset pc) <*> lbot <*> lbot
+    then  V <$> pnone <*> (ptrueset pc) <*> lbot <*> lbot <*> lbot
     else if bbidnext == bbr
-    then V <$> pnone <*> (pfalseset pc) <*> lbot <*> lbot
+    then V <$> pnone <*> (pfalseset pc) <*> lbot <*> lbot <*> lbot
     else error $ "condbr only has bbl and bbr as successors"
 
 
@@ -841,13 +891,15 @@ aiStart prog = do
     id2sym <- forM (S.toList ps) $ \id -> do
                     p <- psym id
                     s <- lbot
-                    return $ (id, V p s Nothing (mkLeftLean id))
+                    subst <- lbot
+                    return $ (id, V p s Nothing (mkLeftLean id) subst)
     -- | Map the entry block to full domain
     entry2v <- do
                  p <- pnone
                  s <- suniv
                  let id = progEntryId prog
-                 return (id, V p s Nothing (mkLeftLean id))
+                 subst <- lbot
+                 return (id, V p s Nothing (mkLeftLean id) subst)
     return $ lmsingleton (progEntryLoc prog)
                 (lmfromlist $ entry2v:id2sym)
 
@@ -872,7 +924,7 @@ aiLoopL phi d vl = do
     -- | { vl : viv = 0; phiid : viv > 0 }
     p <- punioneq p sym
 
-    return $ V p (vs vl) (Just (phiownbbid phi)) (mkLeftLean (name phi))
+    return $ V p (vs vl) (Just (phiownbbid phi)) (mkLeftLean (name phi)) (vsubst vl)
 
 
 
