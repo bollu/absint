@@ -34,6 +34,8 @@ import ISL.Native.Types (DimType(..),
   Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint)
 import Absdomain
 import qualified ISL.Native.Types as ISLTy (Id)
+import Data.Semigroup ((<>))
+import Data.Monoid hiding ((<>))
 
 newtype Iteration = Iteration { unIteration ::  Int }
    deriving(Eq, Ord, Show, Num)

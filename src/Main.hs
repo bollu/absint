@@ -948,7 +948,7 @@ programs = [passign
             , ploop
            ]
 
-lookupTrace :: [I.AbsState PolySCEV.V]
+lookupTrace :: [I.AbsState (LatticeMap Id) PolySCEV.V]
             -> Iteration -> Loc -> Id -> Maybe PolySCEV.V
 lookupTrace trace (Iteration i) loc id = do
     d <- trace !! i `lmmaybelookup` loc
@@ -963,7 +963,7 @@ main = for_ programs $ \p -> do
     putStrLn $ "ai made"
     trace <- PolySCEV.runIOGTop p $ do
                  start <- I.aiStartState ai
-                 I.aiProgramNTrace niters ai p start
+                 I.aiProgramNTrace niters ai p (I.mkEntryAbsState p start)
     render p (lookupTrace trace)
            (Iteration $ length trace - 1)
     print $ trace

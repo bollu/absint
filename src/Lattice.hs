@@ -13,6 +13,8 @@ import qualified Data.Map.Merge.Strict as M
 import Test.QuickCheck
 import Util
 import Control.Monad
+import Data.Semigroup
+import Data.Monoid
 {-
 class Lattice a where
   lbot :: a
@@ -59,6 +61,9 @@ lmInsert k v (LM lm) = do
   vnew <- ljoin v vold
   return $ LM $ M.insert k vnew lm
 
+lmOverwrite :: Ord k => k -> v -> LatticeMap k v -> LatticeMap k v
+lmOverwrite k v (LM lm) = LM $ M.insert k v lm
+
 
 (#!) :: (Ord k, Monad m, Lattice m v) => LatticeMap k v -> k -> m v
 (#!) (LM m) k = case m M.!? k of
@@ -93,6 +98,7 @@ instance (Monad m, Lattice m a) => Semigroup (LUnion m a) where
 
 instance (Monad m, Lattice m a) => Monoid (LUnion m a) where
     mempty = LUnion $ lbot
+    mappend = (Data.Semigroup.<>)
 
 lmfromlist :: Ord k => [(k, v)] -> LatticeMap k v
 lmfromlist kvs = LM $ M.fromList [(k, v) | (k, v) <- kvs]

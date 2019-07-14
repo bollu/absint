@@ -4,7 +4,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving  #-}
-module PolySCEV(V(..), AI, mkAI, runIOGTop) where
+module PolySCEV(V(..), AbsDom, AI, mkAI, runIOGTop) where
 import ISL.Native.C2Hs
 import ISL.Native.Types (DimType(..),
   Aff, Pwaff, Ctx, Space, LocalSpace, Map, Set, Constraint, Multipwaff)
@@ -26,6 +26,7 @@ import Foreign.Ptr
 import Interpreter
 import qualified OrderedMap as OM
 import qualified System.IO.Unsafe as Unsafe
+
 
 uio :: IO a -> a
 uio = Unsafe.unsafePerformIO
@@ -77,6 +78,8 @@ instance (Show a, Eq a, Monad m, MonadFail m) => Lattice m (LeftLean a) where
 
 -- | Abstract values, and
 data V = V { vp :: P, vs :: S, vloop :: Maybe Id, vid :: LeftLean Id } deriving(Eq)
+
+type AbsDom v = LatticeMap Id v
 
 instance Show V where
     show (V p s bbid vid) = show p <> " " <> show s <> " " <>
@@ -785,6 +788,13 @@ instance Lattice IOG V where
       return $ V p s bbid vid
 
 
+updateLoc lprev lcur i s f = do
+  d <- s #! lprev
+  v <- f d
+  d' <- lmInsert i v d
+  s' <- lmInsert lcur d' s
+  return $ (lcur, s')
+
 -- | Interpret an expression
 aie :: Expr -> AbsDom V -> IOG V
 aie  (EInt i) _ = V <$> pconst i <*> lbot <*> lbot <*> lbot
@@ -797,23 +807,24 @@ aie  (EBinop op id id') d = do
     Lt -> V <$> plt p p' <*> lbot <*> lbot <*> lbot
 
 -- | Interpret an assignment
-aia :: Assign -> AbsDom V -> IOG V
+aia :: Assign -> AbsDom V -> IOG (AbsDom V)
 aia a d = do
   sbb <- vs <$> d #! (assignownbbid a)
   V p s _ _ <- aie (assignexpr a) d
   -- | restrict the value to the current BB domain
   p <- prestrict p sbb
-  return $ V p s Nothing (mkLeftLean (name a))
+  return $ lmOverwrite (name a) (V p s Nothing (mkLeftLean (name a))) d
 
 
 -- | Interpret a terminator.
 ait :: Term
     -> BBId -- ^ next basic block ID
     -> AbsDom V
-    -> IOG V
-ait (Done _ bbcur) bbidnext d = d #! bbcur
-ait (Br _ bbcur _) bbidnext d = d #! bbcur
-
+    -> IOG (AbsDom V)
+ait (Done _ bbcur) bbidnext d = error $ "done has no successors"
+ait (Br _ bbcur _) bbidnext d = do
+  v <- d #! bbcur
+  return $ lmOverwrite bbidnext v d
 
 ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     -- | execution condtions of BB
@@ -822,16 +833,15 @@ ait (BrCond _ bbcur c bbl bbr) bbidnext d = do
     pc  <- vp <$> d #! c
     sthen <- ptrueset pc
     selse <- pfalseset pc
-    if bbidnext == bbl
-    then  V <$> pnone <*> (ptrueset pc) <*> lbot <*> lbot
-    else if bbidnext == bbr
-    then V <$> pnone <*> (pfalseset pc) <*> lbot <*> lbot
-    else error $ "condbr only has bbl and bbr as successors"
+    v <- if bbidnext == bbl
+            then  V <$> pnone <*> (ptrueset pc) <*> lbot <*> lbot
+            else V <$> pnone <*> (pfalseset pc) <*> lbot <*> lbot
+    return $ lmOverwrite bbidnext v d
 
 
 -- | Starting state. Map every parameter to symbolic,
 -- map entry BB to universe domain
-aiStart :: Program -> IOG (AbsState V)
+aiStart :: Program -> IOG (AbsDom V)
 aiStart prog = do
     -- | get the parameters
     ps <- gread params
@@ -848,46 +858,50 @@ aiStart prog = do
                  s <- suniv
                  let id = progEntryId prog
                  return (id, V p s Nothing (mkLeftLean id))
-    return $ lmsingleton (progEntryLoc prog)
-                (lmfromlist $ entry2v:id2sym)
+    return $ (lmfromlist $ entry2v:id2sym)
 
 
--- | AI the left value in the loop
-aiLoopL :: Phi -> AbsDom V -> V -> IOG  V
-aiLoopL phi d vl = do
-    let phiid = name phi
-    let loopid = phiownbbid phi
-    d <- pdomain (vp vl)
-     -- |  {viv = 0}
-    dviv0 <- sparamzero d loopid
-    -- | { viv > 0 }
-    dvivgt0 <- sparamgt0 d loopid
+ailoop :: Phi -> AbsDom V -> IOG (AbsDom V)
+ailoop phi d = do
+  vl <- d #! (snd . phil $ phi)
+  vr <- d #! (snd . phir $ phi)
 
-    -- | { phiid : viv > 0 }
-    sym <- psym phiid
-    sym <- prestrict sym dvivgt0
+  doml <- pdomain (vp vl)
+  domr <- pdomain (vp vr)
 
-    -- | { vl : viv = 0 }
-    p <- prestrict (vp vl) dviv0
-    -- | { vl : viv = 0; phiid : viv > 0 }
-    p <- punioneq p sym
+   -- |  {left /\ viv = 0}
+  dviv0 <- sparamzero doml (phiownbbid phi)
+  pl <- prestrict (vp vl) dviv0
 
-    return $ V p (vs vl) (Just (phiownbbid phi)) (mkLeftLean (name phi))
+  -- | { viv > 0 }
+  dvivgt0 <- sparamgt0 domr (phiownbbid phi)
+  pr <- prestrict (vp vr) dvivgt0
 
+  p <- punioneq pl pr
 
+  -- | New value
+  let v = V p (vs vl) (Just (phiownbbid phi)) (mkLeftLean (name phi))
 
--- | AI the right value in the loop
-aiLoopR :: Phi ->  AbsDom V -> V ->IOG  V
-aiLoopR phi d a = return a
+  return $ lmOverwrite (name phi) v  d
+
+aicond :: Phi -> AbsDom V -> IOG (AbsDom V)
+aicond phi d = do
+  vl <- d #! (snd . phil $ phi)
+  vr <- d #! (snd . phir $ phi)
+
+  p <- punioneq (vp vl) (vp vr)
+
+  let v = V p (vs vl) Nothing (mkLeftLean (name phi))
+  return $ lmOverwrite (name phi) v  d
 
 
 -- | Create the AI object
-mkAI :: Program -> AI IOG V
+mkAI :: Program -> AI IOG (LatticeMap Id) V
 mkAI p = AI { aiA = aia
             , aiT = ait
             , aiStartState = aiStart p
-            , aiLoopPhiL = aiLoopL
-            , aiLoopPhiR = aiLoopR
+            , aiPhiLoop = ailoop
+            , aiPhiCond = aicond
             }
 
 -- | Make the global context

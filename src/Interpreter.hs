@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE KindSignatures #-}
 -- This module contains an implementation of a general abstract interpret
 -- which works for any abstract domain
 -- INVARIANTS:
@@ -24,12 +25,12 @@ import qualified Data.Map as M
 -- | An abstract state maps each location to abstract
 -- domains
 -- at each location, identifiers to values.
-type AbsState d a = LatticeMap Loc (d a)
+type AbsState (d :: * -> *) a = LatticeMap Loc (d a)
 
 -- | Data needed to perform abstract interpretation
 -- a: abstract value
 -- d: abstract domain
-data AI m d a = AI {
+data AI (m :: * -> *) (d :: * -> *) (a :: *) = AI {
   -- | interpret an assignment
  aiA :: Assign -> d a -> m (d a)
   -- | interpret a terminator node
@@ -161,6 +162,10 @@ aiBB ai entryid bb bbid2bb sinit = do
     let bbid2loc = M.map location bbid2bb
     st <- aiTerm ai lprev (bbterm bb)  si
     return $ st
+
+
+mkEntryAbsState :: Program -> d a -> AbsState d a
+mkEntryAbsState p d = lmsingleton (progEntryLoc p) d
 
 -- | Abstract interpret the whole program once.
 aiProgramOnce :: Monad m => Lattice m a => Lattice m (d a) => AI m d a
