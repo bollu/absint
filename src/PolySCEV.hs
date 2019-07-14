@@ -896,7 +896,7 @@ aicond phi d = do
 
 
 -- | Create the AI object
-mkAI :: Program -> AI IOG (LatticeMap Id) V
+mkAI :: Program -> AI IOG (LatticeMap Id V)
 mkAI p = AI { aiA = aia
             , aiT = ait
             , aiStartState = aiStart p

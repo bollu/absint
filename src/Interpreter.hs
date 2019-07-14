@@ -25,23 +25,23 @@ import qualified Data.Map as M
 -- | An abstract state maps each location to abstract
 -- domains
 -- at each location, identifiers to values.
-type AbsState (d :: * -> *) a = LatticeMap Loc (d a)
+type AbsState d = LatticeMap Loc d
 
 -- | Data needed to perform abstract interpretation
 -- a: abstract value
 -- d: abstract domain
-data AI (m :: * -> *) (d :: * -> *) (a :: *) = AI {
+data AI (m :: * -> *) d  = AI {
   -- | interpret an assignment
- aiA :: Assign -> d a -> m (d a)
+ aiA :: Assign -> d -> m d
   -- | interpret a terminator node
   , aiT :: Term -- ^ terminator instruction
       -> BBId  -- ^  bbid of successor
-      -> d a -- ^ abstract domain to use
-      -> m (d a)
-  , aiPhiCond :: Phi -> d a -> m (d a)
+      -> d -- ^ abstract domain to use
+      -> m d
+  , aiPhiCond :: Phi -> d -> m d
    -- | Transform a loop phi node.
-  , aiPhiLoop :: Phi -> d a -> m (d a)
-  , aiStartState :: m (d a) -- ^ Starting state of the AI
+  , aiPhiLoop :: Phi -> d  -> m d
+  , aiStartState :: m d -- ^ Starting state of the AI
 }
 
     {-
@@ -63,13 +63,13 @@ updateLoc lprev lcur i s f = do
   return $ (lcur, s')
   -}
 
-runTransferFunction :: Lattice m (d a)
+runTransferFunction :: Lattice m d
                     => Monad m
                     => Loc  -- ^ previous location to read
                     -> Loc  -- ^ current location to write
-                    -> (d a -> m (d a)) -- ^ transfer function
-                    -> AbsState d a -- ^ abstract state to update
-                    -> m (Loc, AbsState d a) -- ^ (current loc, new abstract state)
+                    -> (d -> m d) -- ^ transfer function
+                    -> AbsState d -- ^ abstract state to update
+                    -> m (Loc, AbsState d) -- ^ (current loc, new abstract state)
 runTransferFunction lprev lcur f s = do
     d <- s #! lprev
     d' <- f d
@@ -78,18 +78,18 @@ runTransferFunction lprev lcur f s = do
 
 -- | Abstract interpret an assignment. Return current location
 -- and new state
-aiAssign :: Monad m => Lattice m a => Lattice m (d a) => AI m d a
+aiAssign :: Monad m => Lattice m d => AI m d
          -> Loc -- ^ previous location
-         -> Assign -> AbsState d a -> m (Loc, AbsState d a)
+         -> Assign -> AbsState d -> m (Loc, AbsState d)
 aiAssign AI{..} lprev a s = runTransferFunction lprev (location a) (aiA a) s
 
 
-aiPhi :: (Monad m, Lattice m a, Lattice m (d a)) => AI m d a
+aiPhi :: (Monad m, Lattice m d) => AI m d
   -> Loc -- ^ previous location
   -> Phi -- ^ phinode
   -> M.Map BBId BB
-  -> AbsState d a
-  -> m (Loc, AbsState d a)
+  -> AbsState d
+  -> m (Loc, AbsState d)
 aiPhi AI{..} lprev phi bbid2bb s =
     let f = case phity phi of
                      Phicond -> aiPhiCond phi
@@ -103,11 +103,11 @@ preds bbid2bb bbcur = do
     guard $ (bbid bbcur) `elem`  (termnextbbs . bbterm $ bbpred)
     return $ bbpred
 
-aiTerm :: Monad m => Lattice m (d a) => Lattice m a => AI m d a
+aiTerm :: Monad m => Lattice m d => AI m d
        -> Loc
        -> Term
-       -> AbsState d a
-       -> m (AbsState d a)
+       -> AbsState d
+       -> m (AbsState d)
 aiTerm AI{..} lprev term s = do
    dinit <- s #! lprev
    -- | AbsDom a -> BBId -> AbsDom a
@@ -121,13 +121,13 @@ aiTerm AI{..} lprev term s = do
    lmInsert (location term) d' s
 
 -- | for a basic block, get the final abstract domain value
-bbFinalAbsdom :: Monad m => Lattice m a => Lattice m (d a) => AbsState d a
-  -> BB -> m (d a)
+bbFinalAbsdom :: Monad m => Lattice m d => AbsState d
+  -> BB -> m d
 bbFinalAbsdom s bb = s #! (bbFinalLoc bb)
 
 -- | Merge the state from predecrssors into a BB
-aiMergeBB :: Monad m => Lattice m a => Lattice m (d a) =>
-    BB -> M.Map BBId BB -> AbsState d a -> m (AbsState d a)
+aiMergeBB :: Monad m => Lattice m d =>
+    BB -> M.Map BBId BB -> AbsState d -> m (AbsState d)
 aiMergeBB bb bbid2bb s = do
     -- | gather predecessors
     -- bbps :: [BB]
@@ -143,10 +143,10 @@ aiMergeBB bb bbid2bb s = do
 
 -- | Abstract interpret a basic block
 -- Note that special handling is needed for the entry block.
-aiBB :: Monad m => Lattice m a => Lattice m (d a) => AI m d a
+aiBB :: Monad m => Lattice m d => AI m d
     -> BBId -- ^ bbid of entry
     -> BB -- ^ BB to interpret
-    -> M.Map BBId BB -> AbsState d a -> m (AbsState d a)
+    -> M.Map BBId BB -> AbsState d -> m (AbsState d)
 aiBB ai entryid bb bbid2bb sinit = do
     sbb <-  if bbid bb == entryid
             then return sinit
@@ -164,12 +164,14 @@ aiBB ai entryid bb bbid2bb sinit = do
     return $ st
 
 
-mkEntryAbsState :: Program -> d a -> AbsState d a
+-- | Create the abstract state with the initial abstract domain at the
+-- program entry location and bottom everywhere else
+mkEntryAbsState :: Program -> d -> AbsState d
 mkEntryAbsState p d = lmsingleton (progEntryLoc p) d
 
 -- | Abstract interpret the whole program once.
-aiProgramOnce :: Monad m => Lattice m a => Lattice m (d a) => AI m d a
-  -> Program -> AbsState d a -> m (AbsState d a)
+aiProgramOnce :: Monad m => Lattice m d => AI m d
+  -> Program -> AbsState d -> m (AbsState d)
 aiProgramOnce ai p sinit = do
   let bbs = progbbs p
   let entryid = progEntryId p
@@ -177,11 +179,11 @@ aiProgramOnce ai p sinit = do
   foldM (\s bb -> aiBB ai entryid bb bbid2bb s) sinit bbs
 
 -- | Run AI N times, or till fixpoint is reached, whichever is earlier
-aiProgramN :: (Monad m, Eq (d a), Lattice m a, Lattice m (d a)) => Int  -- ^ times to run
-           -> AI m d a
+aiProgramN :: (Monad m, Eq d, Lattice m d) => Int  -- ^ times to run
+           -> AI m d
            -> Program
-           -> AbsState d a
-           -> m (AbsState d a)
+           -> AbsState d
+           -> m (AbsState d)
 aiProgramN 0 _ _ s = return s
 aiProgramN n ai p s = do
   s' <-  aiProgramOnce ai p s
@@ -190,8 +192,8 @@ aiProgramN n ai p s = do
   else aiProgramN (n-1) ai p s'
 
 -- | perform AI till fixpoint
-aiProgramFix :: (Monad m, Lattice m a, Lattice m (d a), Eq (d a)) => AI m d a ->
-    Program -> AbsState d a -> m (AbsState d a)
+aiProgramFix :: (Monad m, Lattice m d, Eq d) => AI m d ->
+    Program -> AbsState d -> m (AbsState d)
 aiProgramFix ai p s = do
    s' <- aiProgramOnce ai p s
    if s == s' then return s' else aiProgramOnce ai p s'
@@ -202,12 +204,12 @@ aiProgramFix ai p s = do
 -- head = 0th iteration
 -- last = nth iteration
 -- Usually invoked as (aiProgramTraceN 100 ai p (aiStartState ai))
-aiProgramNTrace :: (Monad m, Eq (d a), Lattice m a, Lattice m (d a))
+aiProgramNTrace :: (Monad m, Eq d, Lattice m d)
                 => Int  -- ^ times to run
-                -> AI m d a
+                -> AI m d
                 -> Program
-                -> AbsState d a
-                -> m [AbsState d a]
+                -> AbsState d
+                -> m [AbsState d]
 aiProgramNTrace 0 _ _ s = return [s]
 aiProgramNTrace n ai p s = do
   s' <-  aiProgramOnce ai p s

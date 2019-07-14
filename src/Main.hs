@@ -948,7 +948,7 @@ programs = [passign
             , ploop
            ]
 
-lookupTrace :: [I.AbsState (LatticeMap Id) PolySCEV.V]
+lookupTrace :: [I.AbsState (LatticeMap Id PolySCEV.V)]
             -> Iteration -> Loc -> Id -> Maybe PolySCEV.V
 lookupTrace trace (Iteration i) loc id = do
     d <- trace !! i `lmmaybelookup` loc
